@@ -6,8 +6,8 @@
   </metadata>
 
   <styles>
-    <style id="wiki-link" _name="Wiki Link" map-to="lawh_markdown:wiki-link"/>
-    <style id="highlight" _name="Highlight" map-to="lawh_markdown:highlight"/>
+    <style id="wiki-link" _name="Wiki Link" map-to="def:special-char"/>
+    <style id="highlight" _name="Highlight" map-to="def:note"/>
   </styles>
 
   <definitions>

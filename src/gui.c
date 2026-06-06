@@ -2977,6 +2977,8 @@ static void on_scroll_changed(GtkAdjustment *adj, gpointer user_data) {
         
         int top_h = new_start * line_h;
         int bottom_h = (gui->total_virtual_lines - new_end) * line_h;
+        if (top_h < 0) top_h = 0;
+        if (bottom_h < 0) bottom_h = 0;
         gtk_widget_set_size_request(gui->top_spacer, -1, top_h);
         gtk_widget_set_size_request(gui->bottom_spacer, -1, bottom_h);
         
@@ -4107,6 +4109,8 @@ void gui_set_text(const char *text, int len) {
 
     int top_h = global_gui->active_page_start_line * line_h;
     int bottom_h = (global_gui->total_virtual_lines - global_gui->active_page_end_line) * line_h;
+    if (top_h < 0) top_h = 0;
+    if (bottom_h < 0) bottom_h = 0;
     gtk_widget_set_size_request(global_gui->top_spacer, -1, top_h);
     gtk_widget_set_size_request(global_gui->bottom_spacer, -1, bottom_h);
     
@@ -4187,6 +4191,8 @@ void gui_set_cursor_position(int line, int col) {
         if (line_h <= 0) line_h = 24;
         int top_h = new_start * line_h;
         int bottom_h = (global_gui->total_virtual_lines - new_end) * line_h;
+        if (top_h < 0) top_h = 0;
+        if (bottom_h < 0) bottom_h = 0;
         gtk_widget_set_size_request(global_gui->top_spacer, -1, top_h);
         gtk_widget_set_size_request(global_gui->bottom_spacer, -1, bottom_h);
         
@@ -4221,6 +4227,8 @@ void gui_init_virtual_document(int total_lines, int start_line, int end_line) {
     
     int top_h = start_line * global_gui->estimated_line_height;
     int bottom_h = (total_lines - end_line) * global_gui->estimated_line_height;
+    if (top_h < 0) top_h = 0;
+    if (bottom_h < 0) bottom_h = 0;
     gtk_widget_set_size_request(global_gui->top_spacer, -1, top_h);
     gtk_widget_set_size_request(global_gui->bottom_spacer, -1, bottom_h);
     
@@ -4409,6 +4417,7 @@ void gui_update_total_virtual_lines(int total_lines) {
     int line_h = global_gui->estimated_line_height;
     if (line_h <= 0) line_h = 24;
     int bottom_h = (total_lines - global_gui->active_page_end_line) * line_h;
+    if (bottom_h < 0) bottom_h = 0;
     gtk_widget_set_size_request(global_gui->bottom_spacer, -1, bottom_h);
     gtk_widget_queue_resize(global_gui->virtual_layout_box);
 }
