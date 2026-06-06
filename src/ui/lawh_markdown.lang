@@ -1,4 +1,13 @@
 <?xml version="1.0" encoding="UTF-8"?>
+<!--
+  lawh_markdown.lang
+  Self-contained Markdown language for GtkSourceView 5.
+
+  How map-to works:
+    map-to="def:xxx"  sets the fallback style (always available).
+    The scheme then overrides appearance using "lawh_markdown:styleid".
+    So we map to def: here, and the scheme provides lawh_markdown: overrides.
+-->
 <language id="lawh_markdown" _name="Lawh Markdown" version="2.0" _section="Markup">
   <metadata>
     <property name="mimetypes">text/markdown;text/x-markdown</property>
@@ -6,22 +15,183 @@
   </metadata>
 
   <styles>
-    <style id="wiki-link" _name="Wiki Link" map-to="def:special-char"/>
-    <style id="highlight" _name="Highlight" map-to="def:note"/>
+    <style id="h1"           _name="Heading 1"     map-to="def:heading"/>
+    <style id="h2"           _name="Heading 2"     map-to="def:heading"/>
+    <style id="h3"           _name="Heading 3"     map-to="def:heading"/>
+    <style id="h4"           _name="Heading 4"     map-to="def:heading"/>
+    <style id="h5"           _name="Heading 5"     map-to="def:heading"/>
+    <style id="h6"           _name="Heading 6"     map-to="def:heading"/>
+    <style id="bold"          _name="Bold"          map-to="def:strong-emphasis"/>
+    <style id="italic"        _name="Italic"        map-to="def:emphasis"/>
+    <style id="bold-italic"   _name="Bold Italic"   map-to="def:strong-emphasis"/>
+    <style id="strikethrough" _name="Strikethrough" map-to="def:constant"/>
+    <style id="inline-code"   _name="Inline Code"   map-to="def:inline-code"/>
+    <style id="code-block"    _name="Code Block"    map-to="def:preformatted-section"/>
+    <style id="blockquote"    _name="Blockquote"    map-to="def:comment"/>
+    <style id="list-marker"   _name="List Marker"   map-to="def:list-marker"/>
+    <style id="link-text"     _name="Link Text"     map-to="def:link-text"/>
+    <style id="url"           _name="URL"           map-to="def:link-destination"/>
+    <style id="image-marker"  _name="Image"         map-to="def:link-symbol"/>
+    <style id="wiki-link"     _name="Wiki Link"     map-to="def:special-char"/>
+    <style id="highlight"     _name="Highlight"     map-to="def:note"/>
+    <style id="math"          _name="Math"          map-to="def:string"/>
+    <style id="html-comment"  _name="HTML Comment"  map-to="def:comment"/>
+    <style id="hr"            _name="Horiz. Rule"   map-to="def:shebang"/>
+    <style id="escape"        _name="Escape"        map-to="def:special-char"/>
   </styles>
 
   <definitions>
     <context id="lawh_markdown">
       <include>
-        <context ref="markdown:markdown"/>
-        <!-- Wiki Link: [[WikiLink]] -->
-        <context id="wiki-link" style-ref="wiki-link">
-          <match>\[\[[^\]\n]+\]\]</match>
+
+        <!-- ATX Headings: # to ###### -->
+        <context id="h6" style-ref="h6">
+          <match>^#{6}[ \t]+(.*)$</match>
         </context>
+        <context id="h5" style-ref="h5">
+          <match>^#{5}[ \t]+(.*)$</match>
+        </context>
+        <context id="h4" style-ref="h4">
+          <match>^#{4}[ \t]+(.*)$</match>
+        </context>
+        <context id="h3" style-ref="h3">
+          <match>^#{3}[ \t]+(.*)$</match>
+        </context>
+        <context id="h2" style-ref="h2">
+          <match>^#{2}[ \t]+(.*)$</match>
+        </context>
+        <context id="h1" style-ref="h1">
+          <match>^#[ \t]+(.*)$</match>
+        </context>
+
+        <!-- Horizontal rule: three or more dashes, stars, or underscores -->
+        <context id="horizontal-rule" style-ref="hr">
+          <match>^[ \t]{0,3}([-*_][ \t]*){3,}[ \t]*$</match>
+        </context>
+
+        <!-- Fenced code block: triple-backtick variant -->
+        <context id="fenced-code-backtick" style-ref="code-block" class="no-spell-check">
+          <start>^[ \t]{0,3}(`{3,})[^`]*$</start>
+          <end>^[ \t]{0,3}`{3,}[ \t]*$</end>
+        </context>
+
+        <!-- Fenced code block: triple-tilde variant -->
+        <context id="fenced-code-tilde" style-ref="code-block" class="no-spell-check">
+          <start>^[ \t]{0,3}(~{3,})[ \t]*$</start>
+          <end>^[ \t]{0,3}~{3,}[ \t]*$</end>
+        </context>
+
+        <!-- Indented code block: 4 spaces or tab -->
+        <context id="indented-code-block" style-ref="code-block" class="no-spell-check">
+          <match>^(    |\t)[^\n]*</match>
+        </context>
+
+        <!-- HTML comment block: open with less-than bang dash dash -->
+        <context id="html-comment-block" style-ref="html-comment" class="no-spell-check">
+          <start>&lt;!--</start>
+          <end>--&gt;</end>
+        </context>
+
+        <!-- Bold-italic must come BEFORE bold/italic to match first -->
+        <context id="bold-italic-asterisk" style-ref="bold-italic">
+          <match>\*{3}(?!\s)(.+?)(?&lt;!\s)\*{3}</match>
+        </context>
+        <context id="bold-italic-underscore" style-ref="bold-italic">
+          <match>_{3}(?!\s)(.+?)(?&lt;!\s)_{3}</match>
+        </context>
+
+        <!-- Bold: **text** or __text__ -->
+        <context id="bold-asterisk" style-ref="bold">
+          <match>\*{2}(?!\s)((?:[^*]|\*(?!\*))+?)(?&lt;!\s)\*{2}</match>
+        </context>
+        <context id="bold-underscore" style-ref="bold">
+          <match>_{2}(?!\s)((?:[^_]|_(?!_))+?)(?&lt;!\s)_{2}</match>
+        </context>
+
+        <!-- Italic: *text* or _text_ -->
+        <context id="italic-asterisk" style-ref="italic">
+          <match>\*(?!\s)([^*\n]+?)(?&lt;!\s)\*</match>
+        </context>
+        <context id="italic-underscore" style-ref="italic">
+          <match>_(?!\s)([^_\n]+?)(?&lt;!\s)_</match>
+        </context>
+
+        <!-- Strikethrough: ~~text~~ -->
+        <context id="strikethrough" style-ref="strikethrough">
+          <match>~~(?!\s)(.+?)(?&lt;!\s)~~</match>
+        </context>
+
+        <!-- Inline code: triple/double/single backtick -->
+        <context id="inline-code-triple" style-ref="inline-code" class="no-spell-check">
+          <match>```[^`\n]+```</match>
+        </context>
+        <context id="inline-code-double" style-ref="inline-code" class="no-spell-check">
+          <match>``[^`\n]+``</match>
+        </context>
+        <context id="inline-code-single" style-ref="inline-code" class="no-spell-check">
+          <match>`[^`\n]+`</match>
+        </context>
+
         <!-- Highlight: ==text== -->
         <context id="highlight" style-ref="highlight">
           <match>==[^=\n]+==</match>
         </context>
+
+        <!-- Math inline: $formula$ -->
+        <context id="math-inline" style-ref="math">
+          <match>\$[^$\n]+\$</match>
+        </context>
+
+        <!-- Wiki link: [[PageName]] -->
+        <context id="wiki-link" style-ref="wiki-link">
+          <match>\[\[[^\]\n]+\]\]</match>
+        </context>
+
+        <!-- Image: ![alt](url) -->
+        <context id="image" style-ref="image-marker">
+          <match>!\[[^\]]*\]\([^)]*\)</match>
+        </context>
+
+        <!-- Inline link: [text](url) -->
+        <context id="inline-link" style-ref="link-text">
+          <match>\[[^\]]+\]\([^)]*\)</match>
+        </context>
+
+        <!-- Reference link: [text][ref] -->
+        <context id="reference-link" style-ref="link-text">
+          <match>\[[^\]]+\]\[[^\]]*\]</match>
+        </context>
+
+        <!-- Autolink: less-than url greater-than -->
+        <context id="autolink" style-ref="url" class="no-spell-check">
+          <match>&lt;(https?|ftp|mailto):[^&gt;\s]+&gt;</match>
+        </context>
+
+        <!-- Blockquote line: > ... -->
+        <context id="blockquote-line" style-ref="blockquote">
+          <match>^[ \t]{0,3}&gt;.*$</match>
+        </context>
+
+        <!-- Task list (before plain bullet so it matches first) -->
+        <context id="task-list" style-ref="list-marker">
+          <match>^[ \t]{0,3}[-*+][ \t]\[[ xX]\][ \t]</match>
+        </context>
+
+        <!-- Unordered list markers -->
+        <context id="unordered-list" style-ref="list-marker">
+          <match>^[ \t]{0,3}[-*+][ \t]</match>
+        </context>
+
+        <!-- Ordered list markers -->
+        <context id="ordered-list" style-ref="list-marker">
+          <match>^[ \t]{0,3}\d+\.[ \t]</match>
+        </context>
+
+        <!-- Backslash escape -->
+        <context id="backslash-escape" style-ref="escape">
+          <match>\\[\\`*_{}\[\]()#+.!\-]</match>
+        </context>
+
       </include>
     </context>
   </definitions>

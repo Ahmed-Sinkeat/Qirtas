@@ -3,52 +3,97 @@
   <author>Lawh Team</author>
   <description>Custom dark style scheme for Lawh Markdown Editor</description>
 
-  <!-- Colors -->
-  <color name="pink" value="#ff79c6"/>
-  <color name="cyan" value="#75d4e8"/>
-  <color name="gray" value="#6b6e7a"/>
-  <color name="white" value="#ffffff"/>
-  <color name="bg" value="#111318"/>
-  <color name="search-bg" value="#ff79c6"/>
-  <color name="h1" value="#ff79c6"/>
-  <color name="h2" value="#8be9fd"/>
-  <color name="h3" value="#50fa7b"/>
-  <color name="h4" value="#ffb86c"/>
-  <color name="h5" value="#bd93f9"/>
-  <color name="h6" value="#ff5555"/>
+  <!-- ── Palette ── -->
+  <color name="pink"       value="#ff79c6"/>
+  <color name="cyan"       value="#75d4e8"/>
+  <color name="gray"       value="#6b6e7a"/>
+  <color name="white"      value="#e8e8f0"/>
+  <color name="bg"         value="#111318"/>
+  <color name="bg-line"    value="#161820"/>
+  <color name="search-bg"  value="#ff79c6"/>
+  <color name="h1"         value="#ff79c6"/>
+  <color name="h2"         value="#8be9fd"/>
+  <color name="h3"         value="#50fa7b"/>
+  <color name="h4"         value="#ffb86c"/>
+  <color name="h5"         value="#bd93f9"/>
+  <color name="h6"         value="#ff5555"/>
+  <color name="orange"     value="#ffb86c"/>
+  <color name="green"      value="#50fa7b"/>
+  <color name="purple"     value="#bd93f9"/>
+  <color name="yellow"     value="#f1fa8c"/>
+  <color name="comment-fg" value="#5a5f72"/>
+  <color name="gold"       value="#dfb15b"/>
+  <color name="calm-purple" value="#a9a0fc"/>
 
-  <style name="text" foreground="white" background="bg"/>
-  <style name="search-match" background="search-bg" foreground="bg"/>
-  
-  <!-- Markdown Styles -->
-  <style name="markdown:header" foreground="pink" bold="true"/>
-  <style name="markdown:h1" foreground="h1" bold="true" scale="1.5"/>
-  <style name="markdown:h2" foreground="h2" bold="true" scale="1.3"/>
-  <style name="markdown:h3" foreground="h3" bold="true"/>
-  <style name="markdown:h4" foreground="h4" bold="true"/>
-  <style name="markdown:h5" foreground="h5" bold="true"/>
-  <style name="markdown:h6" foreground="h6" bold="true"/>
-  <style name="markdown:link-text" foreground="cyan"/>
-  <style name="markdown:url" foreground="cyan" italic="true"/>
-  <style name="markdown:blockquote-line" foreground="gray"/>
-  <style name="markdown:list-marker" foreground="pink"/>
-  
-  <style name="def:heading" foreground="pink" bold="true"/>
-  <style name="def:comment" foreground="gray"/>
-  <style name="def:string" foreground="cyan"/>
-  <style name="def:net-address" foreground="cyan"/>
-  
-  <style name="current-line" background="bg"/>
-  <style name="line-numbers" foreground="gray" background="bg"/>
-  <style name="current-line-number" foreground="pink" bold="true"/>
+  <!-- ── Editor base ── -->
+  <style name="text"               foreground="white"     background="bg"/>
+  <style name="selection"          background="#3a3d5c"/>
+  <style name="current-line"       background="bg-line"/>
+  <style name="line-numbers"       foreground="gray"      background="bg"/>
+  <style name="current-line-number" foreground="pink"     bold="true"/>
+  <style name="search-match"       background="search-bg" foreground="bg"/>
+  <style name="bracket-match"      foreground="yellow"    bold="true"/>
 
-  <style name="lawh_markdown:string" foreground="#4682B4"/>
-  <style name="lawh_markdown:bold" foreground="#f8f9fa" bold="true"/>
-  <style name="markdown:bold" foreground="#f8f9fa" bold="true"/>
-  <style name="markdown:italic" italic="true"/>
-  <style name="markdown:strikethrough" strikethrough="true"/>
-  <style name="markdown:inline-code" foreground="cyan"/>
-  <style name="markdown:code" foreground="cyan"/>
-  <style name="lawh_markdown:wiki-link" foreground="#00E5FF" underline="true"/>
-  <style name="lawh_markdown:highlight" background="#ffb86c" foreground="#111318"/>
+  <!-- ── def: base styles (used as fallback) ── -->
+  <style name="def:heading"              foreground="pink"   bold="true"/>
+  <style name="def:emphasis"             italic="true"/>
+  <style name="def:strong-emphasis"      foreground="white"  bold="true"/>
+  <style name="def:inline-code"          foreground="cyan"/>
+  <style name="def:preformatted-section" foreground="cyan"/>
+  <style name="def:comment"             foreground="comment-fg" italic="true"/>
+  <style name="def:string"              foreground="cyan"/>
+  <style name="def:net-address"         foreground="cyan"   underline="true"/>
+  <style name="def:link-destination"    foreground="cyan"   underline="true"/>
+  <style name="def:link-text"           foreground="cyan"/>
+  <style name="def:list-marker"         foreground="pink"/>
+  <style name="def:note"                foreground="orange"/>
+  <style name="def:shebang"             foreground="gray"   italic="true"/>
+  <style name="def:special-char"        foreground="purple"/>
+
+  <!-- ── Headings by level (lawh_markdown: prefix → our lang file) ── -->
+  <style name="lawh_markdown:h1"         foreground="h1"    bold="true" weight="bold" scale="1.8"/>
+  <style name="lawh_markdown:h2"         foreground="h2"    bold="true" weight="bold" scale="1.5"/>
+  <style name="lawh_markdown:h3"         foreground="h3"    bold="true" weight="bold" scale="1.3"/>
+  <style name="lawh_markdown:h4"         foreground="h4"    bold="true" weight="bold" scale="1.15"/>
+  <style name="lawh_markdown:h5"         foreground="h5"    bold="true" weight="bold" scale="1.0"/>
+  <style name="lawh_markdown:h6"         foreground="h6"    bold="true" weight="bold" scale="0.85"/>
+
+  <!-- ── Inline formatting ── -->
+  <style name="lawh_markdown:bold"        foreground="gold"  bold="true" weight="bold"/>
+  <style name="lawh_markdown:italic"      foreground="calm-purple" italic="true"/>
+  <style name="lawh_markdown:bold-italic" foreground="gold"  bold="true" weight="bold" italic="true"/>
+  <style name="lawh_markdown:strikethrough" strikethrough="true" foreground="gray"/>
+  <style name="lawh_markdown:inline-code" foreground="cyan"   background="#1e2230"/>
+
+  <!-- ── Block elements ── -->
+  <style name="lawh_markdown:blockquote"  foreground="gray"   italic="true"/>
+  <style name="lawh_markdown:list-marker" foreground="pink"/>
+
+  <!-- ── Links ── -->
+  <style name="lawh_markdown:link-text"   foreground="cyan"/>
+  <style name="lawh_markdown:url"         foreground="cyan"   underline="true" italic="true"/>
+  <style name="lawh_markdown:wiki-link"   foreground="#00E5FF" underline="true"/>
+
+  <!-- ── Special ── -->
+  <style name="lawh_markdown:highlight"   background="#ffb86c" foreground="#111318"/>
+  <style name="lawh_markdown:math"        foreground="green"/>
+  <style name="lawh_markdown:comment"     foreground="comment-fg" italic="true"/>
+
+  <!-- ── Compatibility aliases for system markdown.lang (v4) ── -->
+  <style name="markdown:header"           foreground="pink"   bold="true"/>
+  <style name="markdown:h1"              foreground="h1"    bold="true"  scale="1.5"/>
+  <style name="markdown:h2"              foreground="h2"    bold="true"  scale="1.3"/>
+  <style name="markdown:h3"              foreground="h3"    bold="true"/>
+  <style name="markdown:h4"              foreground="h4"    bold="true"/>
+  <style name="markdown:h5"              foreground="h5"    bold="true"/>
+  <style name="markdown:h6"              foreground="h6"    bold="true"/>
+  <style name="markdown:bold"            foreground="white"  bold="true"/>
+  <style name="markdown:italic"          italic="true"/>
+  <style name="markdown:strikethrough"   strikethrough="true" foreground="gray"/>
+  <style name="markdown:inline-code"     foreground="cyan"/>
+  <style name="markdown:code"            foreground="cyan"   background="#1e2230"/>
+  <style name="markdown:link-text"       foreground="cyan"/>
+  <style name="markdown:url"             foreground="cyan"   underline="true"/>
+  <style name="markdown:blockquote-line" foreground="gray"   italic="true"/>
+  <style name="markdown:list-marker"     foreground="pink"/>
 </style-scheme>

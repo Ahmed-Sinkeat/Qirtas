@@ -1299,76 +1299,98 @@ static void update_all_paragraphs_direction(GtkTextBuffer *buf) {
 
 typedef struct {
     GtkTextBuffer *buf;
-    GtkWidget *popover;
+    GtkWidget     *popover;
+    gint           saved_start; /* char offset of selection start when popover opened */
+    gint           saved_end;   /* char offset of selection end   when popover opened */
 } PopoverData;
 
-static void apply_format(GtkTextBuffer *buf, const char *prefix, const char *suffix) {
-    GtkTextIter start, end;
+/* Restore the saved selection from PopoverData and apply inline format wrapper */
+static void apply_format_with_saved(GtkTextBuffer *buf, const char *prefix, const char *suffix,
+                                    gint saved_start, gint saved_end) {
     gtk_text_buffer_begin_user_action(buf);
-    if (!gtk_text_buffer_get_selection_bounds(buf, &start, &end)) {
-        GtkTextMark *insert_mark = gtk_text_buffer_get_insert(buf);
+
+    gboolean has_selection = (saved_start != saved_end);
+
+    if (!has_selection) {
+        /* No selection — insert markers at saved cursor and place cursor between them */
         GtkTextIter cursor_iter;
-        gtk_text_buffer_get_iter_at_mark(buf, &cursor_iter, insert_mark);
-        
+        gtk_text_buffer_get_iter_at_offset(buf, &cursor_iter, saved_start);
+
         gint offset = gtk_text_iter_get_offset(&cursor_iter);
         gtk_text_buffer_insert(buf, &cursor_iter, prefix, -1);
-        
-        gtk_text_buffer_get_iter_at_offset(buf, &cursor_iter, offset + strlen(prefix));
+
+        gtk_text_buffer_get_iter_at_offset(buf, &cursor_iter, offset + (gint)strlen(prefix));
         gtk_text_buffer_insert(buf, &cursor_iter, suffix, -1);
-        
+
         GtkTextIter final_cursor;
-        gtk_text_buffer_get_iter_at_offset(buf, &final_cursor, offset + strlen(prefix));
+        gtk_text_buffer_get_iter_at_offset(buf, &final_cursor, offset + (gint)strlen(prefix));
         gtk_text_buffer_select_range(buf, &final_cursor, &final_cursor);
     } else {
-        gchar *text = gtk_text_buffer_get_text(buf, &start, &end, FALSE);
+        /* Restore selection that was lost when popover opened */
+        GtkTextIter start, end;
+        gtk_text_buffer_get_iter_at_offset(buf, &start, saved_start);
+        gtk_text_buffer_get_iter_at_offset(buf, &end,   saved_end);
+
+        gchar *text     = gtk_text_buffer_get_text(buf, &start, &end, FALSE);
         gchar *new_text = g_strconcat(prefix, text, suffix, NULL);
-        
+
         gint start_offset = gtk_text_iter_get_offset(&start);
         gtk_text_buffer_delete(buf, &start, &end);
-        
+
         GtkTextIter insert_iter;
         gtk_text_buffer_get_iter_at_offset(buf, &insert_iter, start_offset);
         gtk_text_buffer_insert(buf, &insert_iter, new_text, -1);
-        
+
         GtkTextIter select_start, select_end;
         gtk_text_buffer_get_iter_at_offset(buf, &select_start, start_offset);
-        gtk_text_buffer_get_iter_at_offset(buf, &select_end, start_offset + strlen(new_text));
+        gtk_text_buffer_get_iter_at_offset(buf, &select_end,   start_offset + (gint)strlen(new_text));
         gtk_text_buffer_select_range(buf, &select_start, &select_end);
-        
+
         g_free(text);
         g_free(new_text);
     }
     gtk_text_buffer_end_user_action(buf);
 }
 
-static void apply_paragraph_format(GtkTextBuffer *buf, const char *prefix) {
+/* Legacy wrapper used by keyboard shortcuts (Ctrl+B etc.) — uses live selection */
+static void apply_format(GtkTextBuffer *buf, const char *prefix, const char *suffix) {
     GtkTextIter start, end;
-    if (!gtk_text_buffer_get_selection_bounds(buf, &start, &end)) {
-        gtk_text_buffer_get_iter_at_mark(buf, &start, gtk_text_buffer_get_insert(buf));
-        end = start;
+    gint saved_start, saved_end;
+    if (gtk_text_buffer_get_selection_bounds(buf, &start, &end)) {
+        saved_start = gtk_text_iter_get_offset(&start);
+        saved_end   = gtk_text_iter_get_offset(&end);
+    } else {
+        GtkTextMark *insert_mark = gtk_text_buffer_get_insert(buf);
+        GtkTextIter cursor_iter;
+        gtk_text_buffer_get_iter_at_mark(buf, &cursor_iter, insert_mark);
+        saved_start = saved_end = gtk_text_iter_get_offset(&cursor_iter);
     }
-    
-    gint start_line = gtk_text_iter_get_line(&start);
-    gint end_line = gtk_text_iter_get_line(&end);
-    
+    apply_format_with_saved(buf, prefix, suffix, saved_start, saved_end);
+}
+
+/* Core paragraph formatting body: strips existing markers, adds new prefix. */
+static void apply_paragraph_format_core(GtkTextBuffer *buf, const char *prefix,
+                                        gint start_line, gint end_line) {
     gtk_text_buffer_begin_user_action(buf);
-    
+
     for (gint l = start_line; l <= end_line; l++) {
         GtkTextIter line_start, line_end;
         gtk_text_buffer_get_iter_at_line(buf, &line_start, l);
-        
+
         line_end = line_start;
         gtk_text_iter_forward_to_line_end(&line_end);
         gchar *line_text = gtk_text_buffer_get_text(buf, &line_start, &line_end, FALSE);
-        
+
         int ws = 0;
         while (line_text[ws] == ' ' || line_text[ws] == '\t') ws++;
-        
+
         int strip_len = 0;
         char *content = line_text + ws;
-        if (strncmp(content, "- [ ] ", 6) == 0 || strncmp(content, "- [x] ", 6) == 0 || strncmp(content, "* [ ] ", 6) == 0 || strncmp(content, "* [x] ", 6) == 0) {
+        if (strncmp(content, "- [ ] ", 6) == 0 || strncmp(content, "- [x] ", 6) == 0 ||
+            strncmp(content, "* [ ] ", 6) == 0 || strncmp(content, "* [x] ", 6) == 0) {
             strip_len = ws + 6;
-        } else if (strncmp(content, "- ", 2) == 0 || strncmp(content, "* ", 2) == 0 || strncmp(content, "+ ", 2) == 0) {
+        } else if (strncmp(content, "- ", 2) == 0 || strncmp(content, "* ", 2) == 0 ||
+                   strncmp(content, "+ ", 2) == 0) {
             strip_len = ws + 2;
         } else if (content[0] == '#') {
             int h = 0;
@@ -1377,46 +1399,67 @@ static void apply_paragraph_format(GtkTextBuffer *buf, const char *prefix) {
         } else {
             int num = 0;
             while (content[num] >= '0' && content[num] <= '9') num++;
-            if (num > 0 && content[num] == '.' && content[num+1] == ' ') {
+            if (num > 0 && content[num] == '.' && content[num+1] == ' ')
                 strip_len = ws + num + 2;
-            }
         }
-        
+
         if (strip_len > 0) {
             GtkTextIter strip_end = line_start;
             gtk_text_iter_forward_chars(&strip_end, strip_len);
             gtk_text_buffer_delete(buf, &line_start, &strip_end);
             gtk_text_buffer_get_iter_at_line(buf, &line_start, l);
         }
-        
+
         if (prefix && strlen(prefix) > 0) {
             char final_prefix[64];
-            if (strcmp(prefix, "1. ") == 0) {
+            if (strcmp(prefix, "1. ") == 0)
                 snprintf(final_prefix, sizeof(final_prefix), "%d. ", (l - start_line) + 1);
-            } else {
+            else
                 snprintf(final_prefix, sizeof(final_prefix), "%s", prefix);
-            }
             gtk_text_buffer_insert(buf, &line_start, final_prefix, -1);
         }
-        
+
         g_free(line_text);
     }
-    
+
     gtk_text_buffer_end_user_action(buf);
+}
+
+/* Entry point for popover buttons — uses saved selection offsets */
+static void apply_paragraph_format_with_saved(GtkTextBuffer *buf, const char *prefix,
+                                              gint saved_start, gint saved_end) {
+    GtkTextIter start, end;
+    gtk_text_buffer_get_iter_at_offset(buf, &start, saved_start);
+    gtk_text_buffer_get_iter_at_offset(buf, &end,   saved_end);
+    gint start_line = gtk_text_iter_get_line(&start);
+    gint end_line   = gtk_text_iter_get_line(&end);
+    apply_paragraph_format_core(buf, prefix, start_line, end_line);
+}
+
+/* Entry point for keyboard shortcuts — uses live selection */
+static void apply_paragraph_format(GtkTextBuffer *buf, const char *prefix) {
+    GtkTextIter start, end;
+    if (!gtk_text_buffer_get_selection_bounds(buf, &start, &end)) {
+        gtk_text_buffer_get_iter_at_mark(buf, &start, gtk_text_buffer_get_insert(buf));
+        end = start;
+    }
+    gint start_line = gtk_text_iter_get_line(&start);
+    gint end_line   = gtk_text_iter_get_line(&end);
+    apply_paragraph_format_core(buf, prefix, start_line, end_line);
 }
 
 static void on_format_clicked(GtkButton *btn, gpointer user_data) {
     PopoverData *pd = (PopoverData *)user_data;
     const char *prefix = g_object_get_data(G_OBJECT(btn), "prefix");
     const char *suffix = g_object_get_data(G_OBJECT(btn), "suffix");
-    apply_format(pd->buf, prefix, suffix);
+    apply_format_with_saved(pd->buf, prefix, suffix, pd->saved_start, pd->saved_end);
     gtk_popover_popdown(GTK_POPOVER(pd->popover));
 }
 
 static void on_para_clicked(GtkButton *btn, gpointer user_data) {
     PopoverData *pd = (PopoverData *)user_data;
     const char *prefix = g_object_get_data(G_OBJECT(btn), "prefix");
-    apply_paragraph_format(pd->buf, prefix);
+    apply_paragraph_format_with_saved(pd->buf, prefix, pd->saved_start, pd->saved_end);
     gtk_popover_popdown(GTK_POPOVER(pd->popover));
 }
 
@@ -1601,10 +1644,9 @@ static void on_popover_destroy(GtkWidget *widget, gpointer user_data) {
 
 static void on_editor_popover_closed(GtkPopover *popover, gpointer user_data) {
     (void)user_data;
-    GtkWidget *widget = GTK_WIDGET(popover);
-    if (gtk_widget_get_parent(widget) != NULL) {
-        gtk_widget_unparent(widget);
-    }
+    (void)popover;
+    /* GTK4 popdown() already hides the popover; unparenting is handled by
+     * the "destroy" signal connected to on_popover_destroy. Do nothing here. */
 }
 
 static void on_editor_right_click(GtkGestureClick *gesture, gint n_press, gdouble x, gdouble y, gpointer user_data) {
@@ -1629,6 +1671,21 @@ static void on_editor_right_click(GtkGestureClick *gesture, gint n_press, gdoubl
     PopoverData *pd = g_new(PopoverData, 1);
     pd->buf = buf;
     pd->popover = popover;
+
+    /* Save selection NOW, before gtk_popover_popup() steals focus and clears it */
+    {
+        GtkTextIter sel_start, sel_end;
+        if (gtk_text_buffer_get_selection_bounds(buf, &sel_start, &sel_end)) {
+            pd->saved_start = gtk_text_iter_get_offset(&sel_start);
+            pd->saved_end   = gtk_text_iter_get_offset(&sel_end);
+        } else {
+            GtkTextMark *ins = gtk_text_buffer_get_insert(buf);
+            GtkTextIter cursor;
+            gtk_text_buffer_get_iter_at_mark(buf, &cursor, ins);
+            pd->saved_start = pd->saved_end = gtk_text_iter_get_offset(&cursor);
+        }
+    }
+
     g_signal_connect_swapped(popover, "destroy", G_CALLBACK(g_free), pd);
     
     GtkWidget *main_box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
@@ -1913,33 +1970,31 @@ static void on_insert_text_before(GtkTextBuffer *buf, GtkTextIter *location, gch
     else if (c == '`') closing = '`';
     
     if (closing != 0) {
-        GtkTextIter current_iter = *location;
-        GtkTextIter next_iter = current_iter;
+        GtkTextIter next_iter = *location;
         gunichar next_char = gtk_text_iter_get_char(&next_iter);
-        if ((c == '"' || c == ']' || c == ')' || c == '}' || c == '*' || c == '_' || c == '`') && (gunichar)c == next_char) {
+        if ((c == '"' || c == '*' || c == '_' || c == '`') && (gunichar)c == next_char) {
             gtk_text_iter_forward_char(&next_iter);
             gtk_text_buffer_place_cursor(buf, &next_iter);
             g_signal_stop_emission_by_name(buf, "insert-text");
             return;
         }
 
+        gint offset = gtk_text_iter_get_offset(location);
         g_signal_handlers_block_by_func(buf, on_insert_text_before, user_data);
         
-        gtk_text_buffer_insert(buf, location, text, len);
+        gchar both_chars[3] = { c, closing, 0 };
+        GtkTextIter target_iter;
+        gtk_text_buffer_get_iter_at_offset(buf, &target_iter, offset);
+        gtk_text_buffer_insert(buf, &target_iter, both_chars, 2);
         
-        char closing_str[2] = { closing, 0 };
-        gtk_text_buffer_insert(buf, location, closing_str, 1);
-        
-        GtkTextIter cursor_iter = *location;
-        gtk_text_iter_backward_chars(&cursor_iter, 1);
+        GtkTextIter cursor_iter;
+        gtk_text_buffer_get_iter_at_offset(buf, &cursor_iter, offset + 1);
         gtk_text_buffer_place_cursor(buf, &cursor_iter);
         
         g_signal_handlers_unblock_by_func(buf, on_insert_text_before, user_data);
-        
         g_signal_stop_emission_by_name(buf, "insert-text");
     } else if (c == '"' || c == ']' || c == ')' || c == '}' || c == '*' || c == '_' || c == '`') {
-        GtkTextIter current_iter = *location;
-        GtkTextIter next_iter = current_iter;
+        GtkTextIter next_iter = *location;
         gunichar next_char = gtk_text_iter_get_char(&next_iter);
         if ((gunichar)c == next_char) {
             gtk_text_iter_forward_char(&next_iter);
@@ -2817,7 +2872,19 @@ static void on_save_credentials_clicked(GtkButton *btn, gpointer user_data) {
     AppGui *gui = (AppGui *)user_data;
     const char *client_id = gtk_editable_get_text(GTK_EDITABLE(gui->client_id_entry));
     const char *client_secret = gtk_editable_get_text(GTK_EDITABLE(gui->client_secret_entry));
+
+    if ((!client_id || strlen(client_id) == 0) && (!client_secret || strlen(client_secret) == 0)) {
+        /* Both fields empty — warn the user */
+        if (gui->sync_status_lbl)
+            gtk_label_set_text(GTK_LABEL(gui->sync_status_lbl), "Enter credentials first");
+        return;
+    }
+
     zig_save_sync_credentials(client_id, client_secret);
+
+    /* Give visual confirmation that the save succeeded */
+    if (gui->sync_status_lbl)
+        gtk_label_set_text(GTK_LABEL(gui->sync_status_lbl), "Credentials saved ✓");
 }
 
 static void on_sync_connect_clicked(GtkButton *btn, gpointer user_data) {
@@ -3389,12 +3456,39 @@ static void activate(GtkApplication *app, gpointer user_data) {
         GTK_SOURCE_BUFFER(gtk_text_view_get_buffer(GTK_TEXT_VIEW(source_view)));
     gtk_source_buffer_set_highlight_syntax(src_buf, TRUE);
     GtkSourceLanguageManager *lm = gtk_source_language_manager_get_default();
+    /* Try absolute path first (works regardless of CWD), then relative fallback */
+    {
+        char abs_ui_path[1024];
+        char exe_path[512] = {0};
+        ssize_t exe_len = readlink("/proc/self/exe", exe_path, sizeof(exe_path) - 1);
+        if (exe_len > 0) {
+            exe_path[exe_len] = '\0';
+            /* Strip binary name to get the directory */
+            char *last_slash = strrchr(exe_path, '/');
+            if (last_slash) *last_slash = '\0';
+            /* Navigate up from zig-out/bin/ to project root, then into src/ui */
+            snprintf(abs_ui_path, sizeof(abs_ui_path), "%s/../../src/ui", exe_path);
+            gtk_source_language_manager_append_search_path(lm, abs_ui_path);
+        }
+    }
     gtk_source_language_manager_append_search_path(lm, "src/ui");
     GtkSourceLanguage *lang = gtk_source_language_manager_get_language(lm, "lawh_markdown");
     if (!lang) lang = gtk_source_language_manager_get_language(lm, "markdown");
     if (lang) gtk_source_buffer_set_language(src_buf, lang);
 
     GtkSourceStyleSchemeManager *sm = gtk_source_style_scheme_manager_get_default();
+    {
+        char abs_ui_path[1024];
+        char exe_path[512] = {0};
+        ssize_t exe_len = readlink("/proc/self/exe", exe_path, sizeof(exe_path) - 1);
+        if (exe_len > 0) {
+            exe_path[exe_len] = '\0';
+            char *last_slash = strrchr(exe_path, '/');
+            if (last_slash) *last_slash = '\0';
+            snprintf(abs_ui_path, sizeof(abs_ui_path), "%s/../../src/ui", exe_path);
+            gtk_source_style_scheme_manager_append_search_path(sm, abs_ui_path);
+        }
+    }
     gtk_source_style_scheme_manager_append_search_path(sm, "src/ui");
     GtkSourceStyleScheme *scheme =
         gtk_source_style_scheme_manager_get_scheme(sm, "lawh-dark");
@@ -3403,7 +3497,7 @@ static void activate(GtkApplication *app, gpointer user_data) {
     if (!scheme) scheme = gtk_source_style_scheme_manager_get_scheme(sm, "solarized-dark");
     if (!scheme) scheme = gtk_source_style_scheme_manager_get_scheme(sm, "classic-dark");
     if (!scheme) scheme = gtk_source_style_scheme_manager_get_scheme(sm, "cobalt");
-    gtk_source_buffer_set_style_scheme(src_buf, scheme);
+    if (scheme) gtk_source_buffer_set_style_scheme(src_buf, scheme);
 
     /* Search context */
     GtkSourceSearchSettings *ss = gtk_source_search_settings_new();
