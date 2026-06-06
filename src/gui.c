@@ -2029,10 +2029,35 @@ static void show_keybindings_window(AppGui *gui) {
     gtk_window_present(GTK_WINDOW(dialog));
 }
 
+static gboolean keycode_matches_latin_keyval(guint keycode, guint target_keyval) {
+    GdkDisplay *display = gdk_display_get_default();
+    if (!display) return FALSE;
+
+    GdkKeymapKey *keys = NULL;
+    guint *keyvals = NULL;
+    int n_entries = 0;
+    gboolean found = FALSE;
+
+    if (gdk_display_map_keycode(display, keycode, &keys, &keyvals, &n_entries)) {
+        for (int i = 0; i < n_entries; i++) {
+            guint kv = keyvals[i];
+            if (kv == target_keyval ||
+                (target_keyval >= GDK_KEY_a && target_keyval <= GDK_KEY_z && kv == target_keyval - 32) ||
+                (target_keyval >= GDK_KEY_A && target_keyval <= GDK_KEY_Z && kv == target_keyval + 32)) {
+                found = TRUE;
+                break;
+            }
+        }
+        g_free(keys);
+        g_free(keyvals);
+    }
+    return found;
+}
+
 static gboolean on_editor_key_pressed(GtkEventControllerKey *ctrl,
                                       guint keyval, guint keycode,
                                       GdkModifierType state, gpointer user_data) {
-    (void)ctrl; (void)keycode;
+    (void)ctrl;
     AppGui *gui = (AppGui *)user_data;
     GtkTextBuffer *buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(gui->source_view));
 
@@ -2040,37 +2065,37 @@ static gboolean on_editor_key_pressed(GtkEventControllerKey *ctrl,
     gboolean shift_held = (state & GDK_SHIFT_MASK)   != 0;
 
     /* ── Ctrl+B  Bold ── */
-    if (ctrl_held && !shift_held && (keyval == GDK_KEY_b || keyval == GDK_KEY_B)) {
+    if (ctrl_held && !shift_held && (keyval == GDK_KEY_b || keyval == GDK_KEY_B || keycode_matches_latin_keyval(keycode, GDK_KEY_b))) {
         apply_format(buf, "**", "**");
         return TRUE;
     }
     /* ── Ctrl+I  Italic ── */
-    if (ctrl_held && !shift_held && (keyval == GDK_KEY_i || keyval == GDK_KEY_I)) {
+    if (ctrl_held && !shift_held && (keyval == GDK_KEY_i || keyval == GDK_KEY_I || keycode_matches_latin_keyval(keycode, GDK_KEY_i))) {
         apply_format(buf, "*", "*");
         return TRUE;
     }
     /* ── Ctrl+K  Inline code ── */
-    if (ctrl_held && !shift_held && (keyval == GDK_KEY_k || keyval == GDK_KEY_K)) {
+    if (ctrl_held && !shift_held && (keyval == GDK_KEY_k || keyval == GDK_KEY_K || keycode_matches_latin_keyval(keycode, GDK_KEY_k))) {
         apply_format(buf, "`", "`");
         return TRUE;
     }
     /* ── Ctrl+H  Highlight ── */
-    if (ctrl_held && !shift_held && (keyval == GDK_KEY_h || keyval == GDK_KEY_H)) {
+    if (ctrl_held && !shift_held && (keyval == GDK_KEY_h || keyval == GDK_KEY_H || keycode_matches_latin_keyval(keycode, GDK_KEY_h))) {
         apply_format(buf, "==", "==");
         return TRUE;
     }
     /* ── Ctrl+Shift+S  Strikethrough ── */
-    if (ctrl_held && shift_held && (keyval == GDK_KEY_s || keyval == GDK_KEY_S)) {
+    if (ctrl_held && shift_held && (keyval == GDK_KEY_s || keyval == GDK_KEY_S || keycode_matches_latin_keyval(keycode, GDK_KEY_s))) {
         apply_format(buf, "~~", "~~");
         return TRUE;
     }
     /* ── Ctrl+Q  Blockquote ── */
-    if (ctrl_held && !shift_held && (keyval == GDK_KEY_q || keyval == GDK_KEY_Q)) {
+    if (ctrl_held && !shift_held && (keyval == GDK_KEY_q || keyval == GDK_KEY_Q || keycode_matches_latin_keyval(keycode, GDK_KEY_q))) {
         apply_paragraph_format(buf, "> ");
         return TRUE;
     }
     /* ── Ctrl+M  Math ── */
-    if (ctrl_held && !shift_held && (keyval == GDK_KEY_m || keyval == GDK_KEY_M)) {
+    if (ctrl_held && !shift_held && (keyval == GDK_KEY_m || keyval == GDK_KEY_M || keycode_matches_latin_keyval(keycode, GDK_KEY_m))) {
         apply_format(buf, "$", "$");
         return TRUE;
     }
@@ -2090,22 +2115,22 @@ static gboolean on_editor_key_pressed(GtkEventControllerKey *ctrl,
         }
     }
     /* ── Ctrl+Shift+L  Bullet list ── */
-    if (ctrl_held && shift_held && (keyval == GDK_KEY_l || keyval == GDK_KEY_L)) {
+    if (ctrl_held && shift_held && (keyval == GDK_KEY_l || keyval == GDK_KEY_L || keycode_matches_latin_keyval(keycode, GDK_KEY_l))) {
         apply_paragraph_format(buf, "- ");
         return TRUE;
     }
     /* ── Ctrl+Shift+O  Ordered list ── */
-    if (ctrl_held && shift_held && (keyval == GDK_KEY_o || keyval == GDK_KEY_O)) {
+    if (ctrl_held && shift_held && (keyval == GDK_KEY_o || keyval == GDK_KEY_O || keycode_matches_latin_keyval(keycode, GDK_KEY_o))) {
         apply_paragraph_format(buf, "1. ");
         return TRUE;
     }
     /* ── Ctrl+Shift+T  Task list ── */
-    if (ctrl_held && shift_held && (keyval == GDK_KEY_t || keyval == GDK_KEY_T)) {
+    if (ctrl_held && shift_held && (keyval == GDK_KEY_t || keyval == GDK_KEY_T || keycode_matches_latin_keyval(keycode, GDK_KEY_t))) {
         apply_paragraph_format(buf, "- [ ] ");
         return TRUE;
     }
     /* ── Ctrl+S  Force save ── */
-    if (ctrl_held && !shift_held && (keyval == GDK_KEY_s || keyval == GDK_KEY_S)) {
+    if (ctrl_held && !shift_held && (keyval == GDK_KEY_s || keyval == GDK_KEY_S || keycode_matches_latin_keyval(keycode, GDK_KEY_s))) {
         zig_force_save();
         return TRUE;
     }
@@ -2747,10 +2772,10 @@ static void populate_explorer(AppGui *gui) {
 static gboolean on_window_key_pressed(GtkEventControllerKey *ctrl,
                                       guint keyval, guint keycode,
                                       GdkModifierType state, gpointer user_data) {
-    (void)ctrl; (void)keycode;
+    (void)ctrl;
     AppGui *gui = (AppGui *)user_data;
 
-    if ((state & GDK_CONTROL_MASK) && (keyval == GDK_KEY_f || keyval == GDK_KEY_F)) {
+    if ((state & GDK_CONTROL_MASK) && (keyval == GDK_KEY_f || keyval == GDK_KEY_F || keycode_matches_latin_keyval(keycode, GDK_KEY_f))) {
         toggle_search(gui);
         return TRUE;
     }
@@ -2767,7 +2792,7 @@ static gboolean on_window_key_pressed(GtkEventControllerKey *ctrl,
     }
 
     /* Ctrl+Q — Quit application */
-    if ((state & GDK_CONTROL_MASK) && (keyval == GDK_KEY_q || keyval == GDK_KEY_Q)) {
+    if ((state & GDK_CONTROL_MASK) && (keyval == GDK_KEY_q || keyval == GDK_KEY_Q || keycode_matches_latin_keyval(keycode, GDK_KEY_q))) {
         g_application_quit(g_application_get_default());
         return TRUE;
     }

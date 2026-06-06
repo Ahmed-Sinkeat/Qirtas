@@ -22,8 +22,8 @@
   
   <!-- Markdown Styles -->
   <style name="markdown:header" foreground="purple" bold="true"/>
-  <style name="markdown:h1" foreground="h1" bold="true"/>
-  <style name="markdown:h2" foreground="h2" bold="true"/>
+  <style name="markdown:h1" foreground="h1" bold="true" scale="1.5"/>
+  <style name="markdown:h2" foreground="h2" bold="true" scale="1.3"/>
   <style name="markdown:h3" foreground="h3" bold="true"/>
   <style name="markdown:h4" foreground="h4" bold="true"/>
   <style name="markdown:h5" foreground="h5" bold="true"/>
@@ -46,5 +46,9 @@
   <style name="lawh_markdown:bold" foreground="#073642" bold="true"/>
   <style name="markdown:bold" foreground="#073642" bold="true"/>
   <style name="markdown:italic" italic="true"/>
+  <style name="markdown:strikethrough" strikethrough="true"/>
+  <style name="markdown:inline-code" foreground="teal"/>
+  <style name="markdown:code" foreground="teal"/>
   <style name="lawh_markdown:wiki-link" foreground="#2aa198" underline="true"/>
+  <style name="lawh_markdown:highlight" background="#b58900" foreground="#fdf6e3"/>
 </style-scheme>

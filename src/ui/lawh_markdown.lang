@@ -7,6 +7,7 @@
 
   <styles>
     <style id="wiki-link" _name="Wiki Link" map-to="lawh_markdown:wiki-link"/>
+    <style id="highlight" _name="Highlight" map-to="lawh_markdown:highlight"/>
   </styles>
 
   <definitions>
@@ -16,6 +17,10 @@
         <!-- Wiki Link: [[WikiLink]] -->
         <context id="wiki-link" style-ref="wiki-link">
           <match>\[\[[^\]\n]+\]\]</match>
+        </context>
+        <!-- Highlight: ==text== -->
+        <context id="highlight" style-ref="highlight">
+          <match>==[^=\n]+==</match>
         </context>
       </include>
     </context>

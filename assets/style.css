@@ -83,3 +83,22 @@ popover > contents {
     letter-spacing: 0.1em;
     margin-bottom: 4px;
 }
+
+/* Explicit markdown token styling rules for GtkSourceView CSS provider mapping */
+.italic {
+    font-style: italic;
+}
+.strikethrough {
+    text-decoration: line-through;
+}
+.h1 {
+    font-size: 1.5em;
+    font-weight: bold;
+    color: #ff79c6;
+}
+.h2 {
+    font-size: 1.3em;
+    font-weight: bold;
+    color: #8be9fd;
+}
+
