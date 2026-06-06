@@ -1,0 +1,17 @@
+[Icon Theme]
+Name=Pop
+Comment=Pop theme
+Directories=scalable/apps,scalable/symbolic
+
+[scalable/apps]
+Size=256
+MinSize=8
+MaxSize=512
+Type=Scalable
+
+[scalable/symbolic]
+Size=16
+MinSize=16
+MaxSize=512
+Type=Scalable
+Context=Symbolic

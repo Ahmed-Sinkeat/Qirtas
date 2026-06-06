@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<language id="lawh_markdown" _name="Lawh Markdown" version="2.0" _section="Markup">
+  <metadata>
+    <property name="mimetypes">text/markdown;text/x-markdown</property>
+    <property name="globs">*.md;*.markdown;*.txt</property>
+  </metadata>
+
+  <styles>
+    <style id="string" _name="String" map-to="lawh_markdown:string"/>
+    <style id="bold" _name="Bold" map-to="lawh_markdown:bold"/>
+    <style id="wiki-link" _name="Wiki Link" map-to="lawh_markdown:wiki-link"/>
+  </styles>
+
+  <definitions>
+    <context id="lawh_markdown">
+      <include>
+        <!-- Double quotes string: "text" -->
+        <context id="string" style-ref="string" end-at-line-end="true">
+          <start>"</start>
+          <end>"</end>
+        </context>
+
+        <!-- Bold text: **text** -->
+        <context id="bold" style-ref="bold">
+          <start>\*\*</start>
+          <end>\*\*</end>
+        </context>
+
+        <!-- Wiki Link: [[WikiLink]] -->
+        <context id="wiki-link" style-ref="wiki-link">
+          <match>\[\[[^\]\n]+\]\]</match>
+        </context>
+      </include>
+    </context>
+  </definitions>
+</language>

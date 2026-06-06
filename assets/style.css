@@ -1,0 +1,85 @@
+/* 
+ * Lawh (دفتر) UI Sharpening stylesheet
+ * Sharpened fonts, gutter, selection colors, and popovers.
+ */
+
+/* 1. Main Editor Font and Text Canvas */
+textview text, textview.sourceview text, textview {
+    font-family: "JetBrains Mono", "Amiri", "serif";
+    font-size: 16px;
+    line-height: 1.45;
+    margin: 0px;
+    padding: 0px;
+    caret-color: #00E5FF;
+}
+
+/* Headline Typography */
+h1, h2, h3 {
+    font-family: "Cairo", "Inter", "system-ui", sans-serif;
+}
+
+
+/* 2. Textview Selection Styling */
+textview selection, textview.sourceview selection {
+    background-color: rgba(0, 229, 255, 0.22);
+    color: inherit;
+    padding: 0px;
+    margin: 0px;
+}
+
+/* 3. Gutter and Line Numbers Styling */
+gutterview, gutter {
+    background-color: transparent;
+    background: transparent;
+    padding-left: 6px;
+    padding-right: 6px;
+    color: #4a4a4a;
+    font-family: "JetBrains Mono", "Fira Mono", "DejaVu Sans Mono", monospace;
+    font-size: 10pt;
+}
+
+gutterview > line, gutter > line {
+    color: #4a4a4a;
+    background-color: transparent;
+}
+
+/* Active current line number styling */
+gutterview > line.current-line-number, gutter > line.current-line-number {
+    color: #00e5ff;
+    font-weight: bold;
+    font-size: 10pt;
+}
+
+/* 4. Popover Menu Custom styling */
+popover > contents {
+    border-radius: 12px;
+    border: 1px solid #1e2025;
+    background-color: #111318;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+    padding: 10px;
+}
+
+/* Additional UI styling to match the premium theme */
+.pop-btn {
+    border-radius: 6px;
+    padding: 6px 12px;
+    background-color: transparent;
+    border: none;
+    color: #c5c6ca;
+    text-shadow: none;
+    box-shadow: none;
+    transition: background 120ms, color 120ms;
+}
+
+.pop-btn:hover {
+    background-color: #1e2025;
+    color: #00e5ff;
+}
+
+.pop-section-label {
+    font-size: 10px;
+    font-weight: 700;
+    color: #6b6e7a;
+    letter-spacing: 0.1em;
+    margin-bottom: 4px;
+}
