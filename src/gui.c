@@ -124,8 +124,11 @@ static void toggle_search(AppGui *gui);
 static void on_insert_text_before(GtkTextBuffer *buf, GtkTextIter *location, gchar *text, gint len, gpointer user_data);
 static gboolean on_editor_key_pressed(GtkEventControllerKey *ctrl, guint keyval, guint keycode, GdkModifierType state, gpointer user_data);
 static void on_editor_right_click(GtkGestureClick *gesture, gint n_press, gdouble x, gdouble y, gpointer user_data);
+static void apply_regex_conceal(GtkTextBuffer *buf, const gchar *text, const gchar *pattern, gint cursor_char, gint delim_len, GtkTextTag *conceal_tag);
+static void update_conceal_markdown(GtkTextBuffer *buf);
 static void on_buffer_changed(GtkTextBuffer *buf, gpointer user_data);
 static void on_mark_set(GtkTextBuffer *buf, GtkTextIter *location, GtkTextMark *mark, gpointer user_data);
+static void on_cursor_position_changed(GObject *object, GParamSpec *pspec, gpointer user_data);
 static void on_format_clicked(GtkButton *btn, gpointer user_data);
 static void on_para_clicked(GtkButton *btn, gpointer user_data);
 static void apply_wiki_link_tags(GtkTextBuffer *buf);
@@ -1853,6 +1856,79 @@ static void on_workspace_click(GtkGestureClick *gesture, gint n_press, gdouble x
     }
 }
 
+static void apply_regex_conceal(GtkTextBuffer *buf, const gchar *text, const gchar *pattern, gint cursor_char, gint delim_len, GtkTextTag *conceal_tag) {
+    GError *error = NULL;
+    GRegex *regex = g_regex_new(pattern, G_REGEX_DEFAULT, 0, &error);
+    if (!regex) {
+        if (error) {
+            g_printerr("Failed to compile regex %s: %s\n", pattern, error->message);
+            g_clear_error(&error);
+        }
+        return;
+    }
+
+    GMatchInfo *match_info = NULL;
+    gboolean has_match = g_regex_match(regex, text, 0, &match_info);
+    while (has_match) {
+        gint start_byte = 0;
+        gint end_byte = 0;
+        if (g_match_info_fetch_pos(match_info, 0, &start_byte, &end_byte)) {
+            gint start_char = g_utf8_pointer_to_offset(text, text + start_byte);
+            gint end_char = g_utf8_pointer_to_offset(text, text + end_byte);
+            
+            gboolean cursor_inside = (cursor_char >= start_char && cursor_char <= end_char);
+            
+            if (!cursor_inside) {
+                GtkTextIter start_iter, end_iter;
+                gtk_text_buffer_get_iter_at_offset(buf, &start_iter, start_char);
+                gtk_text_buffer_get_iter_at_offset(buf, &end_iter, start_char + delim_len);
+                gtk_text_buffer_apply_tag(buf, conceal_tag, &start_iter, &end_iter);
+                
+                gtk_text_buffer_get_iter_at_offset(buf, &start_iter, end_char - delim_len);
+                gtk_text_buffer_get_iter_at_offset(buf, &end_iter, end_char);
+                gtk_text_buffer_apply_tag(buf, conceal_tag, &start_iter, &end_iter);
+            }
+        }
+        has_match = g_match_info_next(match_info, &error);
+    }
+    g_match_info_free(match_info);
+    g_regex_unref(regex);
+}
+
+static void update_conceal_markdown(GtkTextBuffer *buf) {
+    GtkTextTagTable *table = gtk_text_buffer_get_tag_table(buf);
+    GtkTextTag *conceal_tag = gtk_text_tag_table_lookup(table, "conceal");
+    if (!conceal_tag) {
+        conceal_tag = gtk_text_buffer_create_tag(buf, "conceal", "invisible", TRUE, NULL);
+    }
+
+    GtkTextIter start, end;
+    gtk_text_buffer_get_bounds(buf, &start, &end);
+    gtk_text_buffer_remove_tag(buf, conceal_tag, &start, &end);
+
+    gchar *text = gtk_text_buffer_get_text(buf, &start, &end, FALSE);
+    if (!text || strlen(text) == 0) {
+        g_free(text);
+        return;
+    }
+
+    GtkTextMark *insert_mark = gtk_text_buffer_get_insert(buf);
+    GtkTextIter cursor_iter;
+    gtk_text_buffer_get_iter_at_mark(buf, &cursor_iter, insert_mark);
+    gint cursor_char = gtk_text_iter_get_offset(&cursor_iter);
+
+    // Apply conceal to bold
+    apply_regex_conceal(buf, text, "\\*\\*([^\\n]+?)\\*\\*", cursor_char, 2, conceal_tag);
+
+    // Apply conceal to highlight
+    apply_regex_conceal(buf, text, "==([^\\n]+?)==", cursor_char, 2, conceal_tag);
+
+    // Apply conceal to italic
+    apply_regex_conceal(buf, text, "(?<!\\*)\\*([^\\n\\*]+?)\\*(?!\\*)", cursor_char, 1, conceal_tag);
+
+    g_free(text);
+}
+
 static void on_buffer_changed(GtkTextBuffer *buf, gpointer user_data) {
     AppGui *gui = (AppGui *)user_data;
     
@@ -1886,6 +1962,7 @@ static void on_buffer_changed(GtkTextBuffer *buf, gpointer user_data) {
     if (gui->lbl_chars) gtk_label_set_text(GTK_LABEL(gui->lbl_chars), c_buf);
     
     g_free(text);
+    update_conceal_markdown(buf);
 }
 
 static void on_mark_set(GtkTextBuffer *buf, GtkTextIter *location, GtkTextMark *mark, gpointer user_data) {
@@ -1896,6 +1973,7 @@ static void on_mark_set(GtkTextBuffer *buf, GtkTextIter *location, GtkTextMark *
 
     GtkTextMark *insert_mark = gtk_text_buffer_get_insert(buf);
     if (mark == insert_mark) {
+        update_conceal_markdown(buf);
         if (!gtk_widget_get_realized(gui->source_view)) return;
 
         GtkTextIter iter;
@@ -1953,6 +2031,12 @@ static void on_mark_set(GtkTextBuffer *buf, GtkTextIter *location, GtkTextMark *
             }
         }
     }
+}
+
+static void on_cursor_position_changed(GObject *object, GParamSpec *pspec, gpointer user_data) {
+    (void)pspec;
+    (void)user_data;
+    update_conceal_markdown(GTK_TEXT_BUFFER(object));
 }
 
 static void on_insert_text_before(GtkTextBuffer *buf, GtkTextIter *location, gchar *text, gint len, gpointer user_data) {
@@ -3511,6 +3595,7 @@ static void activate(GtkApplication *app, gpointer user_data) {
     g_signal_connect_after(src_buf, "insert-text", G_CALLBACK(on_insert_text_after), gui);
     g_signal_connect_after(src_buf, "delete-range", G_CALLBACK(on_delete_range_after), gui);
     g_signal_connect(src_buf, "mark-set", G_CALLBACK(on_mark_set), gui);
+    g_signal_connect(src_buf, "notify::cursor-position", G_CALLBACK(on_cursor_position_changed), gui);
 
     g_signal_connect(search_entry, "search-changed",
                      G_CALLBACK(on_search_text_changed), gui);
