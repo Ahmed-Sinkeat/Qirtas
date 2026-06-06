@@ -44,5 +44,7 @@
 
   <style name="lawh_markdown:string" foreground="#4682B4"/>
   <style name="lawh_markdown:bold" foreground="#ffffff" bold="true"/>
+  <style name="markdown:bold" foreground="#ffffff" bold="true"/>
+  <style name="markdown:italic" italic="true"/>
   <style name="lawh_markdown:wiki-link" foreground="#00E5FF" underline="true"/>
 </style-scheme>

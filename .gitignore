@@ -15,9 +15,10 @@ zig-out/
 *~
 *.swp
 
-# Excluded by request
-design/
+# Excluded design, documents, and requirements
+/design/
 *.pdf
-req_dafter.txt
-req_lawh.txt
-scratch_http_test.zig
+/req_dafter.txt
+/req_lawh.txt
+/scratch_http_test.zig
+

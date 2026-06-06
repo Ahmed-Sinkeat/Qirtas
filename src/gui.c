@@ -1599,6 +1599,14 @@ static void on_popover_destroy(GtkWidget *widget, gpointer user_data) {
     }
 }
 
+static void on_editor_popover_closed(GtkPopover *popover, gpointer user_data) {
+    (void)user_data;
+    GtkWidget *widget = GTK_WIDGET(popover);
+    if (gtk_widget_get_parent(widget) != NULL) {
+        gtk_widget_unparent(widget);
+    }
+}
+
 static void on_editor_right_click(GtkGestureClick *gesture, gint n_press, gdouble x, gdouble y, gpointer user_data) {
     (void)n_press;
     AppGui *gui = (AppGui *)user_data;
@@ -1613,6 +1621,7 @@ static void on_editor_right_click(GtkGestureClick *gesture, gint n_press, gdoubl
     gtk_widget_set_parent(popover, gui->source_view);
     gui->active_popover = popover;
     g_signal_connect(popover, "destroy", G_CALLBACK(on_popover_destroy), gui);
+    g_signal_connect(popover, "closed", G_CALLBACK(on_editor_popover_closed), NULL);
     
     GdkRectangle rect = { (int)x, (int)y, 1, 1 };
     gtk_popover_set_pointing_to(GTK_POPOVER(popover), &rect);
@@ -1734,9 +1743,6 @@ static void on_editor_left_click(GtkGestureClick *gesture, gint n_press, gdouble
     (void)n_press;
     AppGui *gui = (AppGui *)user_data;
     
-    if (gui->active_popover) {
-        gtk_widget_unparent(gui->active_popover);
-    }
     if (gui->sidebar && gtk_widget_get_visible(gui->sidebar)) {
         gtk_widget_set_visible(gui->sidebar, FALSE);
     }
@@ -3706,6 +3712,7 @@ static void activate(GtkApplication *app, gpointer user_data) {
     // Setup right-click popover gesture on editor
     GtkGesture *right_click_gesture = gtk_gesture_click_new();
     gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(right_click_gesture), GDK_BUTTON_SECONDARY);
+    gtk_event_controller_set_propagation_phase(GTK_EVENT_CONTROLLER(right_click_gesture), GTK_PHASE_CAPTURE);
     g_signal_connect(right_click_gesture, "pressed", G_CALLBACK(on_editor_right_click), gui);
     gtk_widget_add_controller(source_view, GTK_EVENT_CONTROLLER(right_click_gesture));
 
