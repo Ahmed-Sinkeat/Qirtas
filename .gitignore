@@ -18,7 +18,6 @@ zig-out/
 # Excluded design, documents, and requirements
 /design/
 *.pdf
-/req_dafter.txt
-/req_lawh.txt
+/req_*.txt
 /scratch_http_test.zig
 

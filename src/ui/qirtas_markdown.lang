@@ -1,14 +1,14 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  lawh_markdown.lang
+  qirtas_markdown.lang
   Self-contained Markdown language for GtkSourceView 5.
 
   How map-to works:
     map-to="def:xxx"  sets the fallback style (always available).
-    The scheme then overrides appearance using "lawh_markdown:styleid".
-    So we map to def: here, and the scheme provides lawh_markdown: overrides.
+    The scheme then overrides appearance using "qirtas_markdown:styleid".
+    So we map to def: here, and the scheme provides qirtas_markdown: overrides.
 -->
-<language id="lawh_markdown" _name="Lawh Markdown" version="2.0" _section="Markup">
+<language id="qirtas_markdown" _name="Qirtas Markdown" version="2.0" _section="Markup">
   <metadata>
     <property name="mimetypes">text/markdown;text/x-markdown</property>
     <property name="globs">*.md;*.markdown;*.txt</property>
@@ -41,7 +41,7 @@
   </styles>
 
   <definitions>
-    <context id="lawh_markdown">
+    <context id="qirtas_markdown">
       <include>
 
         <!-- ATX Headings: # to ###### -->

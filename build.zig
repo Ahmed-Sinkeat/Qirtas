@@ -11,19 +11,19 @@ pub fn build(b: *std.Build) void {
         .preferred_optimize_mode = .ReleaseSmall,
     });
 
-    const mod = b.addModule("lawh", .{
+    const mod = b.addModule("qirtas", .{
         .root_source_file = b.path("src/root.zig"),
         .target = target,
     });
 
     const exe = b.addExecutable(.{
-        .name = "lawh",
+        .name = "qirtas",
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/main.zig"),
             .target = target,
             .optimize = optimize,
             .imports = &.{
-                .{ .name = "lawh", .module = mod },
+                .{ .name = "qirtas", .module = mod },
             },
         }),
     });

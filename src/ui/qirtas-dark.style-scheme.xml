@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<style-scheme id="lawh-dark" _name="Lawh Dark" version="1.0">
-  <author>Lawh Team</author>
-  <description>Custom dark style scheme for Lawh Markdown Editor</description>
+<style-scheme id="qirtas-dark" _name="Qirtas Dark" version="1.0">
+  <author>Qirtas Team</author>
+  <description>Custom dark style scheme for Qirtas Markdown Editor</description>
 
   <!-- ── Palette ── -->
   <color name="pink"       value="#ff79c6"/>
@@ -50,34 +50,34 @@
   <style name="def:shebang"             foreground="gray"   italic="true"/>
   <style name="def:special-char"        foreground="purple"/>
 
-  <!-- ── Headings by level (lawh_markdown: prefix → our lang file) ── -->
-  <style name="lawh_markdown:h1"         foreground="h1"    bold="true" weight="bold" scale="1.8"/>
-  <style name="lawh_markdown:h2"         foreground="h2"    bold="true" weight="bold" scale="1.5"/>
-  <style name="lawh_markdown:h3"         foreground="h3"    bold="true" weight="bold" scale="1.3"/>
-  <style name="lawh_markdown:h4"         foreground="h4"    bold="true" weight="bold" scale="1.15"/>
-  <style name="lawh_markdown:h5"         foreground="h5"    bold="true" weight="bold" scale="1.0"/>
-  <style name="lawh_markdown:h6"         foreground="h6"    bold="true" weight="bold" scale="0.85"/>
+  <!-- ── Headings by level (qirtas_markdown: prefix → our lang file) ── -->
+  <style name="qirtas_markdown:h1"         foreground="h1"    bold="true" weight="bold" scale="1.8"/>
+  <style name="qirtas_markdown:h2"         foreground="h2"    bold="true" weight="bold" scale="1.5"/>
+  <style name="qirtas_markdown:h3"         foreground="h3"    bold="true" weight="bold" scale="1.3"/>
+  <style name="qirtas_markdown:h4"         foreground="h4"    bold="true" weight="bold" scale="1.15"/>
+  <style name="qirtas_markdown:h5"         foreground="h5"    bold="true" weight="bold" scale="1.0"/>
+  <style name="qirtas_markdown:h6"         foreground="h6"    bold="true" weight="bold" scale="0.85"/>
 
   <!-- ── Inline formatting ── -->
-  <style name="lawh_markdown:bold"        foreground="gold"  bold="true" weight="bold"/>
-  <style name="lawh_markdown:italic"      foreground="calm-purple" italic="true"/>
-  <style name="lawh_markdown:bold-italic" foreground="gold"  bold="true" weight="bold" italic="true"/>
-  <style name="lawh_markdown:strikethrough" strikethrough="true" foreground="gray"/>
-  <style name="lawh_markdown:inline-code" foreground="cyan"   background="#1e2230"/>
+  <style name="qirtas_markdown:bold"        foreground="gold"  bold="true" weight="bold"/>
+  <style name="qirtas_markdown:italic"      foreground="calm-purple" italic="true"/>
+  <style name="qirtas_markdown:bold-italic" foreground="gold"  bold="true" weight="bold" italic="true"/>
+  <style name="qirtas_markdown:strikethrough" strikethrough="true" foreground="gray"/>
+  <style name="qirtas_markdown:inline-code" foreground="cyan"   background="#1e2230"/>
 
   <!-- ── Block elements ── -->
-  <style name="lawh_markdown:blockquote"  foreground="gray"   italic="true"/>
-  <style name="lawh_markdown:list-marker" foreground="pink"/>
+  <style name="qirtas_markdown:blockquote"  foreground="gray"   italic="true"/>
+  <style name="qirtas_markdown:list-marker" foreground="pink"/>
 
   <!-- ── Links ── -->
-  <style name="lawh_markdown:link-text"   foreground="cyan"/>
-  <style name="lawh_markdown:url"         foreground="cyan"   underline="true" italic="true"/>
-  <style name="lawh_markdown:wiki-link"   foreground="#00E5FF" underline="true"/>
+  <style name="qirtas_markdown:link-text"   foreground="cyan"/>
+  <style name="qirtas_markdown:url"         foreground="cyan"   underline="true" italic="true"/>
+  <style name="qirtas_markdown:wiki-link"   foreground="#00E5FF" underline="true"/>
 
   <!-- ── Special ── -->
-  <style name="lawh_markdown:highlight"   background="#ffb86c" foreground="#111318"/>
-  <style name="lawh_markdown:math"        foreground="green"/>
-  <style name="lawh_markdown:comment"     foreground="comment-fg" italic="true"/>
+  <style name="qirtas_markdown:highlight"   background="#ffb86c" foreground="#111318"/>
+  <style name="qirtas_markdown:math"        foreground="green"/>
+  <style name="qirtas_markdown:comment"     foreground="comment-fg" italic="true"/>
 
   <!-- ── Compatibility aliases for system markdown.lang (v4) ── -->
   <style name="markdown:header"           foreground="pink"   bold="true"/>

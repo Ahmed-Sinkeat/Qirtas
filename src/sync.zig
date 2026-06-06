@@ -19,7 +19,7 @@ extern fn gui_trigger_autosave() void;
 // Active IO reference from main.zig
 const main = @import("main.zig");
 
-const DB_PATH = "/home/.config/lawh/vault.db";
+const DB_PATH = "/home/.config/qirtas/vault.db";
 
 const TokenResponse = struct {
     access_token: []const u8,

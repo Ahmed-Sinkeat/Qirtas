@@ -11,7 +11,7 @@
 #include <libgen.h>
 #include <limits.h>
 
-#define DB_PATH "/home/.config/lawh/vault.db"
+#define DB_PATH "/home/.config/qirtas/vault.db"
 
 /* ============================================================
  * DATA STRUCTURES
@@ -134,7 +134,7 @@ static void show_keybindings_window(AppGui *gui);
 static void on_settings_btn_clicked(GtkButton *btn, gpointer user_data);
 static gboolean on_settings_window_close_request(GtkWindow *window, gpointer user_data);
 static void on_export_pdf_clicked(GtkButton *btn, gpointer user_data);
-void lawh_export_to_pdf(AppGui *gui);
+void qirtas_export_to_pdf(AppGui *gui);
 static void update_editor_font(AppGui *gui);
 static int get_line_height(GtkWidget *text_view);
 
@@ -1163,14 +1163,14 @@ static void apply_theme(AppGui *gui, const char *theme_name) {
         GtkSourceStyleSchemeManager *sm = gtk_source_style_scheme_manager_get_default();
         GtkSourceStyleScheme *scheme = NULL;
         if (strcmp(theme_name, "sepia") == 0) {
-            scheme = gtk_source_style_scheme_manager_get_scheme(sm, "lawh-sepia");
+            scheme = gtk_source_style_scheme_manager_get_scheme(sm, "qirtas-sepia");
             if (!scheme) scheme = gtk_source_style_scheme_manager_get_scheme(sm, "classic");
             if (!scheme) scheme = gtk_source_style_scheme_manager_get_scheme(sm, "solarized-light");
         } else if (strcmp(theme_name, "midnight") == 0) {
-            scheme = gtk_source_style_scheme_manager_get_scheme(sm, "lawh-midnight");
+            scheme = gtk_source_style_scheme_manager_get_scheme(sm, "qirtas-midnight");
             if (!scheme) scheme = gtk_source_style_scheme_manager_get_scheme(sm, "oblivion");
         } else {
-            scheme = gtk_source_style_scheme_manager_get_scheme(sm, "lawh-dark");
+            scheme = gtk_source_style_scheme_manager_get_scheme(sm, "qirtas-dark");
             if (!scheme) scheme = gtk_source_style_scheme_manager_get_scheme(sm, "adwaita-dark");
             if (!scheme) scheme = gtk_source_style_scheme_manager_get_scheme(sm, "oblivion");
             if (!scheme) scheme = gtk_source_style_scheme_manager_get_scheme(sm, "solarized-dark");
@@ -1565,7 +1565,7 @@ static void on_pdf_save_response(GObject *source_object, GAsyncResult *res, gpoi
     }
 }
 
-void lawh_export_to_pdf(AppGui *gui) {
+void qirtas_export_to_pdf(AppGui *gui) {
     if (!gui || !gui->window) return;
 
     GtkFileDialog *dialog = gtk_file_dialog_new();
@@ -1591,7 +1591,7 @@ static void on_export_pdf_clicked(GtkButton *btn, gpointer user_data) {
     AppGui *gui = (AppGui *)user_data;
     GtkWidget *pop = gtk_widget_get_ancestor(GTK_WIDGET(btn), GTK_TYPE_POPOVER);
     if (pop) gtk_popover_popdown(GTK_POPOVER(pop));
-    lawh_export_to_pdf(gui);
+    qirtas_export_to_pdf(gui);
 }
 
 static void on_open_existing_clicked(GtkButton *btn, gpointer user_data) {
@@ -3070,7 +3070,7 @@ static void activate(GtkApplication *app, gpointer user_data) {
 
     /* ── Window ── */
     GtkWidget *window = adw_application_window_new(app);
-    gtk_window_set_title(GTK_WINDOW(window), "Lawh");
+    gtk_window_set_title(GTK_WINDOW(window), "Qirtas");
     gtk_window_set_default_size(GTK_WINDOW(window), 1100, 720);
     gtk_widget_set_size_request(window, 350, 250);
     gtk_window_set_decorated(GTK_WINDOW(window), FALSE);
@@ -3108,7 +3108,7 @@ static void activate(GtkApplication *app, gpointer user_data) {
     if (link_len != -1) {
         exe_path[link_len] = '\0';
         char *dir = dirname(exe_path);
-        // The binary is in <project_root>/zig-out/bin/lawh, so we go up two levels to get the project root.
+        // The binary is in <project_root>/zig-out/bin/qirtas, so we go up two levels to get the project root.
         snprintf(custom_icon_path, sizeof(custom_icon_path), "%s/../../src/ui/icons", dir);
     }
 
@@ -3176,7 +3176,7 @@ static void activate(GtkApplication *app, gpointer user_data) {
     /* 3. Register custom icon theme paths to default GTK display icon theme */
     GtkIconTheme *icon_theme = gtk_icon_theme_get_for_display(gdk_display_get_default());
     gtk_icon_theme_add_search_path(icon_theme, "src/ui/icons");
-    gtk_icon_theme_add_search_path(icon_theme, "/home/sinkeat/projects/dafter/src/ui/icons");
+    gtk_icon_theme_add_search_path(icon_theme, "/home/sinkeat/projects/qirtas/src/ui/icons");
     if (strlen(custom_icon_path) > 0) {
         char resolved_path[PATH_MAX];
         if (realpath(custom_icon_path, resolved_path) != NULL) {
@@ -3472,7 +3472,7 @@ static void activate(GtkApplication *app, gpointer user_data) {
         }
     }
     gtk_source_language_manager_append_search_path(lm, "src/ui");
-    GtkSourceLanguage *lang = gtk_source_language_manager_get_language(lm, "lawh_markdown");
+    GtkSourceLanguage *lang = gtk_source_language_manager_get_language(lm, "qirtas_markdown");
     if (!lang) lang = gtk_source_language_manager_get_language(lm, "markdown");
     if (lang) gtk_source_buffer_set_language(src_buf, lang);
 
@@ -3491,7 +3491,7 @@ static void activate(GtkApplication *app, gpointer user_data) {
     }
     gtk_source_style_scheme_manager_append_search_path(sm, "src/ui");
     GtkSourceStyleScheme *scheme =
-        gtk_source_style_scheme_manager_get_scheme(sm, "lawh-dark");
+        gtk_source_style_scheme_manager_get_scheme(sm, "qirtas-dark");
     if (!scheme) scheme = gtk_source_style_scheme_manager_get_scheme(sm, "adwaita-dark");
     if (!scheme) scheme = gtk_source_style_scheme_manager_get_scheme(sm, "oblivion");
     if (!scheme) scheme = gtk_source_style_scheme_manager_get_scheme(sm, "solarized-dark");
@@ -3928,7 +3928,7 @@ static void activate(GtkApplication *app, gpointer user_data) {
 int run_gui(int argc, char **argv) {
     gtk_source_init();
     adw_init();
-    AdwApplication *app = adw_application_new("org.lawh.notebook",
+    AdwApplication *app = adw_application_new("org.qirtas.notebook",
                                                G_APPLICATION_DEFAULT_FLAGS);
     g_signal_connect(app, "activate", G_CALLBACK(activate), NULL);
     int status = g_application_run(G_APPLICATION(app), argc, argv);
@@ -4379,7 +4379,7 @@ void gui_set_title(const char *title) {
         char fname[256];
         strncpy(fname, title, sizeof(fname));
         fname[sizeof(fname) - 1] = '\0';
-        char *sfx = strstr(fname, " - Lawh");
+        char *sfx = strstr(fname, " - Qirtas");
         if (sfx) *sfx = '\0';
         gtk_label_set_text(GTK_LABEL(global_path_label), fname);
         if (global_gui && global_gui->stats_file_val)

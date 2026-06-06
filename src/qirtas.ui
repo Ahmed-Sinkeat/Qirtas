@@ -20,7 +20,7 @@
                 <property name="width-request">64</property>
                 <style class="navigation-sidebar"/>
                 
-                <!-- شعار التطبيق (الحرف D) -->
+                <!-- شعار التطبيق (الحرف Q) -->
                 <child>
                   <object class="GtkBox">
                     <property name="margin-top">16</property>
@@ -28,7 +28,7 @@
                     <property name="halign">center</property>
                     <child>
                       <object class="GtkLabel">
-                        <property name="label">D</property>
+                        <property name="label">Q</property>
                         <style class="title-1"/>
                       </object>
                     </child>
@@ -97,13 +97,13 @@
                 <child>
                   <object class="AdwHeaderBar">
                     <property name="title-widget">
-                      <object class="AdwWindowTitle">
+                       <object class="AdwWindowTitle">
                         <property name="title">~/Documents/Economics_Notes.md</property>
                       </object>
                     </property>
                     <!-- زر القائمة المنبثقة للثيمات -->
                     <child type="end">
-                      <object class="GtkMenuButton">
+                       <object class="GtkMenuButton">
                         <property name="icon-name">open-menu-symbolic</property>
                         <property name="popover">
                           <object class="GtkPopover">
