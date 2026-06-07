@@ -4,12 +4,12 @@
   <description>Qirtas Ink style scheme (Paper &amp; Ink contrast)</description>
 
   <!-- ── Palette ── -->
-  <color name="ink"        value="#111111"/>
-  <color name="ink-muted"  value="#555555"/>
-  <color name="ink-faint"  value="#999999"/>
-  <color name="bg"         value="#fcfcfc"/>
-  <color name="bg-line"    value="#f5f5f5"/>
-  <color name="selection"  value="#eaeaea"/>
+  <color name="ink"        value="#000000"/>
+  <color name="ink-muted"  value="#444444"/>
+  <color name="ink-faint"  value="#777777"/>
+  <color name="bg"         value="#ffffff"/>
+  <color name="bg-line"    value="#f4f3f0"/>
+  <color name="selection"  value="#eae8e4"/>
 
   <!-- ── Editor base ── -->
   <style name="text"               foreground="ink"     background="bg"/>

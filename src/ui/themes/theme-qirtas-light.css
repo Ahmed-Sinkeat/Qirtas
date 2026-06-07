@@ -1,40 +1,39 @@
 /* ============================================================
- *  Qirtas — "Ink" Theme
- *  theme-ink.css
+ *  Qirtas — Ink Theme (Scroll & Ink Contrast)
+ *  theme-qirtas-light.css
  *  
- *  Inspired by image_0.png (Paper & Ink contrast).
+ *  Inspired by logo.png (Parchment scroll & Calligraphy ink contrast).
  * ============================================================ */
 
 @import url('theme-things.css'); /* Import the base structure */
 
-/* override the variable tokens */
 :root {
-  /* Font Family - Keeping the Monospace feels right for a pen theme */
-  --font-family: 'JetBrains Mono', 'Fira Mono', 'DejaVu Sans Mono', monospace;
+  /* Font Family - Serif font pairing for the paper/scroll calligraphy feel */
+  --font-family: 'Lora', 'PT Serif', 'Georgia', 'Times New Roman', serif;
 
   /* --- Global Colors --- */
-  --bg-window: #fcfcfc; /* Paper White */
-  --bg-sidebar: #f5f5f5; /* Sightly cooler paper for sidebar */
-  --bg-card: #f8f8f8; /* Very light gray for editor area/cards */
-  --bg-hover: #eaeaea; /* Light gray for hover states */
-  --bg-active: #dfdfdf; /* A slightly darker paper tone for active */
-  --border: #dcdcdc; /* Subtle light gray border */
-  --border-focus: #111111; /* Sharp black border for focus */
-  --accent: #111111; /* Ink Black for accent (buttons, icons) */
-  --accent-light: #555555; /* Lighter ink for minor accents */
+  --bg-window: #ffffff; /* Scroll Center White */
+  --bg-sidebar: #f4f3f0; /* Soft Watercolor Parchment Edge */
+  --bg-card: #fbfbf9; /* Very light paper card background */
+  --bg-hover: #eae8e4; /* Soft watercolor wash hover state */
+  --bg-active: #dfddd9; /* Deeper wash tone for active states */
+  --border: #e2e0db; /* Subtle warm grey paper border */
+  --border-focus: #000000; /* Sharp black ink border for focus */
+  --accent: #000000; /* Deep Ink Black accent */
+  --accent-light: #333333; /* Minor ink accent */
 
   /* --- Text Colors --- */
-  --text-primary: #111111; /* Deep Ink Black */
-  --text-muted: #666666; /* Grayed Ink for subtext */
-  --text-dim: #999999; /* Faded Ink for hints */
-  --cyan: #555555; /* Secondary accent (muted ink) */
+  --text-primary: #000000; /* Solid Ink Black */
+  --text-muted: #444444; /* Charcoal Ink for body/subtext */
+  --text-dim: #777777; /* Faded Ink for metadata and hints */
+  --cyan: #222222; /* Secondary ink accent */
 
   /* --- Icons & Status --- */
-  --folder-icon: #111111; /* Ink-colored folder */
-  --file-icon: #555555; /* Faded-ink-colored file */
-  --md-icon: #333333; /* Slightly warmer file icon */
+  --folder-icon: #000000; /* Ink Black folders */
+  --file-icon: #444444; /* Charcoal files */
+  --md-icon: #111111; /* Sharp markdown badge */
 
-  --status-saved: #111111; /* Solid Ink (Saved) */
-  --status-saving: #777777; /* Faded Gray Ink (Saving) */
-  --status-failed: #d00000; /* Subtle Red alert for failure (like a correction) */
+  --status-saved: #000000; /* Solid ink (Saved) */
+  --status-saving: #555555; /* Faded ink (Saving) */
+  --status-failed: #b30000; /* Correction ink red (Failed) */
 }
