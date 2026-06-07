@@ -1093,6 +1093,28 @@ static void apply_paragraph_format(GtkTextBuffer *buf, const char *prefix) {
     apply_paragraph_format_core(buf, prefix, start_line, end_line);
 }
 
+typedef struct {
+    GtkTextBuffer *buf;
+    char          *prefix;
+    char          *suffix;
+    gint           saved_start;
+    gint           saved_end;
+    gboolean       is_paragraph;
+} IdleFormatData;
+
+static gboolean do_idle_format(gpointer user_data) {
+    IdleFormatData *ifd = (IdleFormatData *)user_data;
+    if (ifd->is_paragraph) {
+        apply_paragraph_format_with_saved(ifd->buf, ifd->prefix, ifd->saved_start, ifd->saved_end);
+    } else {
+        apply_format_with_saved(ifd->buf, ifd->prefix, ifd->suffix, ifd->saved_start, ifd->saved_end);
+    }
+    g_free(ifd->prefix);
+    g_free(ifd->suffix);
+    g_free(ifd);
+    return G_SOURCE_REMOVE;
+}
+
 static void on_format_clicked(GtkButton *btn, gpointer user_data) {
     PopoverData *pd = (PopoverData *)user_data;
     const char *prefix = g_object_get_data(G_OBJECT(btn), "prefix");
@@ -1103,7 +1125,15 @@ static void on_format_clicked(GtkButton *btn, gpointer user_data) {
         gtk_widget_grab_focus(global_source_view);
     }
     
-    apply_format_with_saved(pd->buf, prefix, suffix, pd->saved_start, pd->saved_end);
+    IdleFormatData *ifd = g_new(IdleFormatData, 1);
+    ifd->buf = pd->buf;
+    ifd->prefix = prefix ? g_strdup(prefix) : NULL;
+    ifd->suffix = suffix ? g_strdup(suffix) : NULL;
+    ifd->saved_start = pd->saved_start;
+    ifd->saved_end = pd->saved_end;
+    ifd->is_paragraph = FALSE;
+    
+    g_idle_add(do_idle_format, ifd);
 }
 
 static void on_para_clicked(GtkButton *btn, gpointer user_data) {
@@ -1115,7 +1145,15 @@ static void on_para_clicked(GtkButton *btn, gpointer user_data) {
         gtk_widget_grab_focus(global_source_view);
     }
     
-    apply_paragraph_format_with_saved(pd->buf, prefix, pd->saved_start, pd->saved_end);
+    IdleFormatData *ifd = g_new(IdleFormatData, 1);
+    ifd->buf = pd->buf;
+    ifd->prefix = prefix ? g_strdup(prefix) : NULL;
+    ifd->suffix = NULL;
+    ifd->saved_start = pd->saved_start;
+    ifd->saved_end = pd->saved_end;
+    ifd->is_paragraph = TRUE;
+    
+    g_idle_add(do_idle_format, ifd);
 }
 
 /* ============================================================
