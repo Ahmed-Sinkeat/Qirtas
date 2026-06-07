@@ -546,6 +546,27 @@ static void draw_cursor_trail(GtkDrawingArea *drawing_area, cairo_t *cr, int wid
     }
 }
 
+static char *resolve_resource_path(const char *rel_path) {
+    static char abs_path[2048];
+    char exe_path[1024] = {0};
+    ssize_t exe_len = readlink("/proc/self/exe", exe_path, sizeof(exe_path) - 1);
+    if (exe_len > 0) {
+        exe_path[exe_len] = '\0';
+        char *last_slash = strrchr(exe_path, '/');
+        if (last_slash) *last_slash = '\0'; /* e.g. /home/.../Qirtas/zig-out/bin */
+        
+        snprintf(abs_path, sizeof(abs_path), "%s/../../%s", exe_path, rel_path);
+        
+        if (access(abs_path, F_OK) != 0) {
+            snprintf(abs_path, sizeof(abs_path), "%s/%s", exe_path, rel_path);
+        }
+        return abs_path;
+    }
+    strncpy(abs_path, rel_path, sizeof(abs_path) - 1);
+    abs_path[sizeof(abs_path) - 1] = '\0';
+    return abs_path;
+}
+
 static void apply_theme(AppGui *gui, const char *theme_name) {
     strncpy(current_theme, theme_name, sizeof(current_theme) - 1);
     current_theme[sizeof(current_theme) - 1] = '\0';
@@ -598,20 +619,22 @@ static void apply_theme(AppGui *gui, const char *theme_name) {
     gchar *file_css        = NULL;   /* theme-specific variables */
     gchar *base_layout_css = NULL;   /* base layout and selectors */
 
-    GFile  *theme_file = g_file_new_for_path(theme_css_path);
+    const char *resolved_theme_path = (theme_css_path[0] == '/') ? theme_css_path : resolve_resource_path(theme_css_path);
+    GFile  *theme_file = g_file_new_for_path(resolved_theme_path);
     GError *file_error = NULL;
 
     if (g_file_query_exists(theme_file, NULL)) {
         gsize len = 0;
         if (!g_file_load_contents(theme_file, NULL, &file_css, &len, NULL, &file_error)) {
             g_printerr("[theme] Could not read theme variables %s: %s\n",
-                       theme_css_path, file_error ? file_error->message : "unknown");
+                       resolved_theme_path, file_error ? file_error->message : "unknown");
             if (file_error) { g_error_free(file_error); file_error = NULL; }
         }
     }
     g_object_unref(theme_file);
 
-    GFile *base_file = g_file_new_for_path("src/ui/themes/base.css");
+    const char *resolved_base_path = resolve_resource_path("src/ui/themes/base.css");
+    GFile *base_file = g_file_new_for_path(resolved_base_path);
     if (g_file_query_exists(base_file, NULL)) {
         g_file_load_contents(base_file, NULL, &base_layout_css, NULL, NULL, NULL);
     }
@@ -795,7 +818,8 @@ static void on_theme_dropdown_changed(GObject *gobject, GParamSpec *pspec, gpoin
 static void init_css(AppGui *gui) {
     /* 1. Load external assets/style.css stylesheet */
     GtkCssProvider *file_provider = gtk_css_provider_new();
-    GFile *file = g_file_new_for_path("assets/style.css");
+    const char *resolved_style_path = resolve_resource_path("assets/style.css");
+    GFile *file = g_file_new_for_path(resolved_style_path);
     if (g_file_query_exists(file, NULL)) {
         gtk_css_provider_load_from_file(file_provider, file);
     }
