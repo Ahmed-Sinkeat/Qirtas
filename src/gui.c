@@ -450,6 +450,8 @@ static void draw_cursor_trail(GtkDrawingArea *drawing_area, cairo_t *cr, int wid
         cursor_color = (GdkRGBA){ 184.0/255.0,  46.0/255.0,  46.0/255.0, 1.0 }; /* #b82e2e */
     else if (strcmp(current_theme, "typewriter-dark") == 0)
         cursor_color = (GdkRGBA){ 255.0/255.0,  77.0/255.0,  77.0/255.0, 1.0 }; /* #ff4d4d */
+    else if (strcmp(current_theme, "qirtas") == 0)
+        cursor_color = (GdkRGBA){  17.0/255.0,  17.0/255.0,  17.0/255.0, 1.0 }; /* #111111 */
     else
         cursor_color = (GdkRGBA){ 255.0/255.0, 121.0/255.0, 198.0/255.0, 1.0 }; /* #ff79c6 */
 
@@ -469,7 +471,7 @@ static void draw_cursor_trail(GtkDrawingArea *drawing_area, cairo_t *cr, int wid
     }
 
     double caret_w = gui->cursor_width  < 2.5 ? 2.5 : gui->cursor_width;
-    double caret_h = gui->cursor_height * 1.35; /* slightly taller ghost */
+    double caret_h = gui->cursor_height; /* exactly the same length as the pointer */
 
     /* Collect all points in screen coordinates, ending at the current cursor position */
     int count = 0;
@@ -550,7 +552,7 @@ static void apply_theme(AppGui *gui, const char *theme_name) {
 
     /* ── Set Libadwaita Global color-scheme ── */
     AdwStyleManager *style_manager = adw_style_manager_get_default();
-    if (strcmp(theme_name, "sepia") == 0 || strcmp(theme_name, "typewriter-light") == 0) {
+    if (strcmp(theme_name, "sepia") == 0 || strcmp(theme_name, "typewriter-light") == 0 || strcmp(theme_name, "qirtas") == 0) {
         adw_style_manager_set_color_scheme(style_manager, ADW_COLOR_SCHEME_FORCE_LIGHT);
     } else {
         adw_style_manager_set_color_scheme(style_manager, ADW_COLOR_SCHEME_FORCE_DARK);
@@ -582,6 +584,10 @@ static void apply_theme(AppGui *gui, const char *theme_name) {
         gutter_color     = "#666666";
         active_num_color = "#ff4d4d";
         theme_css_path   = "src/ui/themes/theme-typewriter-dark.css";
+    } else if (strcmp(theme_name, "qirtas") == 0) {
+        gutter_color     = "#888888";
+        active_num_color = "#111111";
+        theme_css_path   = "src/ui/themes/theme-qirtas-light.css";
     } else if (strcmp(theme_name, "custom") == 0) {
         gutter_color     = "#555555";
         active_num_color = "#2e80f2";
@@ -694,6 +700,10 @@ static void apply_theme(AppGui *gui, const char *theme_name) {
             scheme = gtk_source_style_scheme_manager_get_scheme(sm, "qirtas-typewriter-dark");
             if (!scheme) scheme = gtk_source_style_scheme_manager_get_scheme(sm, "qirtas-dark");
             if (!scheme) scheme = gtk_source_style_scheme_manager_get_scheme(sm, "adwaita-dark");
+        } else if (strcmp(theme_name, "qirtas") == 0) {
+            scheme = gtk_source_style_scheme_manager_get_scheme(sm, "qirtas");
+            if (!scheme) scheme = gtk_source_style_scheme_manager_get_scheme(sm, "classic");
+            if (!scheme) scheme = gtk_source_style_scheme_manager_get_scheme(sm, "solarized-light");
         } else if (strcmp(theme_name, "custom") == 0) {
             scheme = gtk_source_style_scheme_manager_get_scheme(sm, "qirtas-dark");
             if (!scheme) scheme = gtk_source_style_scheme_manager_get_scheme(sm, "adwaita-dark");
@@ -733,7 +743,8 @@ static void on_custom_theme_dialog_response(GObject *source_object, GAsyncResult
             else if (strcmp(current_theme, "things") == 0) idx = 3;
             else if (strcmp(current_theme, "typewriter-light") == 0) idx = 4;
             else if (strcmp(current_theme, "typewriter-dark") == 0) idx = 5;
-            else if (strcmp(current_theme, "custom") == 0) idx = 6;
+            else if (strcmp(current_theme, "qirtas") == 0) idx = 6;
+            else if (strcmp(current_theme, "custom") == 0) idx = 7;
             g_signal_handlers_block_by_func(dropdown, G_CALLBACK(on_theme_dropdown_changed), gui);
             gtk_drop_down_set_selected(dropdown, idx);
             g_signal_handlers_unblock_by_func(dropdown, G_CALLBACK(on_theme_dropdown_changed), gui);
@@ -760,6 +771,8 @@ static void on_theme_dropdown_changed(GObject *gobject, GParamSpec *pspec, gpoin
     } else if (selected == 5) {
         apply_theme(gui, "typewriter-dark");
     } else if (selected == 6) {
+        apply_theme(gui, "qirtas");
+    } else if (selected == 7) {
         GtkFileDialog *dialog = gtk_file_dialog_new();
         gtk_file_dialog_set_title(dialog, "Select Custom Theme CSS");
         
@@ -4927,6 +4940,7 @@ static void activate(GtkApplication *app, gpointer user_data) {
         "Things",
         "Typewriter Light",
         "Typewriter Dark",
+        "Qirtas Ink",
         "Add Custom Theme...",
         NULL
     };
@@ -4938,7 +4952,8 @@ static void activate(GtkApplication *app, gpointer user_data) {
     else if (strcmp(current_theme, "things") == 0) theme_idx = 3;
     else if (strcmp(current_theme, "typewriter-light") == 0) theme_idx = 4;
     else if (strcmp(current_theme, "typewriter-dark") == 0) theme_idx = 5;
-    else if (strcmp(current_theme, "custom") == 0) theme_idx = 6;
+    else if (strcmp(current_theme, "qirtas") == 0) theme_idx = 6;
+    else if (strcmp(current_theme, "custom") == 0) theme_idx = 7;
     gtk_drop_down_set_selected(GTK_DROP_DOWN(theme_dropdown), theme_idx);
     
     g_signal_connect(theme_dropdown, "notify::selected", G_CALLBACK(on_theme_dropdown_changed), gui);

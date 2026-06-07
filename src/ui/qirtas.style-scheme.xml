@@ -1,0 +1,84 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<style-scheme id="qirtas" _name="Qirtas Ink" version="1.0">
+  <author>Qirtas Team</author>
+  <description>Qirtas Ink style scheme (Paper &amp; Ink contrast)</description>
+
+  <!-- ── Palette ── -->
+  <color name="ink"        value="#111111"/>
+  <color name="ink-muted"  value="#555555"/>
+  <color name="ink-faint"  value="#999999"/>
+  <color name="bg"         value="#fcfcfc"/>
+  <color name="bg-line"    value="#f5f5f5"/>
+  <color name="selection"  value="#eaeaea"/>
+
+  <!-- ── Editor base ── -->
+  <style name="text"               foreground="ink"     background="bg"/>
+  <style name="selection"          background="selection"/>
+  <style name="current-line"       background="bg-line"/>
+  <style name="line-numbers"       foreground="ink-faint" background="bg"/>
+  <style name="current-line-number" foreground="ink"      bold="true"/>
+  <style name="search-match"       background="ink"      foreground="bg"/>
+  <style name="bracket-match"      foreground="ink"     bold="true"/>
+
+  <!-- ── def: base styles ── -->
+  <style name="def:heading"              foreground="ink"   bold="true"/>
+  <style name="def:emphasis"             italic="true"/>
+  <style name="def:strong-emphasis"      foreground="ink"  bold="true"/>
+  <style name="def:inline-code"          foreground="ink-muted"/>
+  <style name="def:preformatted-section" foreground="ink-muted"/>
+  <style name="def:comment"             foreground="ink-faint" italic="true"/>
+  <style name="def:string"              foreground="ink-muted"/>
+  <style name="def:net-address"         foreground="ink"   underline="true"/>
+  <style name="def:link-destination"    foreground="ink-muted"   underline="true"/>
+  <style name="def:link-text"           foreground="ink"/>
+  <style name="def:list-marker"         foreground="ink-muted"/>
+  <style name="def:shebang"             foreground="ink-faint"   italic="true"/>
+  <style name="def:special-char"        foreground="ink"/>
+
+  <!-- ── Headings by level ── -->
+  <style name="qirtas_markdown:h1"         foreground="ink"    bold="true" weight="bold" scale="1.5"/>
+  <style name="qirtas_markdown:h2"         foreground="ink"    bold="true" weight="bold" scale="1.3"/>
+  <style name="qirtas_markdown:h3"         foreground="ink"    bold="true" weight="bold" scale="1.15"/>
+  <style name="qirtas_markdown:h4"         foreground="ink"    bold="true" weight="bold" scale="1.0"/>
+  <style name="qirtas_markdown:h5"         foreground="ink"    bold="true" weight="bold" scale="1.0"/>
+  <style name="qirtas_markdown:h6"         foreground="ink"    bold="true" weight="bold" scale="1.0"/>
+
+  <!-- ── Inline formatting ── -->
+  <style name="qirtas_markdown:bold"        foreground="ink"  bold="true" weight="bold"/>
+  <style name="qirtas_markdown:italic"      foreground="ink"   italic="true"/>
+  <style name="qirtas_markdown:bold-italic" foreground="ink"   bold="true" weight="bold" italic="true"/>
+  <style name="qirtas_markdown:strikethrough" strikethrough="true" foreground="ink-faint"/>
+  <style name="qirtas_markdown:inline-code" foreground="ink-muted"   background="selection"/>
+
+  <!-- ── Block elements ── -->
+  <style name="qirtas_markdown:blockquote"  foreground="ink-muted"   italic="true"/>
+  <style name="qirtas_markdown:list-marker" foreground="ink-muted"/>
+
+  <!-- ── Links ── -->
+  <style name="qirtas_markdown:link-text"   foreground="ink"/>
+  <style name="qirtas_markdown:url"         foreground="ink-muted"   underline="true" italic="true"/>
+  <style name="qirtas_markdown:wiki-link"   foreground="ink" underline="true"/>
+
+  <!-- ── Special ── -->
+  <style name="qirtas_markdown:highlight"   background="selection" foreground="ink"/>
+  <style name="qirtas_markdown:math"        foreground="ink-muted"/>
+  <style name="qirtas_markdown:comment"     foreground="ink-faint" italic="true"/>
+
+  <!-- ── Compatibility aliases ── -->
+  <style name="markdown:header"           foreground="ink"   bold="true"/>
+  <style name="markdown:h1"              foreground="ink"    bold="true"  scale="1.5"/>
+  <style name="markdown:h2"              foreground="ink"    bold="true"  scale="1.3"/>
+  <style name="markdown:h3"              foreground="ink"    bold="true"/>
+  <style name="markdown:h4"              foreground="ink"    bold="true"/>
+  <style name="markdown:h5"              foreground="ink"    bold="true"/>
+  <style name="markdown:h6"              foreground="ink"    bold="true"/>
+  <style name="markdown:bold"            foreground="ink"  bold="true"/>
+  <style name="markdown:italic"          italic="true"/>
+  <style name="markdown:strikethrough"   strikethrough="true" foreground="ink-faint"/>
+  <style name="markdown:inline-code"     foreground="ink-muted"/>
+  <style name="markdown:code"            foreground="ink-muted"   background="selection"/>
+  <style name="markdown:link-text"       foreground="ink"/>
+  <style name="markdown:url"             foreground="ink-muted"   underline="true"/>
+  <style name="markdown:blockquote-line" foreground="ink-muted"   italic="true"/>
+  <style name="markdown:list-marker"     foreground="ink-muted"/>
+</style-scheme>
