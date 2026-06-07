@@ -12,6 +12,8 @@ const c = @cImport({
 });
 
 extern fn gui_update_sync_status(connected: c_int, status_text: [*:0]const u8) void;
+extern fn gui_update_dropbox_status(connected: c_int, status_text: [*:0]const u8) void;
+extern fn gui_update_github_status(connected: c_int, status_text: [*:0]const u8) void;
 extern fn gui_refresh_explorer() void;
 extern fn gui_index_file(filename: [*:0]const u8) void;
 extern fn gui_trigger_autosave() void;
@@ -19,7 +21,7 @@ extern fn gui_trigger_autosave() void;
 // Active IO reference from main.zig
 const main = @import("main.zig");
 
-const DB_PATH = "/home/.config/qirtas/vault.db";
+const DB_PATH = "/home/.config/lawh/vault.db";
 
 const TokenResponse = struct {
     access_token: []const u8,
@@ -105,6 +107,18 @@ pub export fn zig_save_sync_credentials(client_id_ptr: [*:0]const u8, client_sec
     defer _ = c.sqlite3_close(db);
     _ = c.sqlite3_busy_timeout(db, 5000);
 
+    const create_table_sql = 
+        \\CREATE TABLE IF NOT EXISTS sync_tokens (
+        \\    id INTEGER PRIMARY KEY CHECK (id = 1),
+        \\    client_id TEXT NOT NULL,
+        \\    client_secret TEXT NOT NULL,
+        \\    access_token TEXT,
+        \\    refresh_token TEXT,
+        \\    expiry_time INTEGER DEFAULT 0
+        \\);
+    ;
+    _ = c.sqlite3_exec(db, create_table_sql.ptr, null, null, null);
+
     const sql = "INSERT OR REPLACE INTO sync_tokens (id, client_id, client_secret) VALUES (1, ?, ?);";
     var stmt: ?*c.sqlite3_stmt = null;
     if (c.sqlite3_prepare_v2(db, sql.ptr, -1, &stmt, null) == c.SQLITE_OK) {
@@ -119,7 +133,6 @@ pub export fn zig_save_sync_credentials(client_id_ptr: [*:0]const u8, client_sec
 pub export fn zig_sync_connect() callconv(.c) void {
     const allocator = std.heap.page_allocator;
     var creds = get_credentials(allocator) catch blk: {
-        // Create defaults if not exists
         var db: ?*c.sqlite3 = null;
         if (c.sqlite3_open(DB_PATH, &db) == c.SQLITE_OK) {
             _ = c.sqlite3_busy_timeout(db, 5000);
@@ -144,12 +157,11 @@ pub export fn zig_sync_connect() callconv(.c) void {
     defer free_credentials(&creds, allocator);
 
     const url = std.fmt.allocPrint(allocator, 
-        "https://accounts.google.com/o/oauth2/v2/auth?client_id={s}&redirect_uri=http://localhost&response_type=code&scope=https://www.googleapis.com/auth/drive.appfolder&access_type=offline&prompt=consent",
-        .{creds.client_id}
-    ) catch return;
+       "https://accounts.google.com/o/oauth2/v2/auth?client_id={s}&redirect_uri=http://127.0.0.1:12345&response_type=code&scope=https://www.googleapis.com/auth/drive.appdata&access_type=offline&prompt=consent",
+       .{creds.client_id}
+     ) catch return;
     defer allocator.free(url);
 
-    // Launch default web browser using std.process.spawn
     var child = std.process.spawn(main.global_io, .{
         .argv = &[_][]const u8{ "xdg-open", url },
     }) catch blk: {
@@ -183,7 +195,6 @@ pub export fn zig_sync_submit_code(code_ptr: [*:0]const u8) callconv(.c) void {
         return;
     };
 
-    // Exchange token on background thread
     _ = std.Thread.spawn(.{}, exchange_token_worker, .{
         allocator,
         code_dup,
@@ -225,8 +236,8 @@ fn exchange_token_impl(allocator: std.mem.Allocator, code: []const u8, client_id
     defer req.deinit();
 
     const body = try std.fmt.allocPrint(allocator, 
-        "code={s}&client_id={s}&client_secret={s}&redirect_uri=http://localhost&grant_type=authorization_code",
-        .{code, client_id, client_secret}
+        "code={s}&client_id={s}&client_secret={s}&redirect_uri=http://127.0.0.1:12345&grant_type=authorization_code",
+       .{code, client_id, client_secret}
     );
     defer allocator.free(body);
 
@@ -240,15 +251,25 @@ fn exchange_token_impl(allocator: std.mem.Allocator, code: []const u8, client_id
     var transfer_buf: [4096]u8 = undefined;
     const rdr = response.reader(&transfer_buf);
 
-    var read_buf: [4096]u8 = undefined;
-    const read_bytes = try rdr.readSliceShort(&read_buf);
+    // آلية القراءة الآمنة المتوافقة كلياً عبر تجميع دفق البيانات في ArrayList
+    var token_json_list: std.ArrayList(u8) = .empty;
+    defer token_json_list.deinit(allocator);
 
-    const parsed = try std.json.parseFromSlice(TokenResponse, allocator, read_buf[0..read_bytes], .{ .ignore_unknown_fields = true });
+    while (true) {
+        var chunk_buf: [4096]u8 = undefined;
+        const read_bytes = rdr.readSliceShort(&chunk_buf) catch |err| {
+            if (err == error.EndOfStream) break;
+            return err;
+        };
+        if (read_bytes == 0) break;
+        try token_json_list.appendSlice(allocator, chunk_buf[0..read_bytes]);
+    }
+
+    const parsed = try std.json.parseFromSlice(TokenResponse, allocator, token_json_list.items, .{ .ignore_unknown_fields = true });
     defer parsed.deinit();
 
     const expiry = @as(i64, @intCast(c.time(null))) + parsed.value.expires_in;
 
-    // Save tokens inside vault.db
     var db: ?*c.sqlite3 = null;
     if (c.sqlite3_open(DB_PATH, &db) != c.SQLITE_OK) {
         if (db != null) _ = c.sqlite3_close(db);
@@ -273,10 +294,8 @@ fn exchange_token_impl(allocator: std.mem.Allocator, code: []const u8, client_id
     }
 }
 
-// Function to refresh token if expired
 fn refresh_token_if_needed(allocator: std.mem.Allocator, creds: *SyncCredentials) ![]const u8 {
     const current_time = @as(i64, @intCast(c.time(null)));
-    // Refresh 5 minutes before actual expiry
     if (creds.access_token != null and creds.expiry_time > current_time + 300) {
         return try allocator.dupe(u8, creds.access_token.?);
     }
@@ -334,7 +353,6 @@ fn refresh_token_if_needed(allocator: std.mem.Allocator, creds: *SyncCredentials
 
     const new_expiry = @as(i64, @intCast(c.time(null))) + parsed.value.expires_in;
 
-    // Update tokens inside vault.db
     var db: ?*c.sqlite3 = null;
     if (c.sqlite3_open(DB_PATH, &db) != c.SQLITE_OK) {
         if (db != null) _ = c.sqlite3_close(db);
@@ -463,11 +481,11 @@ fn write_file_mmap(filename: []const u8, content: []const u8) !void {
 }
 
 fn is_transient_error(status: std.http.Status) bool {
-    return status == .too_many_requests or // 429
-           status == .internal_server_error or // 500
-           status == .bad_gateway or // 502
-           status == .service_unavailable or // 503
-           status == .gateway_timeout; // 504
+    return status == .too_many_requests or 
+           status == .internal_server_error or 
+           status == .bad_gateway or 
+           status == .service_unavailable or 
+           status == .gateway_timeout;
 }
 
 fn download_file_from_drive(allocator: std.mem.Allocator, access_token: []const u8, file_id: []const u8) ![]const u8 {
@@ -810,11 +828,21 @@ fn update_local_metadata(allocator: std.mem.Allocator, filename: []const u8, dri
 pub export fn zig_sync_now() callconv(.c) void {
     gui_trigger_autosave();
     const allocator = std.heap.page_allocator;
-    gui_update_sync_status(2, "Syncing...");
 
-    _ = std.Thread.spawn(.{}, sync_now_worker, .{allocator}) catch {
-        gui_update_sync_status(1, "Connected");
-    };
+    if (zig_sync_check_status() == 1) {
+        gui_update_sync_status(2, "Syncing...");
+        _ = std.Thread.spawn(.{}, sync_now_worker, .{allocator}) catch {
+            gui_update_sync_status(1, "Connected");
+        };
+    }
+
+    if (zig_dropbox_check_status() == 1) {
+        zig_dropbox_now();
+    }
+
+    if (zig_github_check_status() == 1) {
+        zig_github_now();
+    }
 }
 
 fn sync_now_worker(allocator: std.mem.Allocator) void {
@@ -849,7 +877,6 @@ fn sync_now_impl(allocator: std.mem.Allocator) anyerror!void {
     const access_token = try refresh_token_if_needed(allocator, &creds);
     defer allocator.free(access_token);
 
-    // 1. Cloud Metadata Retrieval
     var body_list: std.ArrayList(u8) = .empty;
     defer body_list.deinit(allocator);
 
@@ -970,7 +997,6 @@ fn sync_now_impl(allocator: std.mem.Allocator) anyerror!void {
         }
     }
 
-    // 2. Three-Way Delta Comparison & Conflict Resolution
     var local_it = local_map.iterator();
     while (local_it.next()) |entry| {
         const filename = entry.key_ptr.*;
@@ -978,7 +1004,6 @@ fn sync_now_impl(allocator: std.mem.Allocator) anyerror!void {
         const local_mtime = local_st.st_mtim.tv_sec;
 
         if (cloud_map.get(filename)) |cloud_meta| {
-            // Case C: Both Exist!
             var db_last_modified: i64 = 0;
             var saved_drive_id: ?[]const u8 = null;
             
@@ -1017,7 +1042,6 @@ fn sync_now_impl(allocator: std.mem.Allocator) anyerror!void {
             const cloud_changed = (cloud_time != db_last_modified);
 
             if (local_changed and cloud_changed) {
-                // Conflict or Ambiguous Match
                 std.debug.print("Conflict: {s}\n", .{filename});
                 const conflict_name = try make_conflict_filename(allocator, filename);
                 defer allocator.free(conflict_name);
@@ -1037,7 +1061,6 @@ fn sync_now_impl(allocator: std.mem.Allocator) anyerror!void {
                 try update_local_metadata(allocator, filename, cloud_meta.id, cloud_time);
                 main.alert_file_updated();
             } else if (local_changed) {
-                // Local is newer
                 std.debug.print("Local changed: patching {s}\n", .{filename});
                 const local_content = try read_file_content(allocator, filename);
                 defer allocator.free(local_content);
@@ -1045,7 +1068,6 @@ fn sync_now_impl(allocator: std.mem.Allocator) anyerror!void {
                 
                 try update_local_metadata(allocator, filename, cloud_meta.id, local_mtime);
             } else if (cloud_changed) {
-                // Cloud is newer
                 std.debug.print("Cloud changed: downloading {s}\n", .{filename});
                 const cloud_content = try download_file_from_drive(allocator, access_token, cloud_meta.id);
                 defer allocator.free(cloud_content);
@@ -1059,7 +1081,6 @@ fn sync_now_impl(allocator: std.mem.Allocator) anyerror!void {
                 }
             }
         } else {
-            // Case A: Local Only
             std.debug.print("Local only: uploading {s}\n", .{filename});
             const local_content = try read_file_content(allocator, filename);
             defer allocator.free(local_content);
@@ -1071,7 +1092,6 @@ fn sync_now_impl(allocator: std.mem.Allocator) anyerror!void {
         }
     }
 
-    // Case B: Cloud Only
     var cloud_it = cloud_map.iterator();
     while (cloud_it.next()) |entry| {
         const filename = entry.key_ptr.*;
@@ -1119,4 +1139,518 @@ pub export fn zig_sync_disconnect() callconv(.c) void {
     _ = c.sqlite3_exec(db, "UPDATE file_metadata SET drive_file_id = NULL;", null, null, null);
 
     gui_update_sync_status(0, "Disconnected");
+}
+
+// --- DROPBOX FFI & SYNC ---
+
+pub export fn zig_save_dropbox_credentials(client_id_ptr: [*:0]const u8, client_secret_ptr: [*:0]const u8) callconv(.c) void {
+    var db: ?*c.sqlite3 = null;
+    if (c.sqlite3_open(DB_PATH, &db) != c.SQLITE_OK) {
+        if (db != null) _ = c.sqlite3_close(db);
+        return;
+    }
+    defer _ = c.sqlite3_close(db);
+    _ = c.sqlite3_busy_timeout(db, 5000);
+
+    const sql = "INSERT OR REPLACE INTO dropbox_sync_tokens (id, client_id, client_secret) VALUES (1, ?, ?);";
+    var stmt: ?*c.sqlite3_stmt = null;
+    if (c.sqlite3_prepare_v2(db, sql.ptr, -1, &stmt, null) == c.SQLITE_OK) {
+        _ = c.sqlite3_bind_text(stmt, 1, client_id_ptr, -1, null);
+        _ = c.sqlite3_bind_text(stmt, 2, client_secret_ptr, -1, null);
+        _ = c.sqlite3_step(stmt);
+        _ = c.sqlite3_finalize(stmt);
+    }
+}
+
+const DropboxCredentials = struct {
+    client_id: []const u8,
+    client_secret: []const u8,
+    access_token: ?[]const u8 = null,
+    refresh_token: ?[]const u8 = null,
+    expiry_time: i64 = 0,
+};
+
+fn get_dropbox_credentials(allocator: std.mem.Allocator) !DropboxCredentials {
+    var db: ?*c.sqlite3 = null;
+    if (c.sqlite3_open(DB_PATH, &db) != c.SQLITE_OK) {
+        if (db != null) _ = c.sqlite3_close(db);
+        return error.DbOpenFailed;
+    }
+    defer _ = c.sqlite3_close(db);
+    _ = c.sqlite3_busy_timeout(db, 5000);
+
+    const sql = "SELECT client_id, client_secret, access_token, refresh_token, expiry_time FROM dropbox_sync_tokens WHERE id = 1;";
+    var stmt: ?*c.sqlite3_stmt = null;
+    if (c.sqlite3_prepare_v2(db, sql.ptr, -1, &stmt, null) != c.SQLITE_OK) return error.DbPrepareFailed;
+    defer _ = c.sqlite3_finalize(stmt);
+
+    if (c.sqlite3_step(stmt) == c.SQLITE_ROW) {
+        const c_id = c.sqlite3_column_text(stmt, 0);
+        const c_sec = c.sqlite3_column_text(stmt, 1);
+        const acc_tok = c.sqlite3_column_text(stmt, 2);
+        const ref_tok = c.sqlite3_column_text(stmt, 3);
+        const exp_time = c.sqlite3_column_int64(stmt, 4);
+
+        if (c_id == null or c_sec == null) return error.CredentialsNotFound;
+
+        return DropboxCredentials{
+            .client_id = try allocator.dupe(u8, std.mem.span(c_id)),
+            .client_secret = try allocator.dupe(u8, std.mem.span(c_sec)),
+            .access_token = if (acc_tok != null) try allocator.dupe(u8, std.mem.span(acc_tok)) else null,
+            .refresh_token = if (ref_tok != null) try allocator.dupe(u8, std.mem.span(ref_tok)) else null,
+            .expiry_time = exp_time,
+        };
+    }
+
+    return error.CredentialsNotFound;
+}
+
+fn free_dropbox_credentials(creds: *DropboxCredentials, allocator: std.mem.Allocator) void {
+    allocator.free(creds.client_id);
+    allocator.free(creds.client_secret);
+    if (creds.access_token) |t| allocator.free(t);
+    if (creds.refresh_token) |t| allocator.free(t);
+}
+
+pub export fn zig_dropbox_connect() callconv(.c) void {
+    const allocator = std.heap.page_allocator;
+    var creds = get_dropbox_credentials(allocator) catch blk: {
+        var db: ?*c.sqlite3 = null;
+        if (c.sqlite3_open(DB_PATH, &db) == c.SQLITE_OK) {
+            _ = c.sqlite3_busy_timeout(db, 5000);
+            _ = c.sqlite3_exec(db, "INSERT OR IGNORE INTO dropbox_sync_tokens (id, client_id, client_secret) VALUES (1, 'dropbox-app-key', 'dropbox-app-secret');", null, null, null);
+            _ = c.sqlite3_close(db);
+        } else {
+            if (db != null) _ = c.sqlite3_close(db);
+        }
+        break :blk get_dropbox_credentials(allocator) catch return;
+    };
+    defer free_dropbox_credentials(&creds, allocator);
+
+    const url = std.fmt.allocPrint(allocator, 
+       "https://www.dropbox.com/oauth2/authorize?client_id={s}&token_access_type=offline&response_type=code&redirect_uri=http://localhost:5173",
+       .{creds.client_id}
+     ) catch return;
+    defer allocator.free(url);
+
+    var child = std.process.spawn(main.global_io, .{
+        .argv = &[_][]const u8{ "xdg-open", url },
+    }) catch blk: {
+        break :blk std.process.spawn(main.global_io, .{
+            .argv = &[_][]const u8{ "gio", "open", url },
+        }) catch return;
+    };
+    _ = child.wait(main.global_io) catch {};
+
+    gui_update_dropbox_status(2, "Enter code below...");
+}
+
+pub export fn zig_dropbox_submit_code(code_ptr: [*:0]const u8) callconv(.c) void {
+    const code = std.mem.span(code_ptr);
+    const allocator = std.heap.page_allocator;
+
+    var creds = get_dropbox_credentials(allocator) catch return;
+    defer free_dropbox_credentials(&creds, allocator);
+
+    gui_update_dropbox_status(2, "Exchanging code...");
+
+    const code_dup = allocator.dupe(u8, code) catch return;
+    const client_id_dup = allocator.dupe(u8, creds.client_id) catch {
+        allocator.free(code_dup);
+        return;
+    };
+    const client_secret_dup = allocator.dupe(u8, creds.client_secret) catch {
+        allocator.free(code_dup);
+        allocator.free(client_id_dup);
+        return;
+    };
+
+    _ = std.Thread.spawn(.{}, exchange_dropbox_token_worker, .{
+        allocator,
+        code_dup,
+        client_id_dup,
+        client_secret_dup,
+    }) catch {
+        allocator.free(code_dup);
+        allocator.free(client_id_dup);
+        allocator.free(client_secret_dup);
+        gui_update_dropbox_status(0, "Disconnected");
+    };
+}
+
+fn exchange_dropbox_token_worker(allocator: std.mem.Allocator, code: []const u8, client_id: []const u8, client_secret: []const u8) void {
+    defer allocator.free(code);
+    defer allocator.free(client_id);
+    defer allocator.free(client_secret);
+
+    exchange_dropbox_token_impl(allocator, code, client_id, client_secret) catch |err| {
+        std.debug.print("Dropbox Token exchange failed: {}\n", .{err});
+        gui_update_dropbox_status(0, "Authentication Failed");
+        return;
+    };
+
+    gui_update_dropbox_status(1, "Connected");
+}
+
+fn exchange_dropbox_token_impl(allocator: std.mem.Allocator, code: []const u8, client_id: []const u8, client_secret: []const u8) !void {
+    var client = std.http.Client{ .allocator = allocator, .io = main.global_io };
+    defer client.deinit();
+
+    const uri = try std.Uri.parse("https://api.dropboxapi.com/oauth2/token");
+    
+    var req = try client.request(.POST, uri, .{
+        .extra_headers = &[_]std.http.Header{
+            .{ .name = "Content-Type", .value = "application/x-www-form-urlencoded" },
+        },
+    });
+    defer req.deinit();
+
+    const body = try std.fmt.allocPrint(allocator, 
+        "code={s}&client_id={s}&client_secret={s}&redirect_uri=http://localhost:5173&grant_type=authorization_code",
+       .{code, client_id, client_secret}
+    );
+    defer allocator.free(body);
+
+    try req.sendBodyComplete(body);
+
+    var redirect_buf: [1024]u8 = undefined;
+    var response = try req.receiveHead(&redirect_buf);
+    
+    if (response.head.status != .ok) return error.TokenExchangeFailed;
+
+    var transfer_buf: [4096]u8 = undefined;
+    const rdr = response.reader(&transfer_buf);
+
+    var token_json_list: std.ArrayList(u8) = .empty;
+    defer token_json_list.deinit(allocator);
+
+    while (true) {
+        var chunk_buf: [4096]u8 = undefined;
+        const read_bytes = rdr.readSliceShort(&chunk_buf) catch |err| {
+            if (err == error.EndOfStream) break;
+            return err;
+        };
+        if (read_bytes == 0) break;
+        try token_json_list.appendSlice(allocator, chunk_buf[0..read_bytes]);
+    }
+
+    const parsed = try std.json.parseFromSlice(TokenResponse, allocator, token_json_list.items, .{ .ignore_unknown_fields = true });
+    defer parsed.deinit();
+
+    const expiry = @as(i64, @intCast(c.time(null))) + parsed.value.expires_in;
+
+    var db: ?*c.sqlite3 = null;
+    if (c.sqlite3_open(DB_PATH, &db) != c.SQLITE_OK) {
+        if (db != null) _ = c.sqlite3_close(db);
+        return error.DbOpenFailed;
+    }
+    defer _ = c.sqlite3_close(db);
+    _ = c.sqlite3_busy_timeout(db, 5000);
+
+    const sql = "UPDATE dropbox_sync_tokens SET access_token = ?, refresh_token = ?, expiry_time = ? WHERE id = 1;";
+    var stmt: ?*c.sqlite3_stmt = null;
+    if (c.sqlite3_prepare_v2(db, sql.ptr, -1, &stmt, null) == c.SQLITE_OK) {
+        const access_token_z = try allocator.dupeZ(u8, parsed.value.access_token);
+        defer allocator.free(access_token_z);
+        const refresh_token_z = try allocator.dupeZ(u8, parsed.value.refresh_token orelse "");
+        defer allocator.free(refresh_token_z);
+
+        _ = c.sqlite3_bind_text(stmt, 1, access_token_z.ptr, -1, null);
+        _ = c.sqlite3_bind_text(stmt, 2, refresh_token_z.ptr, -1, null);
+        _ = c.sqlite3_bind_int64(stmt, 3, expiry);
+        _ = c.sqlite3_step(stmt);
+        _ = c.sqlite3_finalize(stmt);
+    }
+}
+
+fn refresh_dropbox_token_if_needed(allocator: std.mem.Allocator, creds: *DropboxCredentials) ![]const u8 {
+    const current_time = @as(i64, @intCast(c.time(null)));
+    if (creds.access_token != null and creds.expiry_time > current_time + 300) {
+        return try allocator.dupe(u8, creds.access_token.?);
+    }
+
+    if (creds.refresh_token == null or creds.refresh_token.?.len == 0) return error.NoRefreshToken;
+
+    var client = std.http.Client{ .allocator = allocator, .io = main.global_io };
+    defer client.deinit();
+
+    const uri = try std.Uri.parse("https://api.dropboxapi.com/oauth2/token");
+    var req = try client.request(.POST, uri, .{
+        .extra_headers = &[_]std.http.Header{
+            .{ .name = "Content-Type", .value = "application/x-www-form-urlencoded" },
+        },
+    });
+    defer req.deinit();
+
+    const body = try std.fmt.allocPrint(allocator, 
+        "refresh_token={s}&client_id={s}&client_secret={s}&grant_type=refresh_token",
+        .{creds.refresh_token.?, creds.client_id, creds.client_secret}
+    );
+    defer allocator.free(body);
+
+    try req.sendBodyComplete(body);
+
+    var redirect_buf: [1024]u8 = undefined;
+    var response = try req.receiveHead(&redirect_buf);
+
+    if (response.head.status != .ok) return error.TokenRefreshFailed;
+
+    var transfer_buf: [4096]u8 = undefined;
+    const rdr = response.reader(&transfer_buf);
+
+    var refresh_json_list: std.ArrayList(u8) = .empty;
+    defer refresh_json_list.deinit(allocator);
+
+    while (true) {
+        var chunk_buf: [4096]u8 = undefined;
+        const read_bytes = rdr.readSliceShort(&chunk_buf) catch |err| {
+            if (err == error.EndOfStream) break;
+            return err;
+        };
+        if (read_bytes == 0) break;
+        try refresh_json_list.appendSlice(allocator, chunk_buf[0..read_bytes]);
+    }
+
+    const parsed = try std.json.parseFromSlice(RefreshResponse, allocator, refresh_json_list.items, .{ .ignore_unknown_fields = true });
+    defer parsed.deinit();
+
+    const expiry = @as(i64, @intCast(c.time(null))) + parsed.value.expires_in;
+
+    var db: ?*c.sqlite3 = null;
+    if (c.sqlite3_open(DB_PATH, &db) != c.SQLITE_OK) {
+        if (db != null) _ = c.sqlite3_close(db);
+        return error.DbOpenFailed;
+    }
+    defer _ = c.sqlite3_close(db);
+    _ = c.sqlite3_busy_timeout(db, 5000);
+
+    const sql = "UPDATE dropbox_sync_tokens SET access_token = ?, expiry_time = ? WHERE id = 1;";
+    var stmt: ?*c.sqlite3_stmt = null;
+    if (c.sqlite3_prepare_v2(db, sql.ptr, -1, &stmt, null) == c.SQLITE_OK) {
+        const access_token_z = try allocator.dupeZ(u8, parsed.value.access_token);
+        defer allocator.free(access_token_z);
+
+        _ = c.sqlite3_bind_text(stmt, 1, access_token_z.ptr, -1, null);
+        _ = c.sqlite3_bind_int64(stmt, 2, expiry);
+        _ = c.sqlite3_step(stmt);
+        _ = c.sqlite3_finalize(stmt);
+    }
+
+    return try allocator.dupe(u8, parsed.value.access_token);
+}
+
+pub export fn zig_dropbox_check_status() callconv(.c) c_int {
+    var db: ?*c.sqlite3 = null;
+    if (c.sqlite3_open(DB_PATH, &db) != c.SQLITE_OK) {
+        if (db != null) _ = c.sqlite3_close(db);
+        return 0;
+    }
+    defer _ = c.sqlite3_close(db);
+    _ = c.sqlite3_busy_timeout(db, 5000);
+
+    const sql = "SELECT access_token FROM dropbox_sync_tokens WHERE id = 1;";
+    var stmt: ?*c.sqlite3_stmt = null;
+    if (c.sqlite3_prepare_v2(db, sql.ptr, -1, &stmt, null) == c.SQLITE_OK) {
+        defer _ = c.sqlite3_finalize(stmt);
+        if (c.sqlite3_step(stmt) == c.SQLITE_ROW) {
+            const acc_tok = c.sqlite3_column_text(stmt, 0);
+            if (acc_tok != null and std.mem.span(acc_tok).len > 0) return 1;
+        }
+    }
+    return 0;
+}
+
+pub export fn zig_dropbox_disconnect() callconv(.c) void {
+    var db: ?*c.sqlite3 = null;
+    if (c.sqlite3_open(DB_PATH, &db) == c.SQLITE_OK) {
+        defer _ = c.sqlite3_close(db);
+        _ = c.sqlite3_busy_timeout(db, 5000);
+        _ = c.sqlite3_exec(db, "UPDATE dropbox_sync_tokens SET access_token = NULL, refresh_token = NULL, expiry_time = 0 WHERE id = 1;", null, null, null);
+    }
+    gui_update_dropbox_status(0, "Disconnected");
+}
+
+pub export fn zig_dropbox_now() callconv(.c) void {
+    gui_trigger_autosave();
+    gui_update_dropbox_status(2, "Syncing...");
+    _ = std.Thread.spawn(.{}, dropbox_sync_worker, .{}) catch {
+        gui_update_dropbox_status(1, "Connected");
+    };
+}
+
+fn dropbox_sync_worker() void {
+    const allocator = std.heap.page_allocator;
+    var creds = get_dropbox_credentials(allocator) catch {
+        gui_update_dropbox_status(1, "Auth Error");
+        return;
+    };
+    defer free_dropbox_credentials(&creds, allocator);
+
+    const token = refresh_dropbox_token_if_needed(allocator, &creds) catch {
+        gui_update_dropbox_status(1, "Refresh Error");
+        return;
+    };
+    defer allocator.free(token);
+
+    var child = std.process.spawn(main.global_io, .{
+        .argv = &[_][]const u8{ "/home/.config/lawh/dropbox_sync.sh", token, "." },
+    }) catch {
+        gui_update_dropbox_status(1, "Sync Failed");
+        return;
+    };
+
+    const term = child.wait(main.global_io) catch {
+        gui_update_dropbox_status(1, "Sync Failed");
+        return;
+    };
+
+    switch (term) {
+        .exited => |code| {
+            if (code == 0) {
+                gui_update_dropbox_status(1, "Synced ✓");
+            } else {
+                gui_update_dropbox_status(1, "Sync Failed");
+            }
+        },
+        else => {
+            gui_update_dropbox_status(1, "Sync Failed");
+        },
+    }
+}
+
+// --- GITHUB FFI & SYNC ---
+
+fn get_github_credentials(allocator: std.mem.Allocator) !struct { token: []const u8, repo: []const u8 } {
+    var db: ?*c.sqlite3 = null;
+    if (c.sqlite3_open(DB_PATH, &db) != c.SQLITE_OK) {
+        if (db != null) _ = c.sqlite3_close(db);
+        return error.DbOpenFailed;
+    }
+    defer _ = c.sqlite3_close(db);
+    _ = c.sqlite3_busy_timeout(db, 5000);
+
+    const sql = "SELECT personal_token, repo_name FROM github_sync_tokens WHERE id = 1;";
+    var stmt: ?*c.sqlite3_stmt = null;
+    if (c.sqlite3_prepare_v2(db, sql.ptr, -1, &stmt, null) != c.SQLITE_OK) return error.DbPrepareFailed;
+    defer _ = c.sqlite3_finalize(stmt);
+
+    if (c.sqlite3_step(stmt) == c.SQLITE_ROW) {
+        const tok = c.sqlite3_column_text(stmt, 0);
+        const rep = c.sqlite3_column_text(stmt, 1);
+
+        if (tok == null or rep == null) return error.CredentialsNotFound;
+
+        return .{
+            .token = try allocator.dupe(u8, std.mem.span(tok)),
+            .repo = try allocator.dupe(u8, std.mem.span(rep)),
+        };
+    }
+
+    return error.CredentialsNotFound;
+}
+
+pub export fn zig_save_github_credentials(token_ptr: [*:0]const u8, repo_ptr: [*:0]const u8) callconv(.c) void {
+    var db: ?*c.sqlite3 = null;
+    if (c.sqlite3_open(DB_PATH, &db) != c.SQLITE_OK) {
+        if (db != null) _ = c.sqlite3_close(db);
+        return;
+    }
+    defer _ = c.sqlite3_close(db);
+    _ = c.sqlite3_busy_timeout(db, 5000);
+
+    const sql = "INSERT OR REPLACE INTO github_sync_tokens (id, personal_token, repo_name) VALUES (1, ?, ?);";
+    var stmt: ?*c.sqlite3_stmt = null;
+    if (c.sqlite3_prepare_v2(db, sql.ptr, -1, &stmt, null) == c.SQLITE_OK) {
+        _ = c.sqlite3_bind_text(stmt, 1, token_ptr, -1, null);
+        _ = c.sqlite3_bind_text(stmt, 2, repo_ptr, -1, null);
+        _ = c.sqlite3_step(stmt);
+        _ = c.sqlite3_finalize(stmt);
+    }
+}
+
+pub export fn zig_github_connect() callconv(.c) void {
+    var db: ?*c.sqlite3 = null;
+    if (c.sqlite3_open(DB_PATH, &db) == c.SQLITE_OK) {
+        defer _ = c.sqlite3_close(db);
+        _ = c.sqlite3_busy_timeout(db, 5000);
+        _ = c.sqlite3_exec(db, "UPDATE github_sync_tokens SET access_token = 'mock-github-token' WHERE id = 1;", null, null, null);
+    }
+    gui_update_github_status(1, "Connected");
+    
+    // Automatically trigger sync now to create the repo and push initial files
+    zig_github_now();
+}
+
+pub export fn zig_github_check_status() callconv(.c) c_int {
+    var db: ?*c.sqlite3 = null;
+    if (c.sqlite3_open(DB_PATH, &db) != c.SQLITE_OK) {
+        if (db != null) _ = c.sqlite3_close(db);
+        return 0;
+    }
+    defer _ = c.sqlite3_close(db);
+    _ = c.sqlite3_busy_timeout(db, 5000);
+
+    const sql = "SELECT access_token FROM github_sync_tokens WHERE id = 1;";
+    var stmt: ?*c.sqlite3_stmt = null;
+    if (c.sqlite3_prepare_v2(db, sql.ptr, -1, &stmt, null) == c.SQLITE_OK) {
+        defer _ = c.sqlite3_finalize(stmt);
+        if (c.sqlite3_step(stmt) == c.SQLITE_ROW) {
+            const acc_tok = c.sqlite3_column_text(stmt, 0);
+            if (acc_tok != null and std.mem.span(acc_tok).len > 0) return 1;
+        }
+    }
+    return 0;
+}
+
+pub export fn zig_github_disconnect() callconv(.c) void {
+    var db: ?*c.sqlite3 = null;
+    if (c.sqlite3_open(DB_PATH, &db) == c.SQLITE_OK) {
+        defer _ = c.sqlite3_close(db);
+        _ = c.sqlite3_busy_timeout(db, 5000);
+        _ = c.sqlite3_exec(db, "UPDATE github_sync_tokens SET access_token = NULL WHERE id = 1;", null, null, null);
+    }
+    gui_update_github_status(0, "Disconnected");
+}
+
+pub export fn zig_github_now() callconv(.c) void {
+    gui_trigger_autosave();
+    gui_update_github_status(2, "Syncing...");
+    _ = std.Thread.spawn(.{}, github_sync_worker, .{}) catch {
+        gui_update_github_status(1, "Connected");
+    };
+}
+
+fn github_sync_worker() void {
+    const allocator = std.heap.page_allocator;
+    const creds = get_github_credentials(allocator) catch {
+        gui_update_github_status(1, "Auth Error");
+        return;
+    };
+    defer allocator.free(creds.token);
+    defer allocator.free(creds.repo);
+
+    var child = std.process.spawn(main.global_io, .{
+        .argv = &[_][]const u8{ "/home/.config/lawh/github_sync.sh", creds.token, creds.repo, "." },
+    }) catch {
+        gui_update_github_status(1, "Sync Failed");
+        return;
+    };
+
+    const term = child.wait(main.global_io) catch {
+        gui_update_github_status(1, "Sync Failed");
+        return;
+    };
+
+    switch (term) {
+        .exited => |code| {
+            if (code == 0) {
+                gui_update_github_status(1, "Synced ✓");
+            } else {
+                gui_update_github_status(1, "Sync Failed");
+            }
+        },
+        else => {
+            gui_update_github_status(1, "Sync Failed");
+        },
+    }
 }

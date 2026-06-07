@@ -11,11 +11,11 @@
 #include <libgen.h>
 #include <limits.h>
 
-#define DB_PATH "/home/.config/qirtas/vault.db"
+#define DB_PATH "/home/.config/lawh/vault.db"
 
-/* ============================================================
+/* ============
  * DATA STRUCTURES
- * ============================================================ */
+  ============ */
 
 typedef struct {
     GtkWidget *window;
@@ -76,6 +76,23 @@ typedef struct {
     GtkWidget *client_id_entry;
     GtkWidget *client_secret_entry;
 
+    /* Dropbox Sync Engine UI components */
+    GtkWidget *dropbox_status_lbl;
+    GtkWidget *dropbox_connect_btn;
+    GtkWidget *dropbox_now_btn;
+    GtkWidget *dropbox_code_entry;
+    GtkWidget *dropbox_submit_btn;
+    GtkWidget *dropbox_code_box;
+    GtkWidget *dropbox_client_id_entry;
+    GtkWidget *dropbox_client_secret_entry;
+
+    /* GitHub Sync Engine UI components */
+    GtkWidget *github_status_lbl;
+    GtkWidget *github_connect_btn;
+    GtkWidget *github_now_btn;
+    GtkWidget *github_token_entry;
+    GtkWidget *github_repo_entry;
+
     GtkWidget *settings_window;
 
     /* Bottom-bar quick-access buttons */
@@ -93,11 +110,28 @@ typedef struct {
     int active_page_start_line;
     int active_page_end_line;
     int estimated_line_height;
+
+    /* Cursor Trail Animation */
+    GtkWidget *cursor_trail_area;
+    gboolean cursor_initialized;
+    double cursor_target_x;
+    double cursor_target_y;
+    double cursor_current_x;
+    double cursor_current_y;
+    double cursor_height;
+    double cursor_width;
+    struct {
+        double x;
+        double y;
+        double alpha;
+    } trail[24];
+    int trail_len;
+    gboolean trail_needs_clear;
 } AppGui;
 
-/* ============================================================
+/* ====
  * GLOBALS
- * ============================================================ */
+  ==== */
 
 static AppGui    *global_gui         = NULL;
 static GtkWidget *global_window      = NULL;
@@ -114,9 +148,9 @@ extern void zig_search_workspace(const char *query);
 extern const char *zig_get_search_snippet(const char *filepath);
 extern int zig_get_search_rank(const char *filepath);
 
-/* ============================================================
+/* ============
  * FORWARD DECLARATIONS
- * ============================================================ */
+  ============ */
 
 static void populate_explorer(AppGui *gui);
 static void set_active_tab(AppGui *gui, GtkWidget *active_btn, const char *page);
@@ -156,6 +190,8 @@ void gui_refresh_explorer(void);
 typedef void (*GuiIdleCallback)(void *user_data);
 void gui_run_on_main_thread(GuiIdleCallback callback, void *user_data);
 void gui_update_sync_status(int connected, const char *status_text);
+void gui_update_dropbox_status(int connected, const char *status_text);
+void gui_update_github_status(int connected, const char *status_text);
 
 /* FFI — Implemented in Zig */
 void zig_open_wiki_link(const char *note_name);
@@ -168,6 +204,19 @@ void zig_sync_submit_code(const char *code);
 void zig_sync_now(void);
 int  zig_sync_check_status(void);
 void zig_sync_disconnect(void);
+
+void zig_save_dropbox_credentials(const char *client_id, const char *client_secret);
+void zig_dropbox_connect(void);
+void zig_dropbox_submit_code(const char *code);
+void zig_dropbox_now(void);
+int  zig_dropbox_check_status(void);
+void zig_dropbox_disconnect(void);
+
+void zig_save_github_credentials(const char *token, const char *repo);
+void zig_github_connect(void);
+void zig_github_now(void);
+int  zig_github_check_status(void);
+void zig_github_disconnect(void);
 
 /* ============================================================
  * CSS — Deep Slate Dark Theme
@@ -487,7 +536,49 @@ static const char *CSS_DEEP_SLATE =
     "list { background-color: transparent; border: none; box-shadow: none; }\n"
     "row { background-color: transparent; border: none; box-shadow: none; padding: 0; margin: 0; }\n"
     "row:hover { background-color: transparent; border: none; box-shadow: none; }\n"
-    "row:selected { background-color: transparent; border: none; box-shadow: none; }\n";
+    "row:selected { background-color: transparent; border: none; box-shadow: none; }\n"
+    /* ---- Tree Explorer ---- */
+    ".tree-row {\n"
+    "  background: transparent;\n"
+    "  border: none;\n"
+    "  box-shadow: none;\n"
+    "  border-radius: 5px;\n"
+    "  padding: 0px 4px;\n"
+    "  min-height: 26px;\n"
+    "  transition: background 120ms;\n"
+    "}\n"
+    ".tree-row:hover {\n"
+    "  background-color: #1e2025;\n"
+    "}\n"
+    ".tree-row.active {\n"
+    "  background-color: #282a2f;\n"
+    "  border-left: 2px solid #ff79c6;\n"
+    "}\n"
+    ".tree-row-label {\n"
+    "  font-size: 12px;\n"
+    "  font-weight: 500;\n"
+    "  color: #c8c8d4;\n"
+    "  padding-left: 4px;\n"
+    "}\n"
+    ".tree-row-dir .tree-row-label {\n"
+    "  color: #dac0ca;\n"
+    "  font-weight: 600;\n"
+    "}\n"
+    ".tree-arrow {\n"
+    "  font-size: 10px;\n"
+    "  color: #6b6e7a;\n"
+    "  min-width: 14px;\n"
+    "}\n"
+    ".tree-icon { -gtk-icon-size: 14px; color: #6b6e7a; }\n"
+    ".tree-icon-folder { -gtk-icon-size: 14px; color: #75d4e8; }\n"
+    ".tree-icon-md { -gtk-icon-size: 14px; color: #ff79c6; }\n"
+    ".tree-children {\n"
+    "  border-left: 1px solid #1e2025;\n"
+    "  margin-left: 10px;\n"
+    "}\n"
+    ".tree-container {\n"
+    "  background: transparent;\n"
+    "}\n";
 
 static const char *CSS_CLASSIC_SEPIA = 
     "* { font-family: 'JetBrains Mono', 'Fira Mono', 'DejaVu Sans Mono', monospace; }\n"
@@ -799,7 +890,49 @@ static const char *CSS_CLASSIC_SEPIA =
     "list { background-color: transparent; border: none; box-shadow: none; }\n"
     "row { background-color: transparent; border: none; box-shadow: none; padding: 0; margin: 0; }\n"
     "row:hover { background-color: transparent; border: none; box-shadow: none; }\n"
-    "row:selected { background-color: transparent; border: none; box-shadow: none; }\n";
+    "row:selected { background-color: transparent; border: none; box-shadow: none; }\n"
+    /* ---- Tree Explorer ---- */
+    ".tree-row {\n"
+    "  background: transparent;\n"
+    "  border: none;\n"
+    "  box-shadow: none;\n"
+    "  border-radius: 5px;\n"
+    "  padding: 0px 4px;\n"
+    "  min-height: 26px;\n"
+    "  transition: background 120ms;\n"
+    "}\n"
+    ".tree-row:hover {\n"
+    "  background-color: #e4dbbe;\n"
+    "}\n"
+    ".tree-row.active {\n"
+    "  background-color: #e4dbbe;\n"
+    "  border-left: 2px solid #a42e79;\n"
+    "}\n"
+    ".tree-row-label {\n"
+    "  font-size: 12px;\n"
+    "  font-weight: 500;\n"
+    "  color: #403d2e;\n"
+    "  padding-left: 4px;\n"
+    "}\n"
+    ".tree-row-dir .tree-row-label {\n"
+    "  color: #073642;\n"
+    "  font-weight: 600;\n"
+    "}\n"
+    ".tree-arrow {\n"
+    "  font-size: 10px;\n"
+    "  color: #93a1a1;\n"
+    "  min-width: 14px;\n"
+    "}\n"
+    ".tree-icon { -gtk-icon-size: 14px; color: #93a1a1; }\n"
+    ".tree-icon-folder { -gtk-icon-size: 14px; color: #268bd2; }\n"
+    ".tree-icon-md { -gtk-icon-size: 14px; color: #a42e79; }\n"
+    ".tree-children {\n"
+    "  border-left: 1px solid #d3c7a9;\n"
+    "  margin-left: 10px;\n"
+    "}\n"
+    ".tree-container {\n"
+    "  background: transparent;\n"
+    "}\n";
 
 static const char *CSS_MIDNIGHT = 
     "* { font-family: 'JetBrains Mono', 'Fira Mono', 'DejaVu Sans Mono', monospace; }\n"
@@ -1111,31 +1244,337 @@ static const char *CSS_MIDNIGHT =
     "list { background-color: transparent; border: none; box-shadow: none; }\n"
     "row { background-color: transparent; border: none; box-shadow: none; padding: 0; margin: 0; }\n"
     "row:hover { background-color: transparent; border: none; box-shadow: none; }\n"
-    "row:selected { background-color: transparent; border: none; box-shadow: none; }\n";
+    "row:selected { background-color: transparent; border: none; box-shadow: none; }\n"
+    ".tree-row { background: transparent; border: none; box-shadow: none; border-radius: 5px; padding: 0px 4px; min-height: 26px; transition: background 120ms; }\n"
+    ".tree-row:hover { background-color: #1a1a1a; }\n"
+    ".tree-row.active { background-color: #1a1a1a; border-left: 2px solid #ff79c6; }\n"
+    ".tree-row-label { font-size: 12px; font-weight: 500; color: #c0c0c0; padding-left: 4px; }\n"
+    ".tree-row-dir .tree-row-label { color: #e0e0e0; font-weight: 600; }\n"
+    ".tree-arrow { font-size: 10px; color: #606060; min-width: 14px; }\n"
+    ".tree-icon { -gtk-icon-size: 14px; color: #606060; }\n"
+    ".tree-icon-folder { -gtk-icon-size: 14px; color: #aaaaaa; }\n"
+    ".tree-icon-md { -gtk-icon-size: 14px; color: #ff79c6; }\n"
+".tree-children { border-left: 1px solid #1c1c1c; margin-left: 10px; }\n"
+    ".tree-container { background: transparent; }\n";
 
 static char current_theme[32] = "dark";
+static char custom_theme_path[1024] = "";
+static void on_theme_dropdown_changed(GObject *gobject, GParamSpec *pspec, gpointer user_data);
+/* ── 5 ghost shadow carets, push only on big jumps, decay fast ── */
+#define GHOST_COUNT 5
+/* Minimum cursor movement in pixels to spawn a new ghost.
+ * A typical character is ~8-10px wide. Threshold of 3 means
+ * we capture most cursor movements, but they fade so fast that
+ * slow typing remains unnoticeable. */
+#define GHOST_MIN_DIST 3.0
+/* Alpha decay per frame at ~60 fps.
+ * 0.12 / frame → ghost lifetime = 0.25 / 0.12 ≈ 2 frames ≈ 33 ms.
+ * Fast enough that you won't notice during slow typing.             */
+#define GHOST_DECAY 0.12
+
+static gboolean on_cursor_tick(GtkWidget *widget, GdkFrameClock *frame_clock, gpointer user_data) {
+    (void)widget;
+    (void)frame_clock;
+    AppGui *gui = (AppGui *)user_data;
+    if (!gui->source_view || !gtk_widget_get_mapped(gui->source_view))
+        return G_SOURCE_CONTINUE;
+
+    GtkTextBuffer *buf         = gtk_text_view_get_buffer(GTK_TEXT_VIEW(gui->source_view));
+    GtkTextMark   *insert_mark = gtk_text_buffer_get_insert(buf);
+    GtkTextIter    iter;
+    gtk_text_buffer_get_iter_at_mark(buf, &iter, insert_mark);
+
+    GdkRectangle strong;
+    gtk_text_view_get_cursor_locations(GTK_TEXT_VIEW(gui->source_view), &iter, &strong, NULL);
+
+    double new_x       = (double)strong.x;
+    double new_y       = (double)strong.y;
+    gui->cursor_height = (double)strong.height;
+    gui->cursor_width  = strong.width > 0 ? (double)strong.width : 2.0;
+
+    /* First frame: just record position, no ghosts yet */
+    if (!gui->cursor_initialized) {
+        gui->cursor_current_x   = new_x;
+        gui->cursor_current_y   = new_y;
+        gui->cursor_target_x    = new_x;
+        gui->cursor_target_y    = new_y;
+        gui->cursor_initialized = TRUE;
+        gui->trail_len          = 0;
+        gui->trail_needs_clear  = FALSE;
+        return G_SOURCE_CONTINUE;
+    }
+
+    /* Keep target_x, target_y updated to the absolute latest cursor position */
+    gui->cursor_target_x = new_x;
+    gui->cursor_target_y = new_y;
+
+    /* ── Step 1: decay ALL existing ghosts by GHOST_DECAY each frame ── */
+    for (int i = 0; i < gui->trail_len; i++)
+        gui->trail[i].alpha -= GHOST_DECAY;
+
+    /* Compact: remove ghosts that have fully faded out */
+    int alive = 0;
+    for (int i = 0; i < gui->trail_len; i++) {
+        if (gui->trail[i].alpha > 0.01) {
+            gui->trail[alive++] = gui->trail[i];
+        }
+    }
+    gui->trail_len = alive;
+
+    /* ── Step 2: spawn a new ghost only if cursor moved ── */
+    double dx   = new_x - gui->cursor_current_x;
+    double dy   = new_y - gui->cursor_current_y;
+    double dist = (dx < 0 ? -dx : dx) + (dy < 0 ? -dy : dy);
+
+    if (dist >= GHOST_MIN_DIST) {
+        if (gui->trail_len < GHOST_COUNT) {
+            /* Append new ghost at the old cursor position */
+            gui->trail[gui->trail_len].x     = gui->cursor_current_x;
+            gui->trail[gui->trail_len].y     = gui->cursor_current_y;
+            gui->trail[gui->trail_len].alpha = 0.25; /* peak alpha */
+            gui->trail_len++;
+        } else {
+            /* Ring is full: evict the oldest (index 0) and append */
+            for (int i = 0; i < GHOST_COUNT - 1; i++)
+                gui->trail[i] = gui->trail[i + 1];
+            gui->trail[GHOST_COUNT - 1].x     = gui->cursor_current_x;
+            gui->trail[GHOST_COUNT - 1].y     = gui->cursor_current_y;
+            gui->trail[GHOST_COUNT - 1].alpha = 0.25;
+        }
+        gui->cursor_current_x = new_x;
+        gui->cursor_current_y = new_y;
+    }
+
+    /* Redraw only while at least one ghost is alive or clearing is needed */
+    gboolean needs_draw = (gui->trail_len > 0);
+    if (needs_draw) {
+        gui->trail_needs_clear = TRUE;
+    }
+
+    if (needs_draw || gui->trail_needs_clear) {
+        if (gui->cursor_trail_area) {
+            gtk_widget_queue_draw(gui->cursor_trail_area);
+        }
+        if (!needs_draw) {
+            gui->trail_needs_clear = FALSE;
+        }
+    }
+
+    return G_SOURCE_CONTINUE;
+}
+
+/* ── Draw a single ghost caret (rounded-rect pill) at (gx, gy) with given alpha ── */
+static void draw_ghost_caret(cairo_t *cr,
+                             double gx, double gy,
+                             double caret_w, double caret_h,
+                             double r, double g_col, double b,
+                             double alpha)
+{
+    if (alpha <= 0.01) return;
+
+    /* Caret width: keep it narrow like a real I-beam (2–3 px) */
+    double w      = caret_w < 2.5 ? 2.5 : caret_w;
+    double h      = caret_h;
+    double radius = w / 2.0;
+    if (radius < 1.0) radius = 1.0;
+    if (radius > h / 2.0) radius = h / 2.0;
+
+    cairo_new_sub_path(cr);
+    /* top-right arc */
+    cairo_arc(cr, gx + w - radius, gy + radius, radius, -G_PI_2, 0);
+    /* bottom-right arc */
+    cairo_arc(cr, gx + w - radius, gy + h - radius, radius, 0, G_PI_2);
+    /* bottom-left arc */
+    cairo_arc(cr, gx + radius, gy + h - radius, radius, G_PI_2, G_PI);
+    /* top-left arc */
+    cairo_arc(cr, gx + radius, gy + radius, radius, G_PI, 3.0 * G_PI_2);
+    cairo_close_path(cr);
+
+    cairo_set_source_rgba(cr, r, g_col, b, alpha);
+    cairo_fill(cr);
+}
+
+static void draw_cursor_trail(GtkDrawingArea *drawing_area, cairo_t *cr, int width, int height, gpointer user_data) {
+    (void)drawing_area;
+    (void)width;
+    (void)height;
+    AppGui *gui = (AppGui *)user_data;
+    if (!gui->source_view || !gui->cursor_initialized) return;
+    if (gui->trail_len == 0) return;
+
+    /* ── Accent color: statically mapped to match each theme's caret-color exactly ── */
+    GdkRGBA cursor_color;
+    if (strcmp(current_theme, "sepia") == 0)
+        cursor_color = (GdkRGBA){ 164.0/255.0,  46.0/255.0, 121.0/255.0, 1.0 }; /* #a42e79 */
+    else if (strcmp(current_theme, "things") == 0)
+        cursor_color = (GdkRGBA){  46.0/255.0, 128.0/255.0, 242.0/255.0, 1.0 }; /* #2e80f2 */
+    else if (strcmp(current_theme, "typewriter-light") == 0)
+        cursor_color = (GdkRGBA){ 184.0/255.0,  46.0/255.0,  46.0/255.0, 1.0 }; /* #b82e2e */
+    else if (strcmp(current_theme, "typewriter-dark") == 0)
+        cursor_color = (GdkRGBA){ 255.0/255.0,  77.0/255.0,  77.0/255.0, 1.0 }; /* #ff4d4d */
+    else
+        cursor_color = (GdkRGBA){ 255.0/255.0, 121.0/255.0, 198.0/255.0, 1.0 }; /* #ff79c6 */
+
+    double r = cursor_color.red;
+    double g = cursor_color.green;
+    double b = cursor_color.blue;
+
+    /* ── Offset: source_view coords → trail_area overlay coords ── */
+    double ox = 0.0, oy = 0.0;
+    graphene_point_t p_in;
+    p_in.x = 0.0f;
+    p_in.y = 0.0f;
+    graphene_point_t p_out;
+    if (gtk_widget_compute_point(gui->source_view, gui->cursor_trail_area, &p_in, &p_out)) {
+        ox = (double)p_out.x;
+        oy = (double)p_out.y;
+    }
+
+    double caret_w = gui->cursor_width  < 2.5 ? 2.5 : gui->cursor_width;
+    double caret_h = gui->cursor_height;
+
+    /* Collect all points in screen coordinates, ending at the current cursor position */
+    int count = 0;
+    struct {
+        double x;
+        double y;
+        double alpha;
+    } points[GHOST_COUNT + 1];
+
+    for (int i = 0; i < gui->trail_len; i++) {
+        int wx, wy;
+        gtk_text_view_buffer_to_window_coords(
+            GTK_TEXT_VIEW(gui->source_view), GTK_TEXT_WINDOW_WIDGET,
+            (int)gui->trail[i].x, (int)gui->trail[i].y,
+            &wx, &wy);
+        points[count].x = (double)wx + ox;
+        points[count].y = (double)wy + oy;
+        points[count].alpha = gui->trail[i].alpha;
+        count++;
+    }
+
+    /* Append current active cursor position as the final point in the trail */
+    {
+        int wx, wy;
+        gtk_text_view_buffer_to_window_coords(
+            GTK_TEXT_VIEW(gui->source_view), GTK_TEXT_WINDOW_WIDGET,
+            (int)gui->cursor_target_x, (int)gui->cursor_target_y,
+            &wx, &wy);
+        points[count].x = (double)wx + ox;
+        points[count].y = (double)wy + oy;
+        points[count].alpha = 0.25; /* peak alpha */
+        count++;
+    }
+
+    /* ── Draw connecting segments to merge them into a single continuous "smear" ── */
+    for (int i = 0; i < count - 1; i++) {
+        double xa = points[i].x;
+        double ya = points[i].y;
+        double alpha_a = points[i].alpha;
+
+        double xb = points[i + 1].x;
+        double yb = points[i + 1].y;
+        double alpha_b = points[i + 1].alpha;
+
+        double dx = xb - xa;
+        double dy = yb - ya;
+        double dist = dx < 0 ? -dx : dx;
+        double abs_dy = dy < 0 ? -dy : dy;
+
+        // If they are on different lines, don't smear (that would cross text diagonally).
+        if (abs_dy > 5.0) {
+            draw_ghost_caret(cr, xa, ya, caret_w, caret_h, r, g, b, alpha_a);
+        } else {
+            // Draw closely spaced intermediate carets so they blend into "one ghost"
+            int steps = (int)(dist / 1.5);
+            if (steps < 1) steps = 1;
+            for (int s = 0; s < steps; s++) {
+                double t = (double)s / steps;
+                double ix = xa + dx * t;
+                double iy = ya + dy * t;
+                double ialpha = alpha_a + (alpha_b - alpha_a) * t;
+                draw_ghost_caret(cr, ix, iy, caret_w, caret_h, r, g, b, ialpha);
+            }
+        }
+    }
+}
 
 static void apply_theme(AppGui *gui, const char *theme_name) {
     strncpy(current_theme, theme_name, sizeof(current_theme) - 1);
     current_theme[sizeof(current_theme) - 1] = '\0';
 
-    const char *base_css = NULL;
-    const char *gutter_color = "#555555";
-    const char *active_num_color = "#ff79c6";
-    if (strcmp(theme_name, "sepia") == 0) {
-        base_css = CSS_CLASSIC_SEPIA;
-        gutter_color = "#586e75";
-        active_num_color = "#a42e79";
-    } else if (strcmp(theme_name, "midnight") == 0) {
-        base_css = CSS_MIDNIGHT;
-        gutter_color = "#555555";
-        active_num_color = "#ff79c6";
+    /* ── Set Libadwaita Global color-scheme ── */
+    AdwStyleManager *style_manager = adw_style_manager_get_default();
+    if (strcmp(theme_name, "sepia") == 0 || strcmp(theme_name, "typewriter-light") == 0) {
+        adw_style_manager_set_color_scheme(style_manager, ADW_COLOR_SCHEME_FORCE_LIGHT);
     } else {
-        base_css = CSS_DEEP_SLATE;
-        gutter_color = "#555555";
-        active_num_color = "#ff79c6";
+        adw_style_manager_set_color_scheme(style_manager, ADW_COLOR_SCHEME_FORCE_DARK);
     }
-    
+
+    /* ── Step 1: pick fallback (embedded) CSS + gutter colors ── */
+    const char *fallback_css     = CSS_DEEP_SLATE;
+    const char *gutter_color     = "#555555";
+    const char *active_num_color = "#ff79c6";
+    const char *theme_css_path   = "src/ui/themes/theme-dark.css";
+
+    if (strcmp(theme_name, "sepia") == 0) {
+        fallback_css     = CSS_CLASSIC_SEPIA;
+        gutter_color     = "#586e75";
+        active_num_color = "#a42e79";
+        theme_css_path   = "src/ui/themes/theme-sepia.css";
+    } else if (strcmp(theme_name, "midnight") == 0) {
+        fallback_css     = CSS_MIDNIGHT;
+        gutter_color     = "#555555";
+        active_num_color = "#ff79c6";
+        theme_css_path   = "src/ui/themes/theme-midnight.css";
+    } else if (strcmp(theme_name, "things") == 0) {
+        fallback_css     = CSS_DEEP_SLATE;
+        gutter_color     = "#555555";
+        active_num_color = "#2e80f2";
+        theme_css_path   = "src/ui/themes/theme-things.css";
+    } else if (strcmp(theme_name, "typewriter-light") == 0) {
+        fallback_css     = CSS_CLASSIC_SEPIA;
+        gutter_color     = "#777777";
+        active_num_color = "#b82e2e";
+        theme_css_path   = "src/ui/themes/theme-typewriter-light.css";
+    } else if (strcmp(theme_name, "typewriter-dark") == 0) {
+        fallback_css     = CSS_DEEP_SLATE;
+        gutter_color     = "#666666";
+        active_num_color = "#ff4d4d";
+        theme_css_path   = "src/ui/themes/theme-typewriter-dark.css";
+    } else if (strcmp(theme_name, "custom") == 0) {
+        fallback_css     = CSS_DEEP_SLATE;
+        gutter_color     = "#555555";
+        active_num_color = "#2e80f2";
+        theme_css_path   = custom_theme_path;
+    }
+
+    /* ── Step 2: try to load the external CSS file ── */
+    const char *base_css   = NULL;
+    gchar      *file_css   = NULL;   /* heap-allocated — must g_free() */
+
+    GFile  *theme_file = g_file_new_for_path(theme_css_path);
+    GError *file_error = NULL;
+
+    if (g_file_query_exists(theme_file, NULL)) {
+        gsize len = 0;
+        if (g_file_load_contents(theme_file, NULL, &file_css, &len, NULL, &file_error)) {
+            base_css = file_css;   /* use external file */
+        } else {
+            /* File exists but could not be read — fall back & log */
+            g_printerr("[theme] Could not read %s: %s\n",
+                       theme_css_path, file_error ? file_error->message : "unknown");
+            if (file_error) { g_error_free(file_error); file_error = NULL; }
+        }
+    }
+    g_object_unref(theme_file);
+
+    /* If external file was not loaded, use the embedded fallback */
+    if (!base_css) {
+        base_css = fallback_css;
+    }
+
+    /* ── Step 3: build full CSS (base + gutter overrides) and apply ── */
     if (gui->css_provider) {
         gchar *full_css = g_strdup_printf(
             "%s\n"
@@ -1153,13 +1592,18 @@ static void apply_theme(AppGui *gui, const char *theme_name) {
             "  color: %s;\n"
             "  font-weight: bold;\n"
             "}\n",
-            base_css, gutter_color, gutter_color, active_num_color,
+            base_css,
+            gutter_color, gutter_color, active_num_color,
             gutter_color, gutter_color, active_num_color
         );
         gtk_css_provider_load_from_string(gui->css_provider, full_css);
         g_free(full_css);
     }
-    
+
+    /* Free external file content if loaded */
+    if (file_css) g_free(file_css);
+
+    /* ── Step 4: set GtkSourceView syntax colour scheme ── */
     if (gui->source_view) {
         GtkTextBuffer *buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(gui->source_view));
         GtkSourceBuffer *src_buf = GTK_SOURCE_BUFFER(buf);
@@ -1172,6 +1616,21 @@ static void apply_theme(AppGui *gui, const char *theme_name) {
         } else if (strcmp(theme_name, "midnight") == 0) {
             scheme = gtk_source_style_scheme_manager_get_scheme(sm, "qirtas-midnight");
             if (!scheme) scheme = gtk_source_style_scheme_manager_get_scheme(sm, "oblivion");
+        } else if (strcmp(theme_name, "things") == 0) {
+            scheme = gtk_source_style_scheme_manager_get_scheme(sm, "qirtas-things");
+            if (!scheme) scheme = gtk_source_style_scheme_manager_get_scheme(sm, "qirtas-dark");
+            if (!scheme) scheme = gtk_source_style_scheme_manager_get_scheme(sm, "adwaita-dark");
+        } else if (strcmp(theme_name, "typewriter-light") == 0) {
+            scheme = gtk_source_style_scheme_manager_get_scheme(sm, "qirtas-typewriter-light");
+            if (!scheme) scheme = gtk_source_style_scheme_manager_get_scheme(sm, "classic");
+            if (!scheme) scheme = gtk_source_style_scheme_manager_get_scheme(sm, "solarized-light");
+        } else if (strcmp(theme_name, "typewriter-dark") == 0) {
+            scheme = gtk_source_style_scheme_manager_get_scheme(sm, "qirtas-typewriter-dark");
+            if (!scheme) scheme = gtk_source_style_scheme_manager_get_scheme(sm, "qirtas-dark");
+            if (!scheme) scheme = gtk_source_style_scheme_manager_get_scheme(sm, "adwaita-dark");
+        } else if (strcmp(theme_name, "custom") == 0) {
+            scheme = gtk_source_style_scheme_manager_get_scheme(sm, "qirtas-dark");
+            if (!scheme) scheme = gtk_source_style_scheme_manager_get_scheme(sm, "adwaita-dark");
         } else {
             scheme = gtk_source_style_scheme_manager_get_scheme(sm, "qirtas-dark");
             if (!scheme) scheme = gtk_source_style_scheme_manager_get_scheme(sm, "adwaita-dark");
@@ -1182,9 +1641,77 @@ static void apply_theme(AppGui *gui, const char *theme_name) {
         }
         gtk_source_buffer_set_style_scheme(src_buf, scheme);
     }
-
-
 }
+
+static void on_custom_theme_dialog_response(GObject *source_object, GAsyncResult *res, gpointer user_data) {
+    GtkFileDialog *dialog = GTK_FILE_DIALOG(source_object);
+    GError *error = NULL;
+    GFile *file = gtk_file_dialog_open_finish(dialog, res, &error);
+    AppGui *gui = (AppGui *)user_data;
+    GtkDropDown *dropdown = g_object_get_data(G_OBJECT(dialog), "theme-dropdown");
+    
+    if (file) {
+        char *path = g_file_get_path(file);
+        if (path) {
+            strncpy(custom_theme_path, path, sizeof(custom_theme_path) - 1);
+            custom_theme_path[sizeof(custom_theme_path) - 1] = '\0';
+            apply_theme(gui, "custom");
+            g_free(path);
+        }
+        g_object_unref(file);
+    } else {
+        if (dropdown) {
+            int idx = 0;
+            if (strcmp(current_theme, "sepia") == 0) idx = 1;
+            else if (strcmp(current_theme, "midnight") == 0) idx = 2;
+            else if (strcmp(current_theme, "things") == 0) idx = 3;
+            else if (strcmp(current_theme, "typewriter-light") == 0) idx = 4;
+            else if (strcmp(current_theme, "typewriter-dark") == 0) idx = 5;
+            else if (strcmp(current_theme, "custom") == 0) idx = 6;
+            g_signal_handlers_block_by_func(dropdown, G_CALLBACK(on_theme_dropdown_changed), gui);
+            gtk_drop_down_set_selected(dropdown, idx);
+            g_signal_handlers_unblock_by_func(dropdown, G_CALLBACK(on_theme_dropdown_changed), gui);
+        }
+    }
+}
+
+static void on_theme_dropdown_changed(GObject *gobject, GParamSpec *pspec, gpointer user_data) {
+    (void)pspec;
+    GtkDropDown *dropdown = GTK_DROP_DOWN(gobject);
+    guint selected = gtk_drop_down_get_selected(dropdown);
+    AppGui *gui = (AppGui *)user_data;
+    
+    if (selected == 0) {
+        apply_theme(gui, "dark");
+    } else if (selected == 1) {
+        apply_theme(gui, "sepia");
+    } else if (selected == 2) {
+        apply_theme(gui, "midnight");
+    } else if (selected == 3) {
+        apply_theme(gui, "things");
+    } else if (selected == 4) {
+        apply_theme(gui, "typewriter-light");
+    } else if (selected == 5) {
+        apply_theme(gui, "typewriter-dark");
+    } else if (selected == 6) {
+        GtkFileDialog *dialog = gtk_file_dialog_new();
+        gtk_file_dialog_set_title(dialog, "Select Custom Theme CSS");
+        
+        GtkFileFilter *filter = gtk_file_filter_new();
+        gtk_file_filter_set_name(filter, "CSS Files (*.css)");
+        gtk_file_filter_add_pattern(filter, "*.css");
+        
+        GListStore *filters = g_list_store_new(GTK_TYPE_FILE_FILTER);
+        g_list_store_append(filters, filter);
+        g_object_unref(filter);
+        gtk_file_dialog_set_filters(dialog, G_LIST_MODEL(filters));
+        g_object_unref(filters);
+        
+        g_object_set_data(G_OBJECT(dialog), "theme-dropdown", dropdown);
+        gtk_file_dialog_open(dialog, GTK_WINDOW(gui->window), NULL, on_custom_theme_dialog_response, gui);
+    }
+}
+
 
 static void init_css(AppGui *gui) {
     /* 1. Load external assets/style.css stylesheet */
@@ -1270,8 +1797,9 @@ static void update_paragraph_direction(GtkTextBuffer *buf, GtkTextIter *iter) {
         ltr_tag = gtk_text_buffer_create_tag(buf, "ltr-tag", "direction", GTK_TEXT_DIR_LTR, NULL);
     }
 
-    GtkTextIter start = *iter;
-    gtk_text_iter_set_line_offset(&start, 0);
+    gint line_num = gtk_text_iter_get_line(iter);
+    GtkTextIter start;
+    gtk_text_buffer_get_iter_at_line(buf, &start, line_num);
     GtkTextIter end = start;
     if (!gtk_text_iter_ends_line(&end)) {
         gtk_text_iter_forward_to_line_end(&end);
@@ -1437,6 +1965,17 @@ static void apply_paragraph_format_with_saved(GtkTextBuffer *buf, const char *pr
     gint start_line = gtk_text_iter_get_line(&start);
     gint end_line   = gtk_text_iter_get_line(&end);
     apply_paragraph_format_core(buf, prefix, start_line, end_line);
+
+    gint total_lines = gtk_text_buffer_get_line_count(buf);
+    if (end_line >= total_lines) {
+        end_line = total_lines - 1;
+    }
+    if (end_line < 0) end_line = 0;
+
+    GtkTextIter cursor_iter;
+    gtk_text_buffer_get_iter_at_line(buf, &cursor_iter, end_line);
+    gtk_text_iter_forward_to_line_end(&cursor_iter);
+    gtk_text_buffer_select_range(buf, &cursor_iter, &cursor_iter);
 }
 
 /* Entry point for keyboard shortcuts — uses live selection */
@@ -1455,15 +1994,25 @@ static void on_format_clicked(GtkButton *btn, gpointer user_data) {
     PopoverData *pd = (PopoverData *)user_data;
     const char *prefix = g_object_get_data(G_OBJECT(btn), "prefix");
     const char *suffix = g_object_get_data(G_OBJECT(btn), "suffix");
-    apply_format_with_saved(pd->buf, prefix, suffix, pd->saved_start, pd->saved_end);
+    
     gtk_popover_popdown(GTK_POPOVER(pd->popover));
+    if (global_source_view) {
+        gtk_widget_grab_focus(global_source_view);
+    }
+    
+    apply_format_with_saved(pd->buf, prefix, suffix, pd->saved_start, pd->saved_end);
 }
 
 static void on_para_clicked(GtkButton *btn, gpointer user_data) {
     PopoverData *pd = (PopoverData *)user_data;
     const char *prefix = g_object_get_data(G_OBJECT(btn), "prefix");
-    apply_paragraph_format_with_saved(pd->buf, prefix, pd->saved_start, pd->saved_end);
+    
     gtk_popover_popdown(GTK_POPOVER(pd->popover));
+    if (global_source_view) {
+        gtk_widget_grab_focus(global_source_view);
+    }
+    
+    apply_paragraph_format_with_saved(pd->buf, prefix, pd->saved_start, pd->saved_end);
 }
 
 /* ============================================================
@@ -2365,11 +2914,14 @@ static gboolean on_editor_key_pressed(GtkEventControllerKey *ctrl,
 static void on_insert_text_after(GtkTextBuffer *buf, GtkTextIter *location, gchar *text, gint len, gpointer user_data) {
     (void)user_data;
     
-    GtkTextIter end_iter = *location;
-    GtkTextIter start_iter = end_iter;
-    
+    gint end_offset = gtk_text_iter_get_offset(location);
     glong char_len = g_utf8_strlen(text, len);
-    gtk_text_iter_backward_chars(&start_iter, char_len);
+    gint start_offset = end_offset - char_len;
+    if (start_offset < 0) start_offset = 0;
+    
+    GtkTextIter start_iter, end_iter;
+    gtk_text_buffer_get_iter_at_offset(buf, &start_iter, start_offset);
+    gtk_text_buffer_get_iter_at_offset(buf, &end_iter, end_offset);
     
     gint start_line = gtk_text_iter_get_line(&start_iter);
     gint end_line = gtk_text_iter_get_line(&end_iter);
@@ -2387,7 +2939,10 @@ static void on_insert_text_after(GtkTextBuffer *buf, GtkTextIter *location, gcha
 static void on_delete_range_after(GtkTextBuffer *buf, GtkTextIter *start, GtkTextIter *end, gpointer user_data) {
     (void)end; (void)user_data;
     
-    update_paragraph_direction(buf, start);
+    gint offset = gtk_text_iter_get_offset(start);
+    GtkTextIter fresh_start;
+    gtk_text_buffer_get_iter_at_offset(buf, &fresh_start, offset);
+    update_paragraph_direction(buf, &fresh_start);
     
     gui_set_sync_status("Not Synced");
     apply_wiki_link_tags(buf);
@@ -2639,7 +3194,7 @@ static void on_ar_font_changed(GObject *gobject, GParamSpec *pspec, gpointer use
 
 
 /* ============================================================
- * FILE EXPLORER — helpers
+ * FILE EXPLORER — Tree helpers (Obsidian-style)
  * ============================================================ */
 
 static void format_size(off_t bytes, char *out, size_t n) {
@@ -2667,241 +3222,332 @@ static void format_mtime(time_t mtime, char *out, size_t n) {
     }
 }
 
-static void on_file_card_clicked(GtkButton *btn, gpointer user_data) {
+/* Global tracker for the currently active tree row button */
+static GtkWidget *g_active_tree_row = NULL;
+
+/* Data passed to toggle callback for directory rows */
+typedef struct {
+    GtkWidget *children_box; /* The collapsible children container */
+    GtkWidget *arrow_label;  /* "▶" / "▼" label */
+    gboolean   expanded;
+} TreeDirData;
+
+static void on_tree_dir_toggle(GtkButton *btn, gpointer user_data) {
     (void)btn;
+    TreeDirData *d = (TreeDirData *)user_data;
+    d->expanded = !d->expanded;
+    gtk_widget_set_visible(d->children_box, d->expanded);
+    gtk_label_set_text(GTK_LABEL(d->arrow_label), d->expanded ? "▼" : "▶");
+}
+
+static void on_tree_file_clicked(GtkButton *btn, gpointer user_data) {
+    /* Clear previous active */
+    if (g_active_tree_row && GTK_IS_WIDGET(g_active_tree_row))
+        gtk_widget_remove_css_class(g_active_tree_row, "active");
+    g_active_tree_row = GTK_WIDGET(btn);
+    gtk_widget_add_css_class(GTK_WIDGET(btn), "active");
     zig_open_file((const char *)user_data);
 }
 
-static int explorer_sort_func(GtkListBoxRow *row1, GtkListBoxRow *row2, gpointer user_data) {
-    AppGui *gui = (AppGui *)user_data;
-    const char *search_text = gtk_editable_get_text(GTK_EDITABLE(gui->exp_search_entry));
-    if (search_text && strlen(search_text) > 0) {
-        gpointer idx1 = g_object_get_data(G_OBJECT(row1), "search_index");
-        gpointer idx2 = g_object_get_data(G_OBJECT(row2), "search_index");
-        int i1 = GPOINTER_TO_INT(idx1);
-        int i2 = GPOINTER_TO_INT(idx2);
-        if (i1 >= 0 && i2 >= 0) {
-            return (i1 < i2) ? -1 : ((i1 > i2) ? 1 : 0);
+/* Forward declaration */
+static void tree_build_dir(GtkWidget *parent_box, const char *dir_path, int depth);
+
+/*
+ * Build a single file row widget.
+ * full_path  – absolute or relative path to the file
+ * name       – display name (basename)
+ */
+static GtkWidget *tree_build_file_row(const char *full_path, const char *name) {
+    gboolean is_md = g_str_has_suffix(name, ".md") || g_str_has_suffix(name, ".txt");
+
+    GtkWidget *btn = gtk_button_new();
+    gtk_widget_add_css_class(btn, "tree-row");
+    gtk_widget_set_hexpand(btn, TRUE);
+
+    GtkWidget *hbox = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 4);
+    gtk_widget_set_halign(hbox, GTK_ALIGN_FILL);
+    gtk_widget_set_hexpand(hbox, TRUE);
+
+    /* File icon */
+    const char *icon_name = is_md ? "text-x-generic-symbolic" : "text-x-generic-symbolic";
+    GtkWidget *icon = gtk_image_new_from_icon_name(icon_name);
+    gtk_widget_add_css_class(icon, is_md ? "tree-icon-md" : "tree-icon");
+    gtk_box_append(GTK_BOX(hbox), icon);
+
+    /* Name label */
+    GtkWidget *lbl = gtk_label_new(name);
+    gtk_widget_add_css_class(lbl, "tree-row-label");
+    gtk_label_set_ellipsize(GTK_LABEL(lbl), PANGO_ELLIPSIZE_END);
+    gtk_widget_set_hexpand(lbl, TRUE);
+    gtk_widget_set_halign(lbl, GTK_ALIGN_START);
+    gtk_box_append(GTK_BOX(hbox), lbl);
+
+    gtk_button_set_child(GTK_BUTTON(btn), hbox);
+
+    /* Store full path on button and connect signal */
+    char *path_copy = g_strdup(full_path);
+    g_signal_connect_data(btn, "clicked",
+                          G_CALLBACK(on_tree_file_clicked),
+                          path_copy, (GClosureNotify)g_free, 0);
+
+    /* Store filepath for search */
+    g_object_set_data_full(G_OBJECT(btn), "tree_filepath", g_strdup(full_path), g_free);
+
+    return btn;
+}
+
+/*
+ * Build a directory row with a collapsible children box.
+ * Returns the outer wrapper box (row + children).
+ */
+static GtkWidget *tree_build_dir_row(const char *dir_path, const char *name) {
+    GtkWidget *wrapper = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+
+    /* Header button row */
+    GtkWidget *btn = gtk_button_new();
+    gtk_widget_add_css_class(btn, "tree-row");
+    gtk_widget_add_css_class(btn, "tree-row-dir");
+    gtk_widget_set_hexpand(btn, TRUE);
+
+    GtkWidget *hbox = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 4);
+    gtk_widget_set_hexpand(hbox, TRUE);
+
+    /* Arrow label */
+    GtkWidget *arrow = gtk_label_new("▶");
+    gtk_widget_add_css_class(arrow, "tree-arrow");
+    gtk_box_append(GTK_BOX(hbox), arrow);
+
+    /* Folder icon */
+    GtkWidget *icon = gtk_image_new_from_icon_name("folder-symbolic");
+    gtk_widget_add_css_class(icon, "tree-icon-folder");
+    gtk_box_append(GTK_BOX(hbox), icon);
+
+    /* Name label */
+    GtkWidget *lbl = gtk_label_new(name);
+    gtk_widget_add_css_class(lbl, "tree-row-label");
+    gtk_label_set_ellipsize(GTK_LABEL(lbl), PANGO_ELLIPSIZE_END);
+    gtk_widget_set_hexpand(lbl, TRUE);
+    gtk_widget_set_halign(lbl, GTK_ALIGN_START);
+    gtk_box_append(GTK_BOX(hbox), lbl);
+
+    gtk_button_set_child(GTK_BUTTON(btn), hbox);
+    gtk_box_append(GTK_BOX(wrapper), btn);
+
+    /* Children container (hidden by default) */
+    GtkWidget *children_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+    gtk_widget_add_css_class(children_box, "tree-children");
+    gtk_widget_set_visible(children_box, FALSE);
+    gtk_box_append(GTK_BOX(wrapper), children_box);
+
+    /* Recursively populate children */
+    tree_build_dir(children_box, dir_path, 0);
+
+    /* Toggle data */
+    TreeDirData *data = g_new0(TreeDirData, 1);
+    data->children_box = children_box;
+    data->arrow_label  = arrow;
+    data->expanded     = FALSE;
+
+    g_signal_connect_data(btn, "clicked",
+                          G_CALLBACK(on_tree_dir_toggle),
+                          data, (GClosureNotify)g_free, 0);
+
+    return wrapper;
+}
+
+/*
+ * String comparison function for qsort — directories first, then alphabetical.
+ */
+typedef struct { char name[NAME_MAX+1]; gboolean is_dir; } DirEntry;
+
+static int dir_entry_cmp(const void *a, const void *b) {
+    const DirEntry *ea = (const DirEntry *)a;
+    const DirEntry *eb = (const DirEntry *)b;
+    if (ea->is_dir != eb->is_dir)
+        return ea->is_dir ? -1 : 1; /* dirs first */
+    return strcasecmp(ea->name, eb->name);
+}
+
+/*
+ * Recursively fill parent_box with tree rows for all entries in dir_path.
+ * depth is unused currently but kept for future indent logic.
+ */
+static void tree_build_dir(GtkWidget *parent_box, const char *dir_path, int depth) {
+    (void)depth;
+
+    GError *err = NULL;
+    GDir *dir = g_dir_open(dir_path, 0, &err);
+    if (!dir) {
+        if (err) g_error_free(err);
+        return;
+    }
+
+    /* Collect entries */
+    DirEntry entries[4096];
+    int count = 0;
+    const char *nm;
+    while ((nm = g_dir_read_name(dir)) != NULL && count < 4095) {
+        if (nm[0] == '.') continue; /* skip hidden */
+        strncpy(entries[count].name, nm, NAME_MAX);
+        entries[count].name[NAME_MAX] = '\0';
+
+        char full[PATH_MAX];
+        snprintf(full, sizeof(full), "%s/%s", dir_path, nm);
+        entries[count].is_dir = g_file_test(full, G_FILE_TEST_IS_DIR);
+        count++;
+    }
+    g_dir_close(dir);
+
+    qsort(entries, count, sizeof(DirEntry), dir_entry_cmp);
+
+    for (int i = 0; i < count; i++) {
+        char full[PATH_MAX];
+        snprintf(full, sizeof(full), "%s/%s", dir_path, entries[i].name);
+
+        GtkWidget *row_widget;
+        if (entries[i].is_dir) {
+            row_widget = tree_build_dir_row(full, entries[i].name);
+        } else {
+            /* Only show relevant text files */
+            const char *n = entries[i].name;
+            gboolean show = g_str_has_suffix(n, ".md")  ||
+                            g_str_has_suffix(n, ".txt") ||
+                            g_str_has_suffix(n, ".zig") ||
+                            g_str_has_suffix(n, ".c")   ||
+                            g_str_has_suffix(n, ".h")   ||
+                            g_str_has_suffix(n, ".zon");
+            if (!show) continue;
+            row_widget = tree_build_file_row(full, entries[i].name);
         }
-        if (i1 >= 0) return -1;
-        if (i2 >= 0) return 1;
-        return 0;
-    } else {
-        gpointer m1 = g_object_get_data(G_OBJECT(row1), "mtime");
-        gpointer m2 = g_object_get_data(G_OBJECT(row2), "mtime");
-        int mtime1 = GPOINTER_TO_INT(m1);
-        int mtime2 = GPOINTER_TO_INT(m2);
-        if (mtime1 > mtime2) return -1;
-        if (mtime1 < mtime2) return 1;
-        return 0;
+        gtk_box_append(GTK_BOX(parent_box), row_widget);
     }
 }
 
+/* ============================================================
+ * populate_explorer  — replaces the old flat-list version
+ * ============================================================ */
+
+static GtkWidget *g_tree_container = NULL; /* the root GtkBox inside the scroll */
+
+static void populate_explorer(AppGui *gui) {
+    if (!gui || !gui->explorer_listbox) return;
+
+    /* The "explorer_listbox" field now points to our tree root GtkBox.
+       Clear all children first. */
+    GtkWidget *c = gtk_widget_get_first_child(gui->explorer_listbox);
+    while (c) {
+        GtkWidget *nxt = gtk_widget_get_next_sibling(c);
+        gtk_box_remove(GTK_BOX(gui->explorer_listbox), c);
+        c = nxt;
+    }
+
+    g_active_tree_row = NULL;
+
+    /* Build tree from current working directory */
+    tree_build_dir(gui->explorer_listbox, ".", 0);
+
+    /* Update badge count (count top-level children) */
+    if (gui->exp_count_label) {
+        int count = 0;
+        GtkWidget *child = gtk_widget_get_first_child(gui->explorer_listbox);
+        while (child) { count++; child = gtk_widget_get_next_sibling(child); }
+        char badge[32];
+        snprintf(badge, sizeof(badge), "%d items", count);
+        gtk_label_set_text(GTK_LABEL(gui->exp_count_label), badge);
+    }
+}
+
+/* ============================================================
+ * Search helpers — simplified for tree (just re-populate on clear,
+ * filter visible rows by name on search)
+ * ============================================================ */
+
 static guint explorer_search_timeout_id = 0;
+
+/* Recursively walk the tree GtkBox and show/hide file rows matching query */
+static int tree_filter_walk(GtkWidget *box, const char *query, int *match_count) {
+    GtkWidget *child = gtk_widget_get_first_child(box);
+    int visible_in_this_box = 0;
+    while (child) {
+        GtkWidget *next = gtk_widget_get_next_sibling(child);
+        if (GTK_IS_BUTTON(child)) {
+            /* File row */
+            const char *fp = g_object_get_data(G_OBJECT(child), "tree_filepath");
+            if (fp) {
+                const char *basename = g_path_get_basename(fp); /* leaks, but tiny */
+                gboolean match = (query == NULL || strlen(query) == 0 ||
+                                  (strcasestr(basename, query) != NULL));
+                gtk_widget_set_visible(child, match);
+                if (match) { visible_in_this_box++; if (match_count) (*match_count)++; }
+            }
+        } else if (GTK_IS_BOX(child)) {
+            /* Could be a dir wrapper or children_box */
+            /* Check if it has the tree-children class → recurse into it */
+            if (gtk_widget_has_css_class(child, "tree-children")) {
+                int sub = tree_filter_walk(child, query, match_count);
+                /* Make children_box visible if it has matches and we are searching */
+                if (query && strlen(query) > 0) {
+                    gtk_widget_set_visible(child, sub > 0);
+                    if (sub > 0) visible_in_this_box++;
+                } else {
+                    /* Reset to collapsed */
+                    gtk_widget_set_visible(child, FALSE);
+                }
+            } else {
+                /* Dir wrapper box (contains button + children_box) */
+                int sub = tree_filter_walk(child, query, match_count);
+                gtk_widget_set_visible(child, (query == NULL || strlen(query) == 0) || sub > 0);
+                if (sub > 0) visible_in_this_box++;
+            }
+        }
+        child = next;
+    }
+    return visible_in_this_box;
+}
 
 static gboolean do_debounced_explorer_search(gpointer user_data) {
     AppGui *gui = (AppGui *)user_data;
     explorer_search_timeout_id = 0;
 
+    if (!gui || !gui->explorer_listbox) return G_SOURCE_REMOVE;
+
     const char *query = gtk_editable_get_text(GTK_EDITABLE(gui->exp_search_entry));
-    if (query && strlen(query) > 0) {
-        // Run FTS5 search (Zig backend)
-        zig_search_workspace(query);
+    int match_count = 0;
+    tree_filter_walk(gui->explorer_listbox, query, &match_count);
 
-        // Filter and update rows
-        GtkWidget *row = gtk_widget_get_first_child(gui->explorer_listbox);
-        int match_count = 0;
-        while (row) {
-            GtkWidget *card = gtk_list_box_row_get_child(GTK_LIST_BOX_ROW(row));
-            if (card) {
-                const char *filepath = g_object_get_data(G_OBJECT(card), "filepath");
-                GtkWidget *snippet_lbl = g_object_get_data(G_OBJECT(card), "snippet_lbl");
-                if (filepath) {
-                    const char *snippet = zig_get_search_snippet(filepath);
-                    if (snippet) {
-                        match_count++;
-                        gtk_widget_set_visible(row, TRUE);
-                        if (snippet_lbl) {
-                            gtk_label_set_markup(GTK_LABEL(snippet_lbl), snippet);
-                        }
-                        int rank = zig_get_search_rank(filepath);
-                        g_object_set_data(G_OBJECT(row), "search_index", GINT_TO_POINTER(rank));
-                    } else {
-                        gtk_widget_set_visible(row, FALSE);
-                        g_object_set_data(G_OBJECT(row), "search_index", GINT_TO_POINTER(-1));
-                    }
-                }
-            }
-            row = gtk_widget_get_next_sibling(row);
-        }
-        
-        if (gui->exp_count_label) {
-            char badge[64];
+    if (gui->exp_count_label) {
+        char badge[64];
+        if (query && strlen(query) > 0)
             snprintf(badge, sizeof(badge), "Found %d matches", match_count);
-            gtk_label_set_text(GTK_LABEL(gui->exp_count_label), badge);
+        else {
+            /* Count top-level items */
+            int top = 0;
+            GtkWidget *w = gtk_widget_get_first_child(gui->explorer_listbox);
+            while (w) { top++; w = gtk_widget_get_next_sibling(w); }
+            snprintf(badge, sizeof(badge), "%d items", top);
         }
-    } else {
-        // Clear search index / show all / restore default meta
-        GtkWidget *row = gtk_widget_get_first_child(gui->explorer_listbox);
-        int total_count = 0;
-        while (row) {
-            gtk_widget_set_visible(row, TRUE);
-            g_object_set_data(G_OBJECT(row), "search_index", GINT_TO_POINTER(-1));
-            
-            GtkWidget *card = gtk_list_box_row_get_child(GTK_LIST_BOX_ROW(row));
-            if (card) {
-                const char *default_meta = g_object_get_data(G_OBJECT(card), "default_meta");
-                GtkWidget *snippet_lbl = g_object_get_data(G_OBJECT(card), "snippet_lbl");
-                if (snippet_lbl && default_meta) {
-                    gtk_label_set_text(GTK_LABEL(snippet_lbl), default_meta);
-                }
-                total_count++;
-            }
-            row = gtk_widget_get_next_sibling(row);
-        }
-
-        if (gui->exp_count_label) {
-            char badge[64];
-            snprintf(badge, sizeof(badge), "%d items", total_count);
-            gtk_label_set_text(GTK_LABEL(gui->exp_count_label), badge);
-        }
+        gtk_label_set_text(GTK_LABEL(gui->exp_count_label), badge);
     }
-
-    // Trigger ListBox resort
-    gtk_list_box_invalidate_sort(GTK_LIST_BOX(gui->explorer_listbox));
 
     return G_SOURCE_REMOVE;
 }
 
 static void on_explorer_search_changed(GtkSearchEntry *entry, gpointer user_data) {
     (void)entry;
-    if (explorer_search_timeout_id > 0) {
+    if (explorer_search_timeout_id > 0)
         g_source_remove(explorer_search_timeout_id);
-    }
     explorer_search_timeout_id = g_timeout_add(150, do_debounced_explorer_search, user_data);
 }
 
-static void populate_explorer(AppGui *gui) {
-    if (!gui || !gui->explorer_listbox || !GTK_IS_LIST_BOX(gui->explorer_listbox)) return;
+static void on_file_card_clicked(GtkButton *btn, gpointer user_data) {
+    (void)btn;
+    zig_open_file((const char *)user_data);
+}
 
-    /* Clear */
-    GtkWidget *c = gtk_widget_get_first_child(gui->explorer_listbox);
-    while (c) {
-        GtkWidget *nxt = gtk_widget_get_next_sibling(c);
-        gtk_list_box_remove(GTK_LIST_BOX(gui->explorer_listbox), c);
-        c = nxt;
-    }
-
-    // Default: list all directory files
-    GError *err = NULL;
-    GDir   *dir = g_dir_open(".", 0, &err);
-    if (!dir) return;
-
-    /* Count for badge */
-    int count = 0;
-    const char *nm;
-    while ((nm = g_dir_read_name(dir)) != NULL)
-        if (nm[0] != '.') count++;
-    g_dir_rewind(dir);
-
-    if (gui->exp_count_label) {
-        char badge[32];
-        snprintf(badge, sizeof(badge), "%d items", count);
-        gtk_label_set_text(GTK_LABEL(gui->exp_count_label), badge);
-    }
-
-    while ((nm = g_dir_read_name(dir)) != NULL) {
-        if (nm[0] == '.') continue;
-
-        gboolean is_dir = g_file_test(nm, G_FILE_TEST_IS_DIR);
-        gboolean is_md  = g_str_has_suffix(nm, ".md") || g_str_has_suffix(nm, ".txt") ||
-                          g_str_has_suffix(nm, ".zig") || g_str_has_suffix(nm, ".zon") ||
-                          g_str_has_suffix(nm, ".c") || g_str_has_suffix(nm, ".h");
-        char    *cb     = g_strdup(nm);
-
-        struct stat st;
-        gboolean has_st = (stat(nm, &st) == 0);
-
-        /* Card button */
-        GtkWidget *card = gtk_button_new();
-        gtk_widget_add_css_class(card, "explorer-card");
-
-        GtkWidget *vbox = gtk_box_new(GTK_ORIENTATION_VERTICAL, 4);
-        gtk_widget_set_halign(vbox, GTK_ALIGN_START);
-
-        /* Icon row */
-        GtkWidget *icon_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
-
-        const char *icon_name = is_dir ? "folder-symbolic" : "text-x-generic-symbolic";
-        GtkWidget  *icon      = gtk_image_new_from_icon_name(icon_name);
-        gtk_image_set_pixel_size(GTK_IMAGE(icon), 18);
-        if      (is_dir) gtk_widget_add_css_class(icon, "icon-folder");
-        else if (is_md)  gtk_widget_add_css_class(icon, "icon-file-md");
-        else             gtk_widget_add_css_class(icon, "icon-file");
-
-        GtkWidget *type_badge = gtk_label_new(is_dir ? "Dir" : (is_md ? "md" : "file"));
-        gtk_widget_add_css_class(type_badge, "explorer-badge");
-        gtk_widget_set_hexpand(type_badge, TRUE);
-        gtk_widget_set_halign(type_badge, GTK_ALIGN_END);
-
-        gtk_box_append(GTK_BOX(icon_row), icon);
-        gtk_box_append(GTK_BOX(icon_row), type_badge);
-
-        /* Name */
-        GtkWidget *name_lbl = gtk_label_new(nm);
-        gtk_widget_add_css_class(name_lbl, "card-name");
-        gtk_label_set_ellipsize(GTK_LABEL(name_lbl), PANGO_ELLIPSIZE_MIDDLE);
-        gtk_label_set_max_width_chars(GTK_LABEL(name_lbl), 18);
-        gtk_widget_set_halign(name_lbl, GTK_ALIGN_START);
-
-        /* Meta: size • time */
-        char meta[64] = "";
-        long long mtime = 0;
-        if (has_st) {
-            mtime = st.st_mtime;
-            char sz[24] = "", ts[24] = "";
-            if (!is_dir) format_size(st.st_size, sz, sizeof(sz));
-            format_mtime(st.st_mtime, ts, sizeof(ts));
-            if (!is_dir) snprintf(meta, sizeof(meta), "%s • %s", sz, ts);
-            else         snprintf(meta, sizeof(meta), "%s", ts);
-        }
-        GtkWidget *meta_lbl = gtk_label_new(meta);
-        gtk_widget_add_css_class(meta_lbl, "card-meta");
-        gtk_widget_set_halign(meta_lbl, GTK_ALIGN_START);
-
-        gtk_box_append(GTK_BOX(vbox), icon_row);
-        gtk_box_append(GTK_BOX(vbox), name_lbl);
-        gtk_box_append(GTK_BOX(vbox), meta_lbl);
-        gtk_button_set_child(GTK_BUTTON(card), vbox);
-
-        g_signal_connect_data(card, "clicked",
-                              G_CALLBACK(on_file_card_clicked),
-                              cb, (GClosureNotify)g_free, 0);
-
-        /* Row wrapper */
-        GtkWidget *row = gtk_list_box_row_new();
-        gtk_list_box_row_set_child(GTK_LIST_BOX_ROW(row), card);
-        
-        // Store metadata on the card/row
-        g_object_set_data_full(G_OBJECT(card), "filepath", g_strdup(nm), g_free);
-        g_object_set_data_full(G_OBJECT(card), "default_meta", g_strdup(meta), g_free);
-        g_object_set_data(G_OBJECT(card), "snippet_lbl", meta_lbl);
-        
-        g_object_set_data(G_OBJECT(row), "mtime", GINT_TO_POINTER((int)mtime));
-        g_object_set_data(G_OBJECT(row), "search_index", GINT_TO_POINTER(-1));
-        
-        gtk_list_box_append(GTK_LIST_BOX(gui->explorer_listbox), row);
-    }
-    g_dir_close(dir);
-
-    // Sort initially by mtime
-    gtk_list_box_invalidate_sort(GTK_LIST_BOX(gui->explorer_listbox));
-
-    // If search is currently active, re-filter immediately
-    const char *search_text = gtk_editable_get_text(GTK_EDITABLE(gui->exp_search_entry));
-    if (search_text && strlen(search_text) > 0) {
-        do_debounced_explorer_search(gui);
-    }
+/* Stub sort func — not used with tree box but kept to avoid linker issues */
+static int explorer_sort_func(GtkListBoxRow *row1, GtkListBoxRow *row2, gpointer user_data) {
+    (void)row1; (void)row2; (void)user_data;
+    return 0;
 }
 
 /* ============================================================
@@ -3017,6 +3663,7 @@ static void load_sync_credentials(AppGui *gui) {
         if (db) sqlite3_close(db);
         return;
     }
+    // Google Drive
     const char *sql = "SELECT client_id, client_secret FROM sync_tokens WHERE id = 1;";
     sqlite3_stmt *stmt = NULL;
     if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) == SQLITE_OK) {
@@ -3032,18 +3679,121 @@ static void load_sync_credentials(AppGui *gui) {
         }
         sqlite3_finalize(stmt);
     }
+    // Dropbox
+    const char *db_sql = "SELECT client_id, client_secret FROM dropbox_sync_tokens WHERE id = 1;";
+    sqlite3_stmt *db_stmt = NULL;
+    if (sqlite3_prepare_v2(db, db_sql, -1, &db_stmt, NULL) == SQLITE_OK) {
+        if (sqlite3_step(db_stmt) == SQLITE_ROW) {
+            const char *c_id = (const char *)sqlite3_column_text(db_stmt, 0);
+            const char *c_sec = (const char *)sqlite3_column_text(db_stmt, 1);
+            if (c_id && gui->dropbox_client_id_entry) {
+                gtk_editable_set_text(GTK_EDITABLE(gui->dropbox_client_id_entry), c_id);
+            }
+            if (c_sec && gui->dropbox_client_secret_entry) {
+                gtk_editable_set_text(GTK_EDITABLE(gui->dropbox_client_secret_entry), c_sec);
+            }
+        }
+        sqlite3_finalize(db_stmt);
+    }
+    // GitHub
+    const char *gh_sql = "SELECT personal_token, repo_name FROM github_sync_tokens WHERE id = 1;";
+    sqlite3_stmt *gh_stmt = NULL;
+    if (sqlite3_prepare_v2(db, gh_sql, -1, &gh_stmt, NULL) == SQLITE_OK) {
+        if (sqlite3_step(gh_stmt) == SQLITE_ROW) {
+            const char *tok = (const char *)sqlite3_column_text(gh_stmt, 0);
+            const char *rep = (const char *)sqlite3_column_text(gh_stmt, 1);
+            if (tok && gui->github_token_entry) {
+                gtk_editable_set_text(GTK_EDITABLE(gui->github_token_entry), tok);
+            }
+            if (rep && gui->github_repo_entry) {
+                gtk_editable_set_text(GTK_EDITABLE(gui->github_repo_entry), rep);
+            }
+        }
+        sqlite3_finalize(gh_stmt);
+    }
     sqlite3_close(db);
 }
 
-static void on_theme_dark_clicked(GtkButton *btn, gpointer user_data) {
+static void on_dropbox_save_credentials_clicked(GtkButton *btn, gpointer user_data) {
     (void)btn;
-    apply_theme((AppGui *)user_data, "dark");
+    AppGui *gui = (AppGui *)user_data;
+    const char *client_id = gtk_editable_get_text(GTK_EDITABLE(gui->dropbox_client_id_entry));
+    const char *client_secret = gtk_editable_get_text(GTK_EDITABLE(gui->dropbox_client_secret_entry));
+
+    if ((!client_id || strlen(client_id) == 0) && (!client_secret || strlen(client_secret) == 0)) {
+        if (gui->dropbox_status_lbl)
+            gtk_label_set_text(GTK_LABEL(gui->dropbox_status_lbl), "Enter credentials first");
+        return;
+    }
+
+    zig_save_dropbox_credentials(client_id, client_secret);
+
+    if (gui->dropbox_status_lbl)
+        gtk_label_set_text(GTK_LABEL(gui->dropbox_status_lbl), "Credentials saved ✓");
 }
 
-static void on_theme_sepia_clicked(GtkButton *btn, gpointer user_data) {
+static void on_dropbox_connect_clicked(GtkButton *btn, gpointer user_data) {
     (void)btn;
-    apply_theme((AppGui *)user_data, "sepia");
+    AppGui *gui = (AppGui *)user_data;
+    int connected = zig_dropbox_check_status();
+    if (connected) {
+        zig_dropbox_disconnect();
+    } else {
+        zig_dropbox_connect();
+    }
 }
+
+static void on_dropbox_submit_clicked(GtkButton *btn, gpointer user_data) {
+    (void)btn;
+    AppGui *gui = (AppGui *)user_data;
+    const char *code = gtk_editable_get_text(GTK_EDITABLE(gui->dropbox_code_entry));
+    if (code && strlen(code) > 0) {
+        zig_dropbox_submit_code(code);
+    }
+}
+
+static void on_dropbox_now_clicked(GtkButton *btn, gpointer user_data) {
+    (void)btn;
+    (void)user_data;
+    zig_dropbox_now();
+}
+
+static void on_github_save_credentials_clicked(GtkButton *btn, gpointer user_data) {
+    (void)btn;
+    AppGui *gui = (AppGui *)user_data;
+    const char *token = gtk_editable_get_text(GTK_EDITABLE(gui->github_token_entry));
+    const char *repo = gtk_editable_get_text(GTK_EDITABLE(gui->github_repo_entry));
+
+    if ((!token || strlen(token) == 0) && (!repo || strlen(repo) == 0)) {
+        if (gui->github_status_lbl)
+            gtk_label_set_text(GTK_LABEL(gui->github_status_lbl), "Enter credentials first");
+        return;
+    }
+
+    zig_save_github_credentials(token, repo);
+
+    if (gui->github_status_lbl)
+        gtk_label_set_text(GTK_LABEL(gui->github_status_lbl), "Credentials saved ✓");
+}
+
+static void on_github_connect_clicked(GtkButton *btn, gpointer user_data) {
+    (void)btn;
+    AppGui *gui = (AppGui *)user_data;
+    int connected = zig_github_check_status();
+    if (connected) {
+        zig_github_disconnect();
+    } else {
+        zig_github_connect();
+    }
+}
+
+static void on_github_now_clicked(GtkButton *btn, gpointer user_data) {
+    (void)btn;
+    (void)user_data;
+    zig_github_now();
+}
+
+
 
 static int get_line_height(GtkWidget *text_view) {
     PangoLayout *layout = gtk_widget_create_pango_layout(text_view, "A");
@@ -3139,10 +3889,7 @@ static void on_scroll_changed(GtkAdjustment *adj, gpointer user_data) {
     }
 }
 
-static void on_theme_midnight_clicked(GtkButton *btn, gpointer user_data) {
-    (void)btn;
-    apply_theme((AppGui *)user_data, "midnight");
-}
+
 
 static void activate(GtkApplication *app, gpointer user_data) {
     (void)user_data;
@@ -3260,7 +4007,7 @@ static void activate(GtkApplication *app, gpointer user_data) {
     /* 3. Register custom icon theme paths to default GTK display icon theme */
     GtkIconTheme *icon_theme = gtk_icon_theme_get_for_display(gdk_display_get_default());
     gtk_icon_theme_add_search_path(icon_theme, "src/ui/icons");
-    gtk_icon_theme_add_search_path(icon_theme, "/home/sinkeat/projects/qirtas/src/ui/icons");
+    gtk_icon_theme_add_search_path(icon_theme, "/home/sinkeat/projects/lawh/src/ui/icons");
     if (strlen(custom_icon_path) > 0) {
         char resolved_path[PATH_MAX];
         if (realpath(custom_icon_path, resolved_path) != NULL) {
@@ -3378,7 +4125,7 @@ static void activate(GtkApplication *app, gpointer user_data) {
 
     gtk_box_append(GTK_BOX(sidebar), exp_title_row);
 
-    /* 3. Scrolled Window & Explorer ListBox for Notes List */
+    /* 3. Scrolled Window & Tree Container for File Tree */
     GtkWidget *exp_scroll = gtk_scrolled_window_new();
     gtk_widget_set_hexpand(exp_scroll, TRUE);
     gtk_widget_set_vexpand(exp_scroll, TRUE);
@@ -3386,11 +4133,16 @@ static void activate(GtkApplication *app, gpointer user_data) {
                                    GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
     gtk_box_append(GTK_BOX(sidebar), exp_scroll);
 
-    GtkWidget *listbox = gtk_list_box_new();
-    gtk_list_box_set_selection_mode(GTK_LIST_BOX(listbox), GTK_SELECTION_NONE);
-    gtk_list_box_set_sort_func(GTK_LIST_BOX(listbox), explorer_sort_func, gui, NULL);
-    gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(exp_scroll), listbox);
-    gui->explorer_listbox = listbox;
+    /* Tree root box — replaces the old GtkListBox */
+    GtkWidget *tree_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+    gtk_widget_add_css_class(tree_box, "tree-container");
+    gtk_widget_set_hexpand(tree_box, TRUE);
+    gtk_widget_set_margin_start(tree_box, 4);
+    gtk_widget_set_margin_end(tree_box, 4);
+    gtk_widget_set_margin_top(tree_box, 2);
+    gtk_widget_set_margin_bottom(tree_box, 4);
+    gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(exp_scroll), tree_box);
+    gui->explorer_listbox = tree_box;  /* reuse field — now a GtkBox */
 
     /* 4. Bottom nav group (Settings) */
     GtkWidget *nav_bot = gtk_box_new(GTK_ORIENTATION_VERTICAL, 4);
@@ -3487,7 +4239,29 @@ static void activate(GtkApplication *app, gpointer user_data) {
     gtk_widget_set_margin_top(scrolled, 12);
     gtk_widget_set_margin_bottom(scrolled, 12);
     gtk_widget_add_css_class(scrolled, "editor-scroll");
-    gtk_box_append(GTK_BOX(editor_page), scrolled);
+
+    /* ── Cursor-trail Overlay ──
+     * We wrap `scrolled` inside a GtkOverlay so that the transparent
+     * GtkDrawingArea (cursor_trail_area) can float on top of the text,
+     * receiving paint calls every frame via the tick callback while
+     * passing all pointer/keyboard events straight through to the editor.
+     */
+    GtkWidget *editor_overlay = gtk_overlay_new();
+    gtk_widget_set_hexpand(editor_overlay, TRUE);
+    gtk_widget_set_vexpand(editor_overlay, TRUE);
+    gtk_overlay_set_child(GTK_OVERLAY(editor_overlay), scrolled);
+
+    /* The drawing area sits on top — transparent, non-interactive */
+    GtkWidget *trail_area = gtk_drawing_area_new();
+    gtk_widget_set_hexpand(trail_area, TRUE);
+    gtk_widget_set_vexpand(trail_area, TRUE);
+    gtk_widget_set_can_target(trail_area, FALSE);   /* pass events through  */
+    gtk_widget_set_focusable(trail_area, FALSE);
+    gtk_overlay_add_overlay(GTK_OVERLAY(editor_overlay), trail_area);
+    gtk_overlay_set_measure_overlay(GTK_OVERLAY(editor_overlay), trail_area, FALSE);
+    gui->cursor_trail_area = trail_area;
+
+    gtk_box_append(GTK_BOX(editor_page), editor_overlay);
 
     /* Append search bar after content so it sits at the bottom */
     gtk_box_append(GTK_BOX(editor_page), search_revealer);
@@ -3613,6 +4387,20 @@ static void activate(GtkApplication *app, gpointer user_data) {
                      G_CALLBACK(on_editor_key_pressed), gui);
     gtk_widget_add_controller(source_view, editor_key_ctrl);
 
+    /* ── Cursor-trail: wire draw function + frame-clock tick ── */
+    gtk_drawing_area_set_draw_func(
+        GTK_DRAWING_AREA(gui->cursor_trail_area),
+        draw_cursor_trail,
+        gui,
+        NULL  /* GDestroyNotify — not needed */
+    );
+    gtk_widget_add_tick_callback(
+        gui->source_view,
+        (GtkTickCallback)on_cursor_tick,
+        gui,
+        NULL  /* GDestroyNotify */
+    );
+
 
 
     /* ============================================================
@@ -3629,21 +4417,37 @@ static void activate(GtkApplication *app, gpointer user_data) {
     gtk_widget_set_halign(th_lbl, GTK_ALIGN_START);
     gtk_box_append(GTK_BOX(pop_box), th_lbl);
 
-    GtkWidget *th_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
-    gtk_box_set_homogeneous(GTK_BOX(th_row), TRUE);
-    GtkWidget *btn_dark  = gtk_button_new_with_label("Deep Slate");
-    GtkWidget *btn_sepia = gtk_button_new_with_label("Classic Sepia");
-    GtkWidget *btn_mid   = gtk_button_new_with_label("Midnight");
-    gtk_widget_add_css_class(btn_dark,  "pop-btn");
-    gtk_widget_add_css_class(btn_sepia, "pop-btn");
-    gtk_widget_add_css_class(btn_mid,   "pop-btn");
-    gtk_box_append(GTK_BOX(th_row), btn_dark);
-    gtk_box_append(GTK_BOX(th_row), btn_sepia);
-    gtk_box_append(GTK_BOX(th_row), btn_mid);
-    gtk_box_append(GTK_BOX(pop_box), th_row);
-    g_signal_connect(btn_dark,  "clicked", G_CALLBACK(on_theme_dark_clicked),  gui);
-    g_signal_connect(btn_sepia, "clicked", G_CALLBACK(on_theme_sepia_clicked), gui);
-    g_signal_connect(btn_mid,   "clicked", G_CALLBACK(on_theme_midnight_clicked), gui);
+    GtkWidget *theme_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
+    GtkWidget *theme_label = gtk_label_new("Theme");
+    gtk_widget_set_hexpand(theme_label, TRUE);
+    gtk_widget_set_halign(theme_label, GTK_ALIGN_START);
+
+    const char *themes[] = {
+        "Deep Slate",
+        "Classic Sepia",
+        "Midnight",
+        "Things",
+        "Typewriter Light",
+        "Typewriter Dark",
+        "Add Custom Theme...",
+        NULL
+    };
+    GtkWidget *theme_dropdown = gtk_drop_down_new_from_strings(themes);
+    
+    int theme_idx = 0;
+    if (strcmp(current_theme, "sepia") == 0) theme_idx = 1;
+    else if (strcmp(current_theme, "midnight") == 0) theme_idx = 2;
+    else if (strcmp(current_theme, "things") == 0) theme_idx = 3;
+    else if (strcmp(current_theme, "typewriter-light") == 0) theme_idx = 4;
+    else if (strcmp(current_theme, "typewriter-dark") == 0) theme_idx = 5;
+    else if (strcmp(current_theme, "custom") == 0) theme_idx = 6;
+    gtk_drop_down_set_selected(GTK_DROP_DOWN(theme_dropdown), theme_idx);
+    
+    g_signal_connect(theme_dropdown, "notify::selected", G_CALLBACK(on_theme_dropdown_changed), gui);
+    
+    gtk_box_append(GTK_BOX(theme_row), theme_label);
+    gtk_box_append(GTK_BOX(theme_row), theme_dropdown);
+    gtk_box_append(GTK_BOX(pop_box), theme_row);
 
     gtk_box_append(GTK_BOX(pop_box), gtk_separator_new(GTK_ORIENTATION_HORIZONTAL));
 
@@ -3756,51 +4560,22 @@ static void activate(GtkApplication *app, gpointer user_data) {
 
     gtk_box_append(GTK_BOX(pop_box), gtk_separator_new(GTK_ORIENTATION_HORIZONTAL));
 
-    /* ── KEYBOARD SHORTCUTS (inline table) ── */
+    /* ── KEYBOARD SHORTCUTS ── */
     GtkWidget *kb_lbl = gtk_label_new("KEYBOARD SHORTCUTS");
     gtk_widget_add_css_class(kb_lbl, "pop-section-label");
     gtk_widget_set_halign(kb_lbl, GTK_ALIGN_START);
     gtk_box_append(GTK_BOX(pop_box), kb_lbl);
 
-    /* Open full reference button */
-    GtkWidget *kb_open_btn = gtk_button_new_with_label("Open Full Reference  (Ctrl+?)");
+    GtkWidget *kb_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
+    GtkWidget *kb_lbl_widget = gtk_label_new("Keyboard Shortcuts");
+    gtk_widget_set_hexpand(kb_lbl_widget, TRUE);
+    gtk_widget_set_halign(kb_lbl_widget, GTK_ALIGN_START);
+    GtkWidget *kb_open_btn = gtk_button_new_with_label("Open Reference  (Ctrl+?)");
     gtk_widget_add_css_class(kb_open_btn, "pop-btn");
-    gtk_widget_set_halign(kb_open_btn, GTK_ALIGN_START);
     g_signal_connect_swapped(kb_open_btn, "clicked", G_CALLBACK(show_keybindings_window), gui);
-    gtk_box_append(GTK_BOX(pop_box), kb_open_btn);
-
-    /* Quick summary grid */
-    GtkWidget *kb_grid = gtk_grid_new();
-    gtk_grid_set_row_spacing(GTK_GRID(kb_grid), 4);
-    gtk_grid_set_column_spacing(GTK_GRID(kb_grid), 12);
-    gtk_box_append(GTK_BOX(pop_box), kb_grid);
-
-    struct { const char *key; const char *desc; } kb_rows[] = {
-        { "Ctrl+B",       "Bold"              },
-        { "Ctrl+I",       "Italic"            },
-        { "Ctrl+K",       "Inline Code"       },
-        { "Ctrl+H",       "Highlight"         },
-        { "Ctrl+⇧S",      "Strikethrough"     },
-        { "Ctrl+Q",       "Blockquote"        },
-        { "Ctrl+M",       "Math"              },
-        { "Ctrl+1…6",     "Heading H1–H6"     },
-        { "Ctrl+0",       "Body (no prefix)"  },
-        { "Ctrl+⇧L",      "Bullet List"       },
-        { "Ctrl+⇧O",      "Numbered List"     },
-        { "Ctrl+⇧T",      "Task Checkbox"     },
-        { "Ctrl+F",       "Search"            },
-        { "Ctrl+S",       "Force Save"        },
-    };
-    for (int i = 0; i < 14; i++) {
-        GtkWidget *k = gtk_label_new(kb_rows[i].key);
-        gtk_widget_add_css_class(k, "kb-key");
-        gtk_widget_set_halign(k, GTK_ALIGN_START);
-        GtkWidget *d = gtk_label_new(kb_rows[i].desc);
-        gtk_widget_add_css_class(d, "kb-desc");
-        gtk_widget_set_halign(d, GTK_ALIGN_START);
-        gtk_grid_attach(GTK_GRID(kb_grid), k, 0, i, 1, 1);
-        gtk_grid_attach(GTK_GRID(kb_grid), d, 1, i, 1, 1);
-    }
+    gtk_box_append(GTK_BOX(kb_row), kb_lbl_widget);
+    gtk_box_append(GTK_BOX(kb_row), kb_open_btn);
+    gtk_box_append(GTK_BOX(pop_box), kb_row);
 
     // Sync & Cloud Layout
     gtk_box_append(GTK_BOX(pop_box), gtk_separator_new(GTK_ORIENTATION_HORIZONTAL));
@@ -3887,6 +4662,165 @@ static void activate(GtkApplication *app, gpointer user_data) {
     gtk_widget_set_sensitive(gui->sync_now_btn, FALSE); // default disabled until connected
     g_signal_connect(gui->sync_now_btn, "clicked", G_CALLBACK(on_sync_now_clicked), gui);
     gtk_box_append(GTK_BOX(sync_card), gui->sync_now_btn);
+
+    // --- DROPBOX SYNC GROUP ---
+    gtk_box_append(GTK_BOX(pop_box), gtk_separator_new(GTK_ORIENTATION_HORIZONTAL));
+
+    GtkWidget *db_lbl = gtk_label_new("DROPBOX SYNC");
+    gtk_widget_add_css_class(db_lbl, "pop-section-label");
+    gtk_widget_set_halign(db_lbl, GTK_ALIGN_START);
+    gtk_box_append(GTK_BOX(pop_box), db_lbl);
+
+    // Grid for Dropbox credentials
+    GtkWidget *db_creds_grid = gtk_grid_new();
+    gtk_grid_set_row_spacing(GTK_GRID(db_creds_grid), 6);
+    gtk_grid_set_column_spacing(GTK_GRID(db_creds_grid), 10);
+    gtk_box_append(GTK_BOX(pop_box), db_creds_grid);
+
+    GtkWidget *db_cid_lbl = gtk_label_new("App Key");
+    gtk_widget_add_css_class(db_cid_lbl, "stats-label");
+    gtk_widget_set_halign(db_cid_lbl, GTK_ALIGN_START);
+    GtkWidget *db_cid_entry = gtk_entry_new();
+    gtk_widget_add_css_class(db_cid_entry, "pop-entry");
+    gtk_entry_set_placeholder_text(GTK_ENTRY(db_cid_entry), "Dropbox App Key");
+    gtk_widget_set_hexpand(db_cid_entry, TRUE);
+    gtk_grid_attach(GTK_GRID(db_creds_grid), db_cid_lbl, 0, 0, 1, 1);
+    gtk_grid_attach(GTK_GRID(db_creds_grid), db_cid_entry, 1, 0, 1, 1);
+    gui->dropbox_client_id_entry = db_cid_entry;
+
+    GtkWidget *db_sec_lbl = gtk_label_new("App Secret");
+    gtk_widget_add_css_class(db_sec_lbl, "stats-label");
+    gtk_widget_set_halign(db_sec_lbl, GTK_ALIGN_START);
+    GtkWidget *db_sec_entry = gtk_entry_new();
+    gtk_widget_add_css_class(db_sec_entry, "pop-entry");
+    gtk_entry_set_placeholder_text(GTK_ENTRY(db_sec_entry), "Dropbox App Secret");
+    gtk_widget_set_hexpand(db_sec_entry, TRUE);
+    gtk_grid_attach(GTK_GRID(db_creds_grid), db_sec_lbl, 0, 1, 1, 1);
+    gtk_grid_attach(GTK_GRID(db_creds_grid), db_sec_entry, 1, 1, 1, 1);
+    gui->dropbox_client_secret_entry = db_sec_entry;
+
+    GtkWidget *db_save_creds_btn = gtk_button_new_with_label("Save Credentials");
+    gtk_widget_add_css_class(db_save_creds_btn, "pop-btn");
+    gtk_grid_attach(GTK_GRID(db_creds_grid), db_save_creds_btn, 1, 2, 1, 1);
+    g_signal_connect(db_save_creds_btn, "clicked", G_CALLBACK(on_dropbox_save_credentials_clicked), gui);
+
+    // Dropbox Actions Box
+    GtkWidget *db_sync_card = gtk_box_new(GTK_ORIENTATION_VERTICAL, 8);
+    gtk_widget_add_css_class(db_sync_card, "sync-card");
+    gtk_box_append(GTK_BOX(pop_box), db_sync_card);
+
+    // Row 1: status & sync button
+    GtkWidget *db_status_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
+    GtkWidget *db_status_label_text = gtk_label_new("Dropbox:");
+    gtk_widget_add_css_class(db_status_label_text, "stats-label");
+    gui->dropbox_status_lbl = gtk_label_new("Disconnected");
+    gtk_widget_add_css_class(gui->dropbox_status_lbl, "stats-value");
+    gtk_widget_set_hexpand(gui->dropbox_status_lbl, TRUE);
+    gtk_widget_set_halign(gui->dropbox_status_lbl, GTK_ALIGN_START);
+
+    gui->dropbox_connect_btn = gtk_button_new_with_label("Connect Account");
+    gtk_widget_add_css_class(gui->dropbox_connect_btn, "pop-btn");
+    g_signal_connect(gui->dropbox_connect_btn, "clicked", G_CALLBACK(on_dropbox_connect_clicked), gui);
+
+    gtk_box_append(GTK_BOX(db_status_row), db_status_label_text);
+    gtk_box_append(GTK_BOX(db_status_row), gui->dropbox_status_lbl);
+    gtk_box_append(GTK_BOX(db_status_row), gui->dropbox_connect_btn);
+    gtk_box_append(GTK_BOX(db_sync_card), db_status_row);
+
+    // Row 2: Code Submission
+    gui->dropbox_code_box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+    gtk_widget_set_visible(gui->dropbox_code_box, FALSE);
+    gui->dropbox_code_entry = gtk_entry_new();
+    gtk_widget_add_css_class(gui->dropbox_code_entry, "pop-entry");
+    gtk_entry_set_placeholder_text(GTK_ENTRY(gui->dropbox_code_entry), "Paste Dropbox Authorization Code Here");
+    gtk_widget_set_hexpand(gui->dropbox_code_entry, TRUE);
+    gui->dropbox_submit_btn = gtk_button_new_with_label("Submit Code");
+    gtk_widget_add_css_class(gui->dropbox_submit_btn, "pop-btn");
+    g_signal_connect(gui->dropbox_submit_btn, "clicked", G_CALLBACK(on_dropbox_submit_clicked), gui);
+
+    gtk_box_append(GTK_BOX(gui->dropbox_code_box), gui->dropbox_code_entry);
+    gtk_box_append(GTK_BOX(gui->dropbox_code_box), gui->dropbox_submit_btn);
+    gtk_box_append(GTK_BOX(db_sync_card), gui->dropbox_code_box);
+
+    // Row 3: Sync now
+    gui->dropbox_now_btn = gtk_button_new_with_label("Sync Now");
+    gtk_widget_add_css_class(gui->dropbox_now_btn, "sync-now-btn");
+    gtk_widget_set_sensitive(gui->dropbox_now_btn, FALSE);
+    g_signal_connect(gui->dropbox_now_btn, "clicked", G_CALLBACK(on_dropbox_now_clicked), gui);
+    gtk_box_append(GTK_BOX(db_sync_card), gui->dropbox_now_btn);
+
+
+    // --- GITHUB SYNC GROUP ---
+    gtk_box_append(GTK_BOX(pop_box), gtk_separator_new(GTK_ORIENTATION_HORIZONTAL));
+
+    GtkWidget *gh_lbl = gtk_label_new("GITHUB SYNC");
+    gtk_widget_add_css_class(gh_lbl, "pop-section-label");
+    gtk_widget_set_halign(gh_lbl, GTK_ALIGN_START);
+    gtk_box_append(GTK_BOX(pop_box), gh_lbl);
+
+    // Grid for GitHub credentials
+    GtkWidget *gh_creds_grid = gtk_grid_new();
+    gtk_grid_set_row_spacing(GTK_GRID(gh_creds_grid), 6);
+    gtk_grid_set_column_spacing(GTK_GRID(gh_creds_grid), 10);
+    gtk_box_append(GTK_BOX(pop_box), gh_creds_grid);
+
+    GtkWidget *gh_tok_lbl = gtk_label_new("Personal Token");
+    gtk_widget_add_css_class(gh_tok_lbl, "stats-label");
+    gtk_widget_set_halign(gh_tok_lbl, GTK_ALIGN_START);
+    GtkWidget *gh_tok_entry = gtk_entry_new();
+    gtk_widget_add_css_class(gh_tok_entry, "pop-entry");
+    gtk_entry_set_placeholder_text(GTK_ENTRY(gh_tok_entry), "ghp_xxxxxxxxxxxxxxxxxxxx");
+    gtk_entry_set_visibility(GTK_ENTRY(gh_tok_entry), FALSE);
+    gtk_widget_set_hexpand(gh_tok_entry, TRUE);
+    gtk_grid_attach(GTK_GRID(gh_creds_grid), gh_tok_lbl, 0, 0, 1, 1);
+    gtk_grid_attach(GTK_GRID(gh_creds_grid), gh_tok_entry, 1, 0, 1, 1);
+    gui->github_token_entry = gh_tok_entry;
+
+    GtkWidget *gh_repo_lbl = gtk_label_new("Repository");
+    gtk_widget_add_css_class(gh_repo_lbl, "stats-label");
+    gtk_widget_set_halign(gh_repo_lbl, GTK_ALIGN_START);
+    GtkWidget *gh_repo_entry = gtk_entry_new();
+    gtk_widget_add_css_class(gh_repo_entry, "pop-entry");
+    gtk_entry_set_placeholder_text(GTK_ENTRY(gh_repo_entry), "username/notebook-repo");
+    gtk_widget_set_hexpand(gh_repo_entry, TRUE);
+    gtk_grid_attach(GTK_GRID(gh_creds_grid), gh_repo_lbl, 0, 1, 1, 1);
+    gtk_grid_attach(GTK_GRID(gh_creds_grid), gh_repo_entry, 1, 1, 1, 1);
+    gui->github_repo_entry = gh_repo_entry;
+
+    GtkWidget *gh_save_creds_btn = gtk_button_new_with_label("Save Credentials");
+    gtk_widget_add_css_class(gh_save_creds_btn, "pop-btn");
+    gtk_grid_attach(GTK_GRID(gh_creds_grid), gh_save_creds_btn, 1, 2, 1, 1);
+    g_signal_connect(gh_save_creds_btn, "clicked", G_CALLBACK(on_github_save_credentials_clicked), gui);
+
+    // GitHub Actions Box
+    GtkWidget *gh_sync_card = gtk_box_new(GTK_ORIENTATION_VERTICAL, 8);
+    gtk_widget_add_css_class(gh_sync_card, "sync-card");
+    gtk_box_append(GTK_BOX(pop_box), gh_sync_card);
+
+    // Row 1: status & sync button
+    GtkWidget *gh_status_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
+    GtkWidget *gh_status_label_text = gtk_label_new("GitHub:");
+    gtk_widget_add_css_class(gh_status_label_text, "stats-label");
+    gui->github_status_lbl = gtk_label_new("Disconnected");
+    gtk_widget_add_css_class(gui->github_status_lbl, "stats-value");
+    gtk_widget_set_hexpand(gui->github_status_lbl, TRUE);
+    gtk_widget_set_halign(gui->github_status_lbl, GTK_ALIGN_START);
+
+    gui->github_connect_btn = gtk_button_new_with_label("Connect Repo");
+    gtk_widget_add_css_class(gui->github_connect_btn, "pop-btn");
+    g_signal_connect(gui->github_connect_btn, "clicked", G_CALLBACK(on_github_connect_clicked), gui);
+
+    gtk_box_append(GTK_BOX(gh_status_row), gh_status_label_text);
+    gtk_box_append(GTK_BOX(gh_status_row), gui->github_status_lbl);
+    gtk_box_append(GTK_BOX(gh_status_row), gui->github_connect_btn);
+    gtk_box_append(GTK_BOX(gh_sync_card), gh_status_row);
+
+    // Row 2: Sync now
+    gui->github_now_btn = gtk_button_new_with_label("Sync Now");
+    gtk_widget_add_css_class(gui->github_now_btn, "sync-now-btn");
+    gtk_widget_set_sensitive(gui->github_now_btn, FALSE);
+    g_signal_connect(gui->github_now_btn, "clicked", G_CALLBACK(on_github_now_clicked), gui);
+    gtk_box_append(GTK_BOX(gh_sync_card), gui->github_now_btn);
 
     GtkWidget *pop_scroll = gtk_scrolled_window_new();
     gtk_scrolled_window_set_min_content_width(GTK_SCROLLED_WINDOW(pop_scroll), 340);
@@ -4004,6 +4938,12 @@ static void activate(GtkApplication *app, gpointer user_data) {
     load_sync_credentials(gui);
     int connected = zig_sync_check_status();
     gui_update_sync_status(connected, connected ? "Connected" : "Disconnected");
+
+    int db_connected = zig_dropbox_check_status();
+    gui_update_dropbox_status(db_connected, db_connected ? "Connected" : "Disconnected");
+
+    int gh_connected = zig_github_check_status();
+    gui_update_github_status(gh_connected, gh_connected ? "Connected" : "Disconnected");
 }
 
 /* ============================================================
@@ -4035,6 +4975,9 @@ void gui_index_all_files(void) {
     sqlite3_exec(db, "CREATE VIRTUAL TABLE IF NOT EXISTS file_content_fts USING fts5(content, filepath UNINDEXED);", NULL, NULL, NULL);
     sqlite3_exec(db, "CREATE TABLE IF NOT EXISTS sync_tokens (id INTEGER PRIMARY KEY CHECK (id = 1), client_id TEXT NOT NULL, client_secret TEXT NOT NULL, access_token TEXT, refresh_token TEXT, expiry_time INTEGER DEFAULT 0);", NULL, NULL, NULL);
     sqlite3_exec(db, "INSERT OR IGNORE INTO sync_tokens (id, client_id, client_secret) VALUES (1, '100982736451-example.apps.googleusercontent.com', 'GOCSPX-examplesecret');", NULL, NULL, NULL);
+
+    sqlite3_exec(db, "CREATE TABLE IF NOT EXISTS dropbox_sync_tokens (id INTEGER PRIMARY KEY CHECK (id = 1), client_id TEXT NOT NULL, client_secret TEXT NOT NULL, access_token TEXT, refresh_token TEXT, expiry_time INTEGER DEFAULT 0);", NULL, NULL, NULL);
+    sqlite3_exec(db, "CREATE TABLE IF NOT EXISTS github_sync_tokens (id INTEGER PRIMARY KEY CHECK (id = 1), personal_token TEXT NOT NULL, repo_name TEXT NOT NULL, access_token TEXT, expiry_time INTEGER DEFAULT 0);", NULL, NULL, NULL);
 
     sqlite3_stmt *stmt_cnt = NULL;
     int fts_count = 0;
@@ -4389,7 +5332,19 @@ void gui_set_cursor_position(int line, int col) {
     int rel_line = target_abs_line - global_gui->active_page_start_line;
     if (rel_line < 0) rel_line = 0;
     
-    gtk_text_buffer_get_iter_at_line_offset(buf, &iter, rel_line, col);
+    int total_lines = gtk_text_buffer_get_line_count(buf);
+    if (rel_line >= total_lines) {
+        rel_line = total_lines - 1;
+    }
+    if (rel_line < 0) rel_line = 0;
+
+    gtk_text_buffer_get_iter_at_line(buf, &iter, rel_line);
+    for (int i = 0; i < col; i++) {
+        if (gtk_text_iter_ends_line(&iter) || gtk_text_iter_is_end(&iter)) {
+            break;
+        }
+        gtk_text_iter_forward_char(&iter);
+    }
     gtk_text_buffer_select_range(buf, &iter, &iter);
 }
 
@@ -4448,7 +5403,7 @@ void gui_trigger_autosave(void) {
 
 static void refresh_explorer_idle_cb(void *user_data) {
     (void)user_data;
-    if (global_gui && global_gui->explorer_listbox && GTK_IS_LIST_BOX(global_gui->explorer_listbox)) {
+    if (global_gui && global_gui->explorer_listbox && GTK_IS_BOX(global_gui->explorer_listbox)) {
         populate_explorer(global_gui);
     }
 }
@@ -4553,6 +5508,102 @@ void gui_update_sync_status(int connected, const char *status_text) {
     up->connected = connected;
     up->status_text = g_strdup(status_text);
     gui_run_on_main_thread(update_sync_status_callback, up);
+}
+
+static void update_dropbox_status_callback(void *user_data) {
+    SyncStatusUpdate *up = (SyncStatusUpdate *)user_data;
+    if (global_gui) {
+        if (global_gui->dropbox_status_lbl) {
+            gtk_label_set_text(GTK_LABEL(global_gui->dropbox_status_lbl), up->status_text);
+        }
+        
+        if (up->connected == 2) {
+            if (global_gui->dropbox_code_box) {
+                gtk_widget_set_visible(global_gui->dropbox_code_box, TRUE);
+            }
+            if (global_gui->dropbox_now_btn) {
+                gtk_widget_set_sensitive(global_gui->dropbox_now_btn, FALSE);
+            }
+        } else {
+            if (global_gui->dropbox_code_box) {
+                gtk_widget_set_visible(global_gui->dropbox_code_box, FALSE);
+            }
+            if (up->connected == 1) {
+                if (global_gui->dropbox_connect_btn) {
+                    gtk_button_set_label(GTK_BUTTON(global_gui->dropbox_connect_btn), "Disconnect");
+                }
+                if (global_gui->dropbox_now_btn) {
+                    gtk_widget_set_sensitive(global_gui->dropbox_now_btn, TRUE);
+                }
+            } else {
+                if (global_gui->dropbox_connect_btn) {
+                    gtk_button_set_label(GTK_BUTTON(global_gui->dropbox_connect_btn), "Connect Account");
+                }
+                if (global_gui->dropbox_now_btn) {
+                    gtk_widget_set_sensitive(global_gui->dropbox_now_btn, FALSE);
+                }
+            }
+        }
+
+        if (strcmp(up->status_text, "Syncing...") == 0) {
+            gui_set_sync_status("Saving...");
+        } else if (strcmp(up->status_text, "Synced ✓") == 0 || strcmp(up->status_text, "Connected") == 0) {
+            gui_set_sync_status("Synced");
+        } else if (strcmp(up->status_text, "Sync Failed") == 0 || strcmp(up->status_text, "Disconnected") == 0) {
+            gui_set_sync_status("Not Synced");
+        }
+    }
+    g_free(up->status_text);
+    g_free(up);
+}
+
+void gui_update_dropbox_status(int connected, const char *status_text) {
+    SyncStatusUpdate *up = g_new0(SyncStatusUpdate, 1);
+    up->connected = connected;
+    up->status_text = g_strdup(status_text);
+    gui_run_on_main_thread(update_dropbox_status_callback, up);
+}
+
+static void update_github_status_callback(void *user_data) {
+    SyncStatusUpdate *up = (SyncStatusUpdate *)user_data;
+    if (global_gui) {
+        if (global_gui->github_status_lbl) {
+            gtk_label_set_text(GTK_LABEL(global_gui->github_status_lbl), up->status_text);
+        }
+        
+        if (up->connected == 1) {
+            if (global_gui->github_connect_btn) {
+                gtk_button_set_label(GTK_BUTTON(global_gui->github_connect_btn), "Disconnect");
+            }
+            if (global_gui->github_now_btn) {
+                gtk_widget_set_sensitive(global_gui->github_now_btn, TRUE);
+            }
+        } else {
+            if (global_gui->github_connect_btn) {
+                gtk_button_set_label(GTK_BUTTON(global_gui->github_connect_btn), "Connect Repo");
+            }
+            if (global_gui->github_now_btn) {
+                gtk_widget_set_sensitive(global_gui->github_now_btn, FALSE);
+            }
+        }
+
+        if (strcmp(up->status_text, "Syncing...") == 0) {
+            gui_set_sync_status("Saving...");
+        } else if (strcmp(up->status_text, "Synced ✓") == 0 || strcmp(up->status_text, "Connected") == 0) {
+            gui_set_sync_status("Synced");
+        } else if (strcmp(up->status_text, "Sync Failed") == 0 || strcmp(up->status_text, "Disconnected") == 0) {
+            gui_set_sync_status("Not Synced");
+        }
+    }
+    g_free(up->status_text);
+    g_free(up);
+}
+
+void gui_update_github_status(int connected, const char *status_text) {
+    SyncStatusUpdate *up = g_new0(SyncStatusUpdate, 1);
+    up->connected = connected;
+    up->status_text = g_strdup(status_text);
+    gui_run_on_main_thread(update_github_status_callback, up);
 }
 
 void gui_show_editor(void) {

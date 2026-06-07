@@ -2,7 +2,7 @@ const std = @import("std");
 const Io = std.Io;
 const sync = @import("sync.zig");
 
-const DB_PATH = "/home/.config/qirtas/vault.db";
+const DB_PATH = "/home/.config/lawh/vault.db";
 
 comptime {
     std.testing.refAllDecls(sync);
@@ -64,7 +64,7 @@ pub fn main(init: std.process.Init) !void {
     // Ensure the config directory exists
     _ = c.mkdir("/home", 0o755);
     _ = c.mkdir("/home/.config", 0o755);
-    _ = c.mkdir("/home/.config/qirtas", 0o755);
+    _ = c.mkdir("/home/.config/lawh", 0o755);
 
     global_io = init.io;
     line_offsets = .empty;
