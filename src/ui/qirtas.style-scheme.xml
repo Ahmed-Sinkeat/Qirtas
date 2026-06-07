@@ -34,6 +34,7 @@
   <style name="def:list-marker"         foreground="ink-muted"/>
   <style name="def:shebang"             foreground="ink-faint"   italic="true"/>
   <style name="def:special-char"        foreground="ink"/>
+  <style name="def:note"                foreground="ink"            bold="true"/>
 
   <!-- ── Headings by level ── -->
   <style name="qirtas_markdown:h1"         foreground="ink"    bold="true" weight="bold" scale="1.5"/>

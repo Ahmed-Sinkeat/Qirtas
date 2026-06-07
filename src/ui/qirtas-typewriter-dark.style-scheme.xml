@@ -36,6 +36,7 @@
   <style name="def:list-marker"         foreground="red"/>
   <style name="def:shebang"             foreground="text-muted"   italic="true"/>
   <style name="def:special-char"        foreground="red"/>
+  <style name="def:note"                foreground="red"            bold="true"/>
 
   <!-- ── Headings by level ── -->
   <style name="qirtas_markdown:h1"         foreground="red"    bold="true" weight="bold" scale="1.5"/>
@@ -68,6 +69,12 @@
 
   <!-- ── Compatibility aliases ── -->
   <style name="markdown:header"           foreground="red"   bold="true"/>
+  <style name="markdown:h1"              foreground="red"    bold="true"  scale="1.5"/>
+  <style name="markdown:h2"              foreground="text"   bold="true"  scale="1.3"/>
+  <style name="markdown:h3"              foreground="text"   bold="true"/>
+  <style name="markdown:h4"              foreground="text"   bold="true"/>
+  <style name="markdown:h5"              foreground="text"   bold="true"/>
+  <style name="markdown:h6"              foreground="text"   bold="true"/>
   <style name="markdown:bold"            foreground="text"  bold="true"/>
   <style name="markdown:italic"          foreground="red"   italic="true"/>
   <style name="markdown:strikethrough"   strikethrough="true" foreground="text-muted"/>
