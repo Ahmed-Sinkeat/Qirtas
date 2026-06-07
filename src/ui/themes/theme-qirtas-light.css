@@ -1,0 +1,40 @@
+/* ============================================================
+ *  Qirtas — "Ink" Theme
+ *  theme-ink.css
+ *  
+ *  Inspired by image_0.png (Paper & Ink contrast).
+ * ============================================================ */
+
+@import url('theme-things.css'); /* Import the base structure */
+
+/* override the variable tokens */
+:root {
+  /* Font Family - Keeping the Monospace feels right for a pen theme */
+  --font-family: 'JetBrains Mono', 'Fira Mono', 'DejaVu Sans Mono', monospace;
+
+  /* --- Global Colors --- */
+  --bg-window: #fcfcfc; /* Paper White */
+  --bg-sidebar: #f5f5f5; /* Sightly cooler paper for sidebar */
+  --bg-card: #f8f8f8; /* Very light gray for editor area/cards */
+  --bg-hover: #eaeaea; /* Light gray for hover states */
+  --bg-active: #dfdfdf; /* A slightly darker paper tone for active */
+  --border: #dcdcdc; /* Subtle light gray border */
+  --border-focus: #111111; /* Sharp black border for focus */
+  --accent: #111111; /* Ink Black for accent (buttons, icons) */
+  --accent-light: #555555; /* Lighter ink for minor accents */
+
+  /* --- Text Colors --- */
+  --text-primary: #111111; /* Deep Ink Black */
+  --text-muted: #666666; /* Grayed Ink for subtext */
+  --text-dim: #999999; /* Faded Ink for hints */
+  --cyan: #555555; /* Secondary accent (muted ink) */
+
+  /* --- Icons & Status --- */
+  --folder-icon: #111111; /* Ink-colored folder */
+  --file-icon: #555555; /* Faded-ink-colored file */
+  --md-icon: #333333; /* Slightly warmer file icon */
+
+  --status-saved: #111111; /* Solid Ink (Saved) */
+  --status-saving: #777777; /* Faded Gray Ink (Saving) */
+  --status-failed: #d00000; /* Subtle Red alert for failure (like a correction) */
+}

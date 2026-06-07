@@ -31,21 +31,18 @@ textview selection, textview.sourceview selection {
 gutterview, gutter {
     background-color: transparent;
     background: transparent;
-    padding-left: 6px;
-    padding-right: 6px;
-    color: #4a4a4a;
+    padding-left: 2px;
+    padding-right: 4px;
     font-family: "JetBrains Mono", "Fira Mono", "DejaVu Sans Mono", monospace;
-    font-size: 10pt;
+    font-size: 8.5pt;
 }
 
 gutterview > line, gutter > line {
-    color: #4a4a4a;
     background-color: transparent;
 }
 
 /* Active current line number styling */
 gutterview > line.current-line-number, gutter > line.current-line-number {
-    color: #00e5ff;
     font-weight: bold;
     font-size: 10pt;
 }
@@ -53,8 +50,6 @@ gutterview > line.current-line-number, gutter > line.current-line-number {
 /* 4. Popover Menu Custom styling */
 popover > contents {
     border-radius: 12px;
-    border: 1px solid #1e2025;
-    background-color: #111318;
     box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
     padding: 10px;
 }
@@ -63,23 +58,24 @@ popover > contents {
 .pop-btn {
     border-radius: 6px;
     padding: 6px 12px;
-    background-color: transparent;
-    border: none;
-    color: #c5c6ca;
+    background-color: var(--bg-card);
+    border: 1px solid var(--border);
+    color: var(--text-dim);
     text-shadow: none;
     box-shadow: none;
-    transition: background 120ms, color 120ms;
+    transition: background 120ms, color 120ms, border-color 120ms;
 }
 
 .pop-btn:hover {
-    background-color: #1e2025;
-    color: #00e5ff;
+    background-color: var(--bg-hover);
+    border-color: var(--accent);
+    color: var(--accent-light);
 }
 
 .pop-section-label {
     font-size: 10px;
     font-weight: 700;
-    color: #6b6e7a;
+    color: var(--text-muted);
     letter-spacing: 0.1em;
     margin-bottom: 4px;
 }

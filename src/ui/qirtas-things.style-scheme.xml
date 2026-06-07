@@ -1,0 +1,90 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<style-scheme id="qirtas-things" _name="Qirtas Things" version="1.0">
+  <author>Qirtas Team</author>
+  <description>Things style scheme for Qirtas Markdown Editor</description>
+
+  <!-- ── Palette ── -->
+  <color name="blue"       value="#2e80f2"/>
+  <color name="blue-light" value="#5b9cf6"/>
+  <color name="pink"       value="#ff82b2"/>
+  <color name="green"      value="#3eb4bf"/>
+  <color name="yellow"     value="#e5b567"/>
+  <color name="bg"         value="#1c2127"/>
+  <color name="bg-line"    value="#282c34"/>
+  <color name="text"       value="#dadada"/>
+  <color name="text-dim"   value="#bababa"/>
+  <color name="text-muted" value="#999999"/>
+  <color name="text-faint" value="#555555"/>
+
+  <!-- ── Editor base ── -->
+  <style name="text"               foreground="text"     background="bg"/>
+  <style name="selection"          background="#2c313c"/>
+  <style name="current-line"       background="bg-line"/>
+  <style name="line-numbers"       foreground="text-faint"      background="bg"/>
+  <style name="current-line-number" foreground="blue-light"     bold="true"/>
+  <style name="search-match"       background="blue-light" foreground="bg"/>
+  <style name="bracket-match"      foreground="pink"    bold="true"/>
+
+  <!-- ── def: base styles ── -->
+  <style name="def:heading"              foreground="blue-light"   bold="true"/>
+  <style name="def:emphasis"             italic="true"/>
+  <style name="def:strong-emphasis"      foreground="pink"  bold="true"/>
+  <style name="def:inline-code"          foreground="green"/>
+  <style name="def:preformatted-section" foreground="green"/>
+  <style name="def:comment"             foreground="text-muted" italic="true"/>
+  <style name="def:string"              foreground="green"/>
+  <style name="def:net-address"         foreground="blue"   underline="true"/>
+  <style name="def:link-destination"    foreground="blue"   underline="true"/>
+  <style name="def:link-text"           foreground="blue-light"/>
+  <style name="def:list-marker"         foreground="blue"/>
+  <style name="def:note"                foreground="yellow"/>
+  <style name="def:shebang"             foreground="text-muted"   italic="true"/>
+  <style name="def:special-char"        foreground="pink"/>
+
+  <!-- ── Headings by level ── -->
+  <style name="qirtas_markdown:h1"         foreground="blue"    bold="true" weight="bold" scale="1.8"/>
+  <style name="qirtas_markdown:h2"         foreground="blue-light"    bold="true" weight="bold" scale="1.5"/>
+  <style name="qirtas_markdown:h3"         foreground="green"    bold="true" weight="bold" scale="1.3"/>
+  <style name="qirtas_markdown:h4"         foreground="yellow"    bold="true" weight="bold" scale="1.15"/>
+  <style name="qirtas_markdown:h5"         foreground="pink"    bold="true" weight="bold" scale="1.0"/>
+  <style name="qirtas_markdown:h6"         foreground="text-dim"    bold="true" weight="bold" scale="0.85"/>
+
+  <!-- ── Inline formatting ── -->
+  <style name="qirtas_markdown:bold"        foreground="pink"  bold="true" weight="bold"/>
+  <style name="qirtas_markdown:italic"      foreground="text-dim" italic="true"/>
+  <style name="qirtas_markdown:bold-italic" foreground="pink"  bold="true" weight="bold" italic="true"/>
+  <style name="qirtas_markdown:strikethrough" strikethrough="true" foreground="text-muted"/>
+  <style name="qirtas_markdown:inline-code" foreground="green"   background="#2c313c"/>
+
+  <!-- ── Block elements ── -->
+  <style name="qirtas_markdown:blockquote"  foreground="text-dim"   italic="true"/>
+  <style name="qirtas_markdown:list-marker" foreground="blue"/>
+
+  <!-- ── Links ── -->
+  <style name="qirtas_markdown:link-text"   foreground="blue-light"/>
+  <style name="qirtas_markdown:url"         foreground="blue"   underline="true" italic="true"/>
+  <style name="qirtas_markdown:wiki-link"   foreground="blue-light" underline="true"/>
+
+  <!-- ── Special ── -->
+  <style name="qirtas_markdown:highlight"   background="yellow" foreground="bg"/>
+  <style name="qirtas_markdown:math"        foreground="green"/>
+  <style name="qirtas_markdown:comment"     foreground="text-muted" italic="true"/>
+
+  <!-- ── Compatibility aliases ── -->
+  <style name="markdown:header"           foreground="blue"   bold="true"/>
+  <style name="markdown:h1"              foreground="blue"    bold="true"  scale="1.5"/>
+  <style name="markdown:h2"              foreground="blue-light"    bold="true"  scale="1.3"/>
+  <style name="markdown:h3"              foreground="green"    bold="true"/>
+  <style name="markdown:h4"              foreground="yellow"    bold="true"/>
+  <style name="markdown:h5"              foreground="pink"    bold="true"/>
+  <style name="markdown:h6"              foreground="text-dim"    bold="true"/>
+  <style name="markdown:bold"            foreground="pink"  bold="true"/>
+  <style name="markdown:italic"          italic="true"/>
+  <style name="markdown:strikethrough"   strikethrough="true" foreground="text-muted"/>
+  <style name="markdown:inline-code"     foreground="green"/>
+  <style name="markdown:code"            foreground="green"   background="#2c313c"/>
+  <style name="markdown:link-text"       foreground="blue-light"/>
+  <style name="markdown:url"             foreground="blue"   underline="true"/>
+  <style name="markdown:blockquote-line" foreground="text-dim"   italic="true"/>
+  <style name="markdown:list-marker"     foreground="blue"/>
+</style-scheme>

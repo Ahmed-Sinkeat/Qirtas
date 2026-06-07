@@ -1,0 +1,30 @@
+/* ============================================================
+ *  Qirtas — Typewriter Light Theme
+ *  theme-typewriter-light.css
+ * ============================================================ */
+
+
+:root {
+  --font-family: 'Courier New', 'Courier', 'JetBrains Mono', monospace;
+  --bg-window: #fbf8f3;
+  --bg-sidebar: #f3eee3;
+  --bg-card: #eae4d5;
+  --bg-hover: #eae4d5;
+  --bg-active: #eae4d5;
+  --border: #dcd4b9;
+  --border-focus: #b82e2e;
+  --accent: #b82e2e;
+  --accent-light: #b82e2e;
+  --text-primary: #2c2c2c;
+  --text-muted: #777777;
+  --text-dim: #444444;
+  --cyan: #2c2c2c;
+
+  --folder-icon: #2b2b2b;
+  --file-icon: #777777;
+  --md-icon: #b82e2e;
+
+  --status-saved: #2e7d32;
+  --status-saving: #b82e2e;
+  --status-failed: #c62828;
+}

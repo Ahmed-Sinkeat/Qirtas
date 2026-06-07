@@ -1,0 +1,30 @@
+/* ============================================================
+ *  Qirtas — Classic Sepia (Light) Theme
+ *  theme-sepia.css
+ * ============================================================ */
+
+
+:root {
+  --font-family: 'JetBrains Mono', 'Fira Mono', 'DejaVu Sans Mono', monospace;
+  --bg-window: #fdf6e3;
+  --bg-sidebar: #eee8d5;
+  --bg-card: #fdf6e3;
+  --bg-hover: #e4dbbe;
+  --bg-active: #e4dbbe;
+  --border: #d3c7a9;
+  --border-focus: #a42e79;
+  --accent: #a42e79;
+  --accent-light: #a42e79;
+  --text-primary: #073642;
+  --text-muted: #586e75;
+  --text-dim: #586e75;
+  --cyan: #268bd2;
+
+  --folder-icon: #268bd2;
+  --file-icon: #586e75;
+  --md-icon: #a42e79;
+
+  --status-saved: #859900;
+  --status-saving: #268bd2;
+  --status-failed: #dc322f;
+}

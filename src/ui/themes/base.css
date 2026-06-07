@@ -1,0 +1,496 @@
+/* ============================================================
+ *  Qirtas — Base Layout and Stylesheet
+ *  base.css
+ * ============================================================ */
+
+/* ── Global ── */
+* {
+  font-family: var(--font-family, 'JetBrains Mono', 'Fira Mono', 'DejaVu Sans Mono', monospace);
+}
+
+window {
+  background-color: var(--bg-window);
+}
+
+/* ── Sidebar ── */
+.sidebar {
+  background-color: var(--bg-sidebar);
+  border-right: 1px solid var(--border);
+  min-width: 280px;
+  padding: 16px 12px;
+}
+
+/* ── Logo / Brand Button ── */
+.logo-btn {
+  background-color: var(--bg-active);
+  color: var(--accent-light);
+  font-weight: 700;
+  font-size: 14px;
+  border-radius: 8px;
+  padding: 4px 12px;
+  margin: 0 4px;
+}
+
+/* ── Navigation Buttons ── */
+.nav-btn {
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  border-radius: 10px;
+  padding: 10px;
+  margin: 2px 8px;
+  color: var(--text-muted);
+  transition: background 180ms, color 180ms;
+}
+.nav-btn:hover {
+  background-color: var(--bg-hover);
+  color: var(--text-dim);
+}
+.nav-btn image {
+  -gtk-icon-size: 18px;
+  color: inherit;
+}
+.nav-btn.active {
+  background-color: var(--bg-active);
+  color: var(--accent-light);
+  border-left: 2px solid var(--accent);
+}
+
+/* ── Workspace ── */
+.workspace {
+  background-color: var(--bg-window);
+}
+
+/* ── Pills (status indicators) ── */
+.pill {
+  font-size: 11px;
+  font-weight: 500;
+  padding: 4px 14px;
+  border-radius: 9999px;
+  background-color: var(--bg-hover);
+  color: var(--text-dim);
+}
+.pill-time   { color: var(--cyan, var(--text-primary)); }
+.status-saved  { color: var(--status-saved); }
+.status-saving { color: var(--status-saving); }
+.status-failed { color: var(--status-failed); }
+
+/* ── Path label ── */
+.path-label {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+/* ── In-file Search Bar ── */
+.search-bar-box {
+  background-color: var(--bg-sidebar);
+  border-top: 1px solid var(--border);
+  padding: 6px 16px;
+}
+entry.search-entry {
+  background-color: var(--bg-card);
+  color: var(--text-primary);
+  border: 1px solid var(--bg-active);
+  border-radius: 8px;
+  padding: 4px 12px;
+  font-size: 13px;
+  min-width: 260px;
+  box-shadow: none;
+}
+entry.search-entry:focus {
+  border-color: var(--border-focus);
+  box-shadow: none;
+}
+.search-match-label {
+  color: var(--text-muted);
+  font-size: 11px;
+  margin: 0 8px;
+}
+.search-nav-btn {
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  border-radius: 6px;
+  padding: 4px 8px;
+  color: var(--text-dim);
+}
+.search-nav-btn:hover {
+  background-color: var(--bg-hover);
+  color: var(--accent-light);
+}
+
+/* ── Editor / Source View ── */
+textview,
+textview.source-view {
+  background-color: var(--bg-window);
+}
+textview text {
+  color: var(--text-primary);
+  caret-color: var(--accent);
+}
+textview selection, textview.sourceview selection {
+  background-color: var(--bg-active);
+  color: var(--accent-light);
+}
+
+/* ── Scrolled Windows ── */
+scrolledwindow {
+  border: none;
+  box-shadow: none;
+  background-color: var(--bg-window);
+}
+.editor-scroll {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+/* ── File Explorer (old card view) ── */
+.explorer-header { padding: 24px 28px 12px 28px; }
+.explorer-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--accent-light);
+}
+.explorer-badge {
+  font-size: 10px;
+  font-weight: 500;
+  padding: 2px 10px;
+  border-radius: 9999px;
+  background-color: var(--bg-hover);
+  color: var(--text-muted);
+}
+.explorer-card {
+  background-color: var(--bg-card);
+  border: 1px solid var(--bg-active);
+  border-radius: 10px;
+  padding: 14px 16px;
+  min-width: 180px;
+  transition: background 150ms, border-color 150ms;
+}
+.explorer-card:hover {
+  background-color: var(--bg-hover);
+  border-color: var(--accent);
+}
+.icon-folder  { color: var(--folder-icon); }
+.icon-file-md { color: var(--md-icon); }
+.icon-file    { color: var(--file-icon); }
+.card-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.card-meta {
+  font-size: 10px;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+/* ── Stats Page ── */
+.stats-card {
+  background-color: var(--bg-sidebar);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 32px;
+  min-width: 420px;
+}
+.stats-title {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  color: var(--accent);
+  margin-bottom: 20px;
+}
+.stats-label { font-size: 12px; font-weight: 600; color: var(--text-muted); }
+.stats-value { font-size: 12px; font-weight: 500; color: var(--cyan); }
+
+/* ── Header Bar ── */
+headerbar {
+  background-color: var(--bg-sidebar);
+  border-bottom: 1px solid var(--border);
+  box-shadow: none;
+  min-height: 46px;
+}
+
+/* ── Popover ── */
+popover > contents {
+  background-color: var(--bg-card);
+  border: 1px solid var(--bg-active);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+.pop-section-label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  color: var(--text-muted);
+}
+.pop-btn {
+  background-color: var(--bg-card);
+  border: 1px solid var(--bg-active);
+  border-radius: 8px;
+  color: var(--text-dim);
+  font-size: 12px;
+  padding: 6px 14px;
+}
+.pop-btn:hover {
+  background-color: var(--bg-active);
+  color: var(--accent-light);
+  border-color: var(--accent);
+}
+
+/* ── Scrollbar ── */
+scrollbar {
+  background-color: transparent;
+  border: none;
+}
+scrollbar slider {
+  background-color: var(--bg-active);
+  border-radius: 9999px;
+  min-width: 4px;
+  min-height: 4px;
+}
+scrollbar slider:hover { background-color: var(--accent); }
+
+/* ── Bottom Bar ── */
+.bottom-bar {
+  background-color: var(--bg-sidebar);
+  border-top: 1px solid var(--border);
+  padding: 6px 16px;
+}
+.bottom-bar-lbl { color: var(--text-muted); font-size: 11px; }
+.status-dot     { font-size: 14px; }
+.bottom-path {
+  color: var(--cyan);
+  font-size: 11px;
+  font-weight: 600;
+  margin-left: 6px;
+}
+
+/* ── Sync Cards ── */
+.sync-card {
+  background-color: var(--bg-window);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px;
+}
+.pop-entry {
+  background-color: var(--bg-card);
+  border: 1px solid var(--bg-active);
+  border-radius: 6px;
+  color: var(--text-primary);
+  padding: 4px 8px;
+}
+.sync-now-btn {
+  background-color: var(--bg-card);
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  color: var(--accent-light);
+  font-size: 12px;
+  padding: 6px 14px;
+  font-weight: bold;
+}
+.sync-now-btn:hover {
+  background-color: var(--accent);
+  color: var(--bg-sidebar);
+}
+
+/* ── Keybindings Dialog ── */
+.kb-dialog   { background-color: var(--bg-window); border-radius: 14px; }
+.kb-section-label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  color: var(--accent);
+  margin-top: 10px;
+}
+.kb-key {
+  background-color: var(--bg-hover);
+  border: 1px solid var(--bg-active);
+  border-radius: 5px;
+  color: var(--cyan);
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 8px;
+  min-width: 120px;
+}
+.kb-desc { color: var(--text-dim); font-size: 12px; padding-left: 8px; }
+
+/* ── Add-Action / New Note Button ── */
+.add-action-btn {
+  background-color: var(--bg-active);
+  color: var(--accent-light);
+  font-weight: 700;
+  border: 1px solid var(--bg-active);
+  border-radius: 8px;
+  padding: 8px 16px;
+}
+.add-action-btn:hover {
+  background-color: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+/* ── Bottom Toggle / Icon Buttons ── */
+.bottom-toggle-btn {
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  padding: 2px 6px;
+  color: var(--text-muted);
+}
+.bottom-toggle-btn:hover { color: var(--accent); }
+
+.bottom-icon-btn {
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  border-radius: 6px;
+  padding: 3px 6px;
+  color: var(--text-muted);
+  transition: background 150ms, color 150ms;
+}
+.bottom-icon-btn:hover  { background-color: var(--bg-hover); color: var(--accent-light); }
+.bottom-icon-btn.active { background-color: var(--bg-active); color: var(--accent); }
+.bottom-icon-btn image  { -gtk-icon-size: 14px; color: inherit; }
+
+/* ── GtkListBox reset ── */
+list { background-color: transparent; border: none; box-shadow: none; }
+row  { background-color: transparent; border: none; box-shadow: none; padding: 0; margin: 0; }
+row:hover    { background-color: transparent; border: none; box-shadow: none; }
+row:selected { background-color: transparent; border: none; box-shadow: none; }
+
+/* ── File Tree Explorer (Obsidian-style) ── */
+.tree-container { background: transparent; }
+
+.tree-row {
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  border-radius: 5px;
+  padding: 0px 4px;
+  min-height: 26px;
+  transition: background 120ms;
+}
+.tree-row:hover  { background-color: var(--bg-hover); }
+.tree-row.active {
+  background-color: var(--bg-active);
+  border-left: 2px solid var(--accent);
+}
+
+.tree-row-label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-primary);
+  padding-left: 4px;
+}
+.tree-row-dir .tree-row-label {
+  color: var(--text-dim);
+  font-weight: 600;
+}
+
+.tree-arrow        { font-size: 10px; color: var(--text-muted); min-width: 14px; }
+.tree-icon         { -gtk-icon-size: 14px; color: var(--text-muted); }
+.tree-icon-folder  { -gtk-icon-size: 14px; color: var(--folder-icon); }
+.tree-icon-md      { -gtk-icon-size: 14px; color: var(--md-icon); }
+
+.tree-children {
+  border-left: 1px solid var(--border);
+  margin-left: 10px;
+}
+
+/* ── Global Layout Fonts and Widget Theme Colors ── */
+label {
+  color: var(--text-primary);
+}
+
+window, dialog {
+  background-color: var(--bg-window);
+  color: var(--text-primary);
+}
+
+/* Dropdown (GtkDropDown) styling */
+dropdown > button {
+  background-color: var(--bg-card);
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 5px 12px;
+}
+
+dropdown > button:hover {
+  background-color: var(--bg-hover);
+  border-color: var(--accent);
+}
+
+dropdown > popover {
+  background-color: var(--bg-card);
+  border: 1px solid var(--border);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+dropdown > popover listview row {
+  padding: 6px 12px;
+  color: var(--text-primary);
+}
+
+dropdown > popover listview row:hover {
+  background-color: var(--bg-hover);
+  color: var(--accent-light);
+}
+
+dropdown > popover listview row:selected {
+  background-color: var(--bg-active);
+  color: var(--accent-light);
+}
+
+/* Spinbutton (GtkSpinButton) styling */
+spinbutton {
+  background-color: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text-primary);
+}
+
+spinbutton entry {
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  color: var(--text-primary);
+}
+
+spinbutton button {
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+}
+
+spinbutton button:hover {
+  color: var(--accent);
+}
+
+/* Checkbutton (GtkCheckButton) styling */
+checkbutton {
+  color: var(--text-primary);
+}
+
+checkbutton > check {
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  min-width: 14px;
+  min-height: 14px;
+  background-color: var(--bg-card);
+}
+
+checkbutton:checked > check {
+  background-color: var(--accent);
+  border-color: var(--accent);
+  color: var(--bg-window);
+}
+
+checkbutton:hover > check {
+  border-color: var(--accent);
+}
+
+/* Separator styling */
+separator {
+  background-color: var(--border);
+  min-height: 1px;
+}

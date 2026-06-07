@@ -105,6 +105,7 @@ typedef struct {
     GtkWidget *bottom_spacer;
     GtkAdjustment *vadjustment;
     gboolean in_scroll_update;
+    gboolean mouse_dragging;
     double last_v_offset;
     int total_virtual_lines;
     int active_page_start_line;
@@ -127,6 +128,17 @@ typedef struct {
     } trail[24];
     int trail_len;
     gboolean trail_needs_clear;
+
+    /* Layout Preferences */
+    GtkWidget *main_vertical_box;
+    GtkWidget *sidebar_editor_box;
+    GtkWidget *bottom_bar_widget;
+
+    /* Vault System */
+    GtkWidget *vault_path_lbl_val;
+
+    /* Cursor Trail */
+    gboolean enable_cursor_trail;
 } AppGui;
 
 /* ====
@@ -141,25 +153,37 @@ static GtkWidget *global_path_label  = NULL;
 static GtkWidget *global_time_label  = NULL;
 
 static int seconds_elapsed = 0;
+static void *global_add_popover_widgets = NULL;
 
 extern void zig_on_gui_ready(void);
 extern void zig_open_file(const char *filename);
+extern void zig_open_vault(const char *dir_path);
 extern void zig_search_workspace(const char *query);
 extern const char *zig_get_search_snippet(const char *filepath);
 extern int zig_get_search_rank(const char *filepath);
+extern void zig_set_cursor_trail(int enabled);
+extern int zig_get_cursor_trail(void);
 
 /* ============
  * FORWARD DECLARATIONS
   ============ */
 
+static void on_open_vault_clicked(GtkButton *btn, gpointer user_data);
+static void on_vault_dialog_response(GObject *source_object, GAsyncResult *res, gpointer user_data);
+static void on_trail_toggled(GtkCheckButton *chk, gpointer user_data);
+
 static void populate_explorer(AppGui *gui);
 static void set_active_tab(AppGui *gui, GtkWidget *active_btn, const char *page);
 static void toggle_search(AppGui *gui);
 static void on_insert_text_before(GtkTextBuffer *buf, GtkTextIter *location, gchar *text, gint len, gpointer user_data);
+static void on_insert_text_after(GtkTextBuffer *buf, GtkTextIter *location, gchar *text, gint len, gpointer user_data);
+static void on_delete_range_after(GtkTextBuffer *buf, GtkTextIter *start, GtkTextIter *end, gpointer user_data);
 static gboolean on_editor_key_pressed(GtkEventControllerKey *ctrl, guint keyval, guint keycode, GdkModifierType state, gpointer user_data);
 static void on_editor_right_click(GtkGestureClick *gesture, gint n_press, gdouble x, gdouble y, gpointer user_data);
 static void apply_regex_conceal(GtkTextBuffer *buf, const gchar *text, const gchar *pattern, gint cursor_char, gint delim_len, GtkTextTag *conceal_tag);
+static void apply_regex_conceal_local(GtkTextBuffer *buf, const gchar *text, gint range_start_offset, const gchar *pattern, gint cursor_char, gint delim_len, GtkTextTag *conceal_tag);
 static void update_conceal_markdown(GtkTextBuffer *buf);
+static void update_conceal_markdown_all(GtkTextBuffer *buf);
 static void on_buffer_changed(GtkTextBuffer *buf, gpointer user_data);
 static void on_mark_set(GtkTextBuffer *buf, GtkTextIter *location, GtkTextMark *mark, gpointer user_data);
 static void on_cursor_position_changed(GObject *object, GParamSpec *pspec, gpointer user_data);
@@ -167,13 +191,39 @@ static void on_format_clicked(GtkButton *btn, gpointer user_data);
 static void on_para_clicked(GtkButton *btn, gpointer user_data);
 static void apply_wiki_link_tags(GtkTextBuffer *buf);
 static void on_editor_left_click(GtkGestureClick *gesture, gint n_press, gdouble x, gdouble y, gpointer user_data);
+static gboolean on_editor_mouse_event(GtkEventControllerLegacy *controller, GdkEvent *event, gpointer user_data);
+static gboolean keycode_matches_latin_keyval(guint keycode, guint target_keyval);
 static void show_keybindings_window(AppGui *gui);
 static void on_settings_btn_clicked(GtkButton *btn, gpointer user_data);
 static gboolean on_settings_window_close_request(GtkWindow *window, gpointer user_data);
+static void on_status_bar_pos_changed(GObject *gobject, GParamSpec *pspec, gpointer user_data);
+static void on_sidebar_side_changed(GObject *gobject, GParamSpec *pspec, gpointer user_data);
 static void on_export_pdf_clicked(GtkButton *btn, gpointer user_data);
 void qirtas_export_to_pdf(AppGui *gui);
 static void update_editor_font(AppGui *gui);
+static void check_and_insert_hr(GtkTextBuffer *buf, AppGui *gui);
+static void parse_and_render_hrs(GtkTextBuffer *buf, AppGui *gui);
+static char *replace_anchors_with_hrs(const char *src);
+static void apply_paragraph_alignment(GtkTextBuffer *buf, GtkJustification justification);
+static void on_paste_plain_text_received(GObject *source_object, GAsyncResult *res, gpointer user_data);
+static void on_save_as_dialog_response(GObject *source_object, GAsyncResult *res, gpointer user_data);
+static void trigger_save_as(AppGui *gui);
+static void move_current_line(GtkTextBuffer *buf, gboolean up);
 static int get_line_height(GtkWidget *text_view);
+
+typedef struct {
+    const char *action_id;
+    const char *display_name;
+    char shortcut_str[64];
+    guint keyval;
+    GdkModifierType state;
+} AppShortcut;
+
+static gboolean parse_shortcut_string(const char *str, guint *out_keyval, GdkModifierType *out_state);
+static void init_app_shortcuts(void);
+static gboolean match_app_shortcut(const char *action_id, guint keyval, guint keycode, GdkModifierType state);
+static gboolean on_settings_key_pressed(GtkEventControllerKey *ctrl, guint keyval, guint keycode, GdkModifierType state, gpointer user_data);
+static void on_edit_shortcut_clicked(GtkButton *btn, gpointer user_data);
 
 
 
@@ -226,1036 +276,20 @@ void zig_github_disconnect(void);
  *   - outline
  * ============================================================ */
 
-static const char *CSS_DEEP_SLATE = 
+/* ── Minimal structural fallback CSS ─────────────────────────────────────
+ * Used ONLY when an external theme-*.css file cannot be read from disk.
+ * The full visual theme is always loaded from src/ui/themes/theme-*.css.
+ * This fallback keeps the app functional (readable, usable) but unstyled.
+ * ──────────────────────────────────────────────────────────────────────── */
+static const char *CSS_FALLBACK_MINIMAL =
     "* { font-family: 'JetBrains Mono', 'Fira Mono', 'DejaVu Sans Mono', monospace; }\n"
-    "window { background-color: #111318; }\n"
-    ".sidebar {\n"
-    "  background-color: #0c0e13;\n"
-    "  border-right: 1px solid #1e2025;\n"
-    "  min-width: 280px;\n"
-    "  padding: 16px 12px;\n"
-    "}\n"
-    ".logo-btn {\n"
-    "  background-color: #282a2f;\n"
-    "  color: #ffafd7;\n"
-    "  font-weight: 700;\n"
-    "  font-size: 14px;\n"
-    "  border-radius: 8px;\n"
-    "  padding: 4px 12px;\n"
-    "  margin: 0 4px;\n"
-    "}\n"
-    ".nav-btn {\n"
-    "  background: transparent;\n"
-    "  border: none;\n"
-    "  box-shadow: none;\n"
-    "  border-radius: 10px;\n"
-    "  padding: 10px;\n"
-    "  margin: 2px 8px;\n"
-    "  color: #6b6e7a;\n"
-    "  transition: background 180ms, color 180ms;\n"
-    "}\n"
-    ".nav-btn:hover {\n"
-    "  background-color: #1e2025;\n"
-    "  color: #dac0ca;\n"
-    "}\n"
-    ".nav-btn image {\n"
-    "  -gtk-icon-size: 18px;\n"
-    "  color: inherit;\n"
-    "}\n"
-    ".nav-btn.active {\n"
-    "  background-color: #282a2f;\n"
-    "  color: #ffafd7;\n"
-    "  border-left: 2px solid #ff79c6;\n"
-    "}\n"
-    ".workspace { background-color: #111318; }\n"
-    ".pill {\n"
-    "  font-size: 11px;\n"
-    "  font-weight: 500;\n"
-    "  padding: 4px 14px;\n"
-    "  border-radius: 9999px;\n"
-    "  background-color: #1e2025;\n"
-    "  color: #dac0ca;\n"
-    "}\n"
-    ".pill-time { color: #75d4e8; }\n"
-    ".status-saved  { color: #31e368; }\n"
-    ".status-saving { color: #75d4e8; }\n"
-    ".status-failed { color: #ffb4ab; }\n"
-    ".path-label {\n"
-    "  color: #6b6e7a;\n"
-    "  font-size: 12px;\n"
-    "}\n"
-    ".search-bar-box {\n"
-    "  background-color: #0c0e13;\n"
-    "  border-top: 1px solid #1e2025;\n"
-    "  padding: 6px 16px;\n"
-    "}\n"
-    "entry.search-entry {\n"
-    "  background-color: #1a1c21;\n"
-    "  color: #e2e2e9;\n"
-    "  border: 1px solid #282a2f;\n"
-    "  border-radius: 8px;\n"
-    "  padding: 4px 12px;\n"
-    "  font-size: 13px;\n"
-    "  min-width: 260px;\n"
-    "  box-shadow: none;\n"
-    "}\n"
-    "entry.search-entry:focus {\n"
-    "  border-color: #ff79c6;\n"
-    "  box-shadow: none;\n"
-    "}\n"
-    ".search-match-label {\n"
-    "  color: #6b6e7a;\n"
-    "  font-size: 11px;\n"
-    "  margin: 0 8px;\n"
-    "}\n"
-    ".search-nav-btn {\n"
-    "  background: transparent;\n"
-    "  border: none;\n"
-    "  box-shadow: none;\n"
-    "  border-radius: 6px;\n"
-    "  padding: 4px 8px;\n"
-    "  color: #dac0ca;\n"
-    "}\n"
-    ".search-nav-btn:hover { background-color: #1e2025; color: #ffafd7; }\n"
-    "textview, textview text, textview.source-view {\n"
-    "  background-color: #111318;\n"
-    "  color: #ffffff;\n"
-    "  caret-color: #ff79c6;\n"
-    "}\n"
-    "textview text:selected {\n"
-    "  background-color: #2e3038;\n"
-    "  color: #ffafd7;\n"
-    "}\n"
-    "scrolledwindow {\n"
-    "  border: none;\n"
-    "  box-shadow: none;\n"
-    "  background-color: #111318;\n"
-    "}\n"
-    ".editor-scroll {\n"
-    "  border: 1px solid #1e2025;\n"
-    "  border-radius: 8px;\n"
-    "}\n"
-    ".explorer-header { padding: 24px 28px 12px 28px; }\n"
-    ".explorer-title {\n"
-    "  font-size: 15px;\n"
-    "  font-weight: 700;\n"
-    "  color: #ffafd7;\n"
-    "}\n"
-    ".explorer-badge {\n"
-    "  font-size: 10px;\n"
-    "  font-weight: 500;\n"
-    "  padding: 2px 10px;\n"
-    "  border-radius: 9999px;\n"
-    "  background-color: #1e2025;\n"
-    "  color: #6b6e7a;\n"
-    "}\n"
-    ".explorer-card {\n"
-    "  background-color: #1a1c21;\n"
-    "  border: 1px solid #282a2f;\n"
-    "  border-radius: 10px;\n"
-    "  padding: 14px 16px;\n"
-    "  min-width: 180px;\n"
-    "  transition: background 150ms, border-color 150ms;\n"
-    "}\n"
-    ".explorer-card:hover {\n"
-    "  background-color: #20232a;\n"
-    "  border-color: #ff79c6;\n"
-    "}\n"
-    ".icon-folder  { color: #75d4e8; }\n"
-    ".icon-file-md { color: #ff79c6; }\n"
-    ".icon-file    { color: #6b6e7a; }\n"
-    ".card-name {\n"
-    "  font-size: 13px;\n"
-    "  font-weight: 600;\n"
-    "  color: #e2e2e9;\n"
-    "}\n"
-    ".card-meta {\n"
-    "  font-size: 10px;\n"
-    "  color: #6b6e7a;\n"
-    "  margin-top: 2px;\n"
-    "}\n"
-    ".stats-card {\n"
-    "  background-color: #0c0e13;\n"
-    "  border: 1px solid #1e2025;\n"
-    "  border-radius: 12px;\n"
-    "  padding: 32px;\n"
-    "  min-width: 420px;\n"
-    "}\n"
-    ".stats-title {\n"
-    "  font-size: 11px;\n"
-    "  font-weight: 700;\n"
-    "  letter-spacing: 0.12em;\n"
-    "  color: #ff79c6;\n"
-    "  margin-bottom: 20px;\n"
-    "}\n"
-    ".stats-label { font-size: 12px; font-weight: 600; color: #6b6e7a; }\n"
-    ".stats-value { font-size: 12px; font-weight: 500; color: #75d4e8; }\n"
-    "headerbar {\n"
-    "  background-color: #0c0e13;\n"
-    "  border-bottom: 1px solid #1e2025;\n"
-    "  box-shadow: none;\n"
-    "  min-height: 46px;\n"
-    "}\n"
-    ".pop-section-label {\n"
-    "  font-size: 10px;\n"
-    "  font-weight: 700;\n"
-    "  letter-spacing: 0.1em;\n"
-    "  color: #6b6e7a;\n"
-    "}\n"
-    ".pop-btn {\n"
-    "  background-color: #1a1c21;\n"
-    "  border: 1px solid #282a2f;\n"
-    "  border-radius: 8px;\n"
-    "  color: #dac0ca;\n"
-    "  font-size: 12px;\n"
-    "  padding: 6px 14px;\n"
-    "}\n"
-    ".pop-btn:hover {\n"
-    "  background-color: #282a2f;\n"
-    "  color: #ffafd7;\n"
-    "  border-color: #ff79c6;\n"
-    "}\n"
-    "scrollbar { background-color: transparent; border: none; }\n"
-    "scrollbar slider {\n"
-    "  background-color: #282a2f;\n"
-    "  border-radius: 9999px;\n"
-    "  min-width: 4px;\n"
-    "  min-height: 4px;\n"
-    "}\n"
-    "scrollbar slider:hover { background-color: #ff79c6; }\n"
-    ".bottom-bar {\n"
-    "  background-color: #0c0e13;\n"
-    "  border-top: 1px solid #1e2025;\n"
-    "  padding: 6px 16px;\n"
-    "}\n"
-    ".bottom-bar-lbl {\n"
-    "  color: #6b6e7a;\n"
-    "  font-size: 11px;\n"
-    "}\n"
-    ".status-dot {\n"
-    "  font-size: 14px;\n"
-    "}\n"
-    ".bottom-path {\n"
-    "  color: #00f3ff;\n"
-    "  font-size: 11px;\n"
-    "  font-weight: 600;\n"
-    "  margin-left: 6px;\n"
-    "}\n"
-    ".sync-card {\n"
-    "  background-color: #111318;\n"
-    "  border: 1px solid #1e2025;\n"
-    "  border-radius: 8px;\n"
-    "  padding: 10px;\n"
-    "}\n"
-    ".pop-entry {\n"
-    "  background-color: #1a1c21;\n"
-    "  border: 1px solid #282a2f;\n"
-    "  border-radius: 6px;\n"
-    "  color: #f8f8f2;\n"
-    "  padding: 4px 8px;\n"
-    "}\n"
-    ".sync-now-btn {\n"
-    "  background-color: #1a1c21;\n"
-    "  border: 1px solid #ff79c6;\n"
-    "  border-radius: 8px;\n"
-    "  color: #ffafd7;\n"
-    "  font-size: 12px;\n"
-    "  padding: 6px 14px;\n"
-    "  font-weight: bold;\n"
-    "}\n"
-    ".sync-now-btn:hover {\n"
-    "  background-color: #ff79c6;\n"
-    "  color: #0c0e13;\n"
-    "}\n"
-    ".kb-dialog {\n"
-    "  background-color: #111318;\n"
-    "  border-radius: 14px;\n"
-    "}\n"
-    ".kb-section-label {\n"
-    "  font-size: 10px;\n"
-    "  font-weight: 700;\n"
-    "  letter-spacing: 0.12em;\n"
-    "  color: #ff79c6;\n"
-    "  margin-top: 10px;\n"
-    "}\n"
-    ".kb-key {\n"
-    "  background-color: #1e2025;\n"
-    "  border: 1px solid #282a2f;\n"
-    "  border-radius: 5px;\n"
-    "  color: #75d4e8;\n"
-    "  font-size: 11px;\n"
-    "  font-weight: 700;\n"
-    "  padding: 2px 8px;\n"
-    "  min-width: 120px;\n"
-    "}\n"
-    ".kb-desc {\n"
-    "  color: #dac0ca;\n"
-    "  font-size: 12px;\n"
-    "  padding-left: 8px;\n"
-    "}\n"
-    ".add-action-btn {\n"
-    "  background-color: #282a2f;\n"
-    "  color: #ffafd7;\n"
-    "  font-weight: 700;\n"
-    "  border: 1px solid #282a2f;\n"
-    "  border-radius: 8px;\n"
-    "  padding: 8px 16px;\n"
-    "}\n"
-    ".add-action-btn:hover {\n"
-    "  background-color: #1e2025;\n"
-    "  color: #ffffff;\n"
-    "}\n"
-    ".bottom-toggle-btn {\n"
-    "  background: transparent;\n"
-    "  border: none;\n"
-    "  box-shadow: none;\n"
-    "  padding: 2px 6px;\n"
-    "  color: #6b6e7a;\n"
-    "}\n"
-    ".bottom-toggle-btn:hover {\n"
-    "  color: #ff79c6;\n"
-    "}\n"
-    ".bottom-icon-btn {\n"
-    "  background: transparent;\n"
-    "  border: none;\n"
-    "  box-shadow: none;\n"
-    "  border-radius: 6px;\n"
-    "  padding: 3px 6px;\n"
-    "  color: #6b6e7a;\n"
-    "  transition: background 150ms, color 150ms;\n"
-    "}\n"
-    ".bottom-icon-btn:hover {\n"
-    "  background-color: #1e2025;\n"
-    "  color: #ffafd7;\n"
-    "}\n"
-    ".bottom-icon-btn.active {\n"
-    "  background-color: #282a2f;\n"
-    "  color: #ff79c6;\n"
-    "}\n"
-    ".bottom-icon-btn image { -gtk-icon-size: 14px; color: inherit; }\n"
-    "list { background-color: transparent; border: none; box-shadow: none; }\n"
-    "row { background-color: transparent; border: none; box-shadow: none; padding: 0; margin: 0; }\n"
-    "row:hover { background-color: transparent; border: none; box-shadow: none; }\n"
-    "row:selected { background-color: transparent; border: none; box-shadow: none; }\n"
-    /* ---- Tree Explorer ---- */
-    ".tree-row {\n"
-    "  background: transparent;\n"
-    "  border: none;\n"
-    "  box-shadow: none;\n"
-    "  border-radius: 5px;\n"
-    "  padding: 0px 4px;\n"
-    "  min-height: 26px;\n"
-    "  transition: background 120ms;\n"
-    "}\n"
-    ".tree-row:hover {\n"
-    "  background-color: #1e2025;\n"
-    "}\n"
-    ".tree-row.active {\n"
-    "  background-color: #282a2f;\n"
-    "  border-left: 2px solid #ff79c6;\n"
-    "}\n"
-    ".tree-row-label {\n"
-    "  font-size: 12px;\n"
-    "  font-weight: 500;\n"
-    "  color: #c8c8d4;\n"
-    "  padding-left: 4px;\n"
-    "}\n"
-    ".tree-row-dir .tree-row-label {\n"
-    "  color: #dac0ca;\n"
-    "  font-weight: 600;\n"
-    "}\n"
-    ".tree-arrow {\n"
-    "  font-size: 10px;\n"
-    "  color: #6b6e7a;\n"
-    "  min-width: 14px;\n"
-    "}\n"
-    ".tree-icon { -gtk-icon-size: 14px; color: #6b6e7a; }\n"
-    ".tree-icon-folder { -gtk-icon-size: 14px; color: #75d4e8; }\n"
-    ".tree-icon-md { -gtk-icon-size: 14px; color: #ff79c6; }\n"
-    ".tree-children {\n"
-    "  border-left: 1px solid #1e2025;\n"
-    "  margin-left: 10px;\n"
-    "}\n"
-    ".tree-container {\n"
-    "  background: transparent;\n"
-    "}\n";
-
-static const char *CSS_CLASSIC_SEPIA = 
-    "* { font-family: 'JetBrains Mono', 'Fira Mono', 'DejaVu Sans Mono', monospace; }\n"
-    "window { background-color: #fdf6e3; }\n"
-    ".sidebar {\n"
-    "  background-color: #eee8d5;\n"
-    "  border-right: 1px solid #d3c7a9;\n"
-    "  min-width: 280px;\n"
-    "  padding: 16px 12px;\n"
-    "}\n"
-    ".logo-btn {\n"
-    "  background-color: #e4dbbe;\n"
-    "  color: #a42e79;\n"
-    "  font-weight: 700;\n"
-    "  font-size: 14px;\n"
-    "  border-radius: 8px;\n"
-    "  padding: 4px 12px;\n"
-    "  margin: 0 4px;\n"
-    "}\n"
-    ".nav-btn {\n"
-    "  background: transparent;\n"
-    "  border: none;\n"
-    "  box-shadow: none;\n"
-    "  border-radius: 10px;\n"
-    "  padding: 10px;\n"
-    "  margin: 2px 8px;\n"
-    "  color: #586e75;\n"
-    "  transition: background 180ms, color 180ms;\n"
-    "}\n"
-    ".nav-btn:hover {\n"
-    "  background-color: #e4dbbe;\n"
-    "  color: #268bd2;\n"
-    "}\n"
-    ".nav-btn image {\n"
-    "  -gtk-icon-size: 18px;\n"
-    "  color: inherit;\n"
-    "}\n"
-    ".nav-btn.active {\n"
-    "  background-color: #e4dbbe;\n"
-    "  color: #a42e79;\n"
-    "  border-left: 2px solid #a42e79;\n"
-    "}\n"
-    ".workspace { background-color: #fdf6e3; }\n"
-    ".pill {\n"
-    "  font-size: 11px;\n"
-    "  font-weight: 500;\n"
-    "  padding: 4px 14px;\n"
-    "  border-radius: 9999px;\n"
-    "  background-color: #e4dbbe;\n"
-    "  color: #586e75;\n"
-    "}\n"
-    ".pill-time { color: #268bd2; }\n"
-    ".status-saved  { color: #859900; }\n"
-    ".status-saving { color: #268bd2; }\n"
-    ".status-failed { color: #dc322f; }\n"
-    ".path-label {\n"
-    "  color: #586e75;\n"
-    "  font-size: 12px;\n"
-    "}\n"
-    ".search-bar-box {\n"
-    "  background-color: #eee8d5;\n"
-    "  border-top: 1px solid #d3c7a9;\n"
-    "  padding: 6px 16px;\n"
-    "}\n"
-    "entry.search-entry {\n"
-    "  background-color: #fdf6e3;\n"
-    "  color: #073642;\n"
-    "  border: 1px solid #d3c7a9;\n"
-    "  border-radius: 8px;\n"
-    "  padding: 4px 12px;\n"
-    "  font-size: 13px;\n"
-    "  min-width: 260px;\n"
-    "  box-shadow: none;\n"
-    "}\n"
-    "entry.search-entry:focus {\n"
-    "  border-color: #a42e79;\n"
-    "  box-shadow: none;\n"
-    "}\n"
-    ".search-match-label {\n"
-    "  color: #586e75;\n"
-    "  font-size: 11px;\n"
-    "  margin: 0 8px;\n"
-    "}\n"
-    ".search-nav-btn {\n"
-    "  background: transparent;\n"
-    "  border: none;\n"
-    "  box-shadow: none;\n"
-    "  border-radius: 6px;\n"
-    "  padding: 4px 8px;\n"
-    "  color: #586e75;\n"
-    "}\n"
-    ".search-nav-btn:hover { background-color: #e4dbbe; color: #a42e79; }\n"
-    "textview, textview text, textview.source-view {\n"
-    "  background-color: #fdf6e3;\n"
-    "  color: #586e75;\n"
-    "  caret-color: #a42e79;\n"
-    "}\n"
-    "textview text:selected {\n"
-    "  background-color: #eee8d5;\n"
-    "  color: #a42e79;\n"
-    "}\n"
-    "scrolledwindow {\n"
-    "  border: none;\n"
-    "  box-shadow: none;\n"
-    "  background-color: #fdf6e3;\n"
-    "}\n"
-    ".editor-scroll {\n"
-    "  border: 1px solid #eee8d5;\n"
-    "  border-radius: 8px;\n"
-    "}\n"
-    ".explorer-header { padding: 24px 28px 12px 28px; }\n"
-    ".explorer-title {\n"
-    "  font-size: 15px;\n"
-    "  font-weight: 700;\n"
-    "  color: #a42e79;\n"
-    "}\n"
-    ".explorer-badge {\n"
-    "  font-size: 10px;\n"
-    "  font-weight: 500;\n"
-    "  padding: 2px 10px;\n"
-    "  border-radius: 9999px;\n"
-    "  background-color: #e4dbbe;\n"
-    "  color: #586e75;\n"
-    "}\n"
-    ".explorer-card {\n"
-    "  background-color: #fdf6e3;\n"
-    "  border: 1px solid #d3c7a9;\n"
-    "  border-radius: 10px;\n"
-    "  padding: 14px 16px;\n"
-    "  min-width: 180px;\n"
-    "  transition: background 150ms, border-color 150ms;\n"
-    "}\n"
-    ".explorer-card:hover {\n"
-    "  background-color: #f5ecda;\n"
-    "  border-color: #a42e79;\n"
-    "}\n"
-    ".icon-folder  { color: #268bd2; }\n"
-    ".icon-file-md { color: #a42e79; }\n"
-    ".icon-file    { color: #586e75; }\n"
-    ".card-name {\n"
-    "  font-size: 13px;\n"
-    "  font-weight: 600;\n"
-    "  color: #073642;\n"
-    "}\n"
-    ".card-meta {\n"
-    "  font-size: 10px;\n"
-    "  color: #586e75;\n"
-    "  margin-top: 2px;\n"
-    "}\n"
-    ".stats-card {\n"
-    "  background-color: #eee8d5;\n"
-    "  border: 1px solid #d3c7a9;\n"
-    "  border-radius: 12px;\n"
-    "  padding: 32px;\n"
-    "  min-width: 420px;\n"
-    "}\n"
-    ".stats-title {\n"
-    "  font-size: 11px;\n"
-    "  font-weight: 700;\n"
-    "  letter-spacing: 0.12em;\n"
-    "  color: #a42e79;\n"
-    "  margin-bottom: 20px;\n"
-    "}\n"
-    ".stats-label { font-size: 12px; font-weight: 600; color: #586e75; }\n"
-    ".stats-value { font-size: 12px; font-weight: 500; color: #268bd2; }\n"
-    "headerbar {\n"
-    "  background-color: #eee8d5;\n"
-    "  border-bottom: 1px solid #d3c7a9;\n"
-    "  box-shadow: none;\n"
-    "  min-height: 46px;\n"
-    "}\n"
-    ".pop-section-label {\n"
-    "  font-size: 10px;\n"
-    "  font-weight: 700;\n"
-    "  letter-spacing: 0.1em;\n"
-    "  color: #586e75;\n"
-    "}\n"
-    ".pop-btn {\n"
-    "  background-color: #fdf6e3;\n"
-    "  border: 1px solid #d3c7a9;\n"
-    "  border-radius: 8px;\n"
-    "  color: #586e75;\n"
-    "  font-size: 12px;\n"
-    "  padding: 6px 14px;\n"
-    "}\n"
-    ".pop-btn:hover {\n"
-    "  background-color: #e4dbbe;\n"
-    "  color: #a42e79;\n"
-    "  border-color: #a42e79;\n"
-    "}\n"
-    "scrollbar { background-color: transparent; border: none; }\n"
-    "scrollbar slider {\n"
-    "  background-color: #d3c7a9;\n"
-    "  border-radius: 9999px;\n"
-    "  min-width: 4px;\n"
-    "  min-height: 4px;\n"
-    "}\n"
-    "scrollbar slider:hover { background-color: #a42e79; }\n"
-    ".bottom-bar {\n"
-    "  background-color: #eee8d5;\n"
-    "  border-top: 1px solid #d3c7a9;\n"
-    "  padding: 6px 16px;\n"
-    "}\n"
-    ".bottom-bar-lbl {\n"
-    "  color: #586e75;\n"
-    "  font-size: 11px;\n"
-    "}\n"
-    ".status-dot {\n"
-    "  font-size: 14px;\n"
-    "}\n"
-    ".bottom-path {\n"
-    "  color: #268bd2;\n"
-    "  font-size: 11px;\n"
-    "  font-weight: 600;\n"
-    "  margin-left: 6px;\n"
-    "}\n"
-    ".sync-card {\n"
-    "  background-color: #f5edd5;\n"
-    "  border: 1px solid #d3c7a9;\n"
-    "  border-radius: 8px;\n"
-    "  padding: 10px;\n"
-    "}\n"
-    ".pop-entry {\n"
-    "  background-color: #fdf6e3;\n"
-    "  border: 1px solid #d3c7a9;\n"
-    "  border-radius: 6px;\n"
-    "  color: #586e75;\n"
-    "  padding: 4px 8px;\n"
-    "}\n"
-    ".sync-now-btn {\n"
-    "  background-color: #fdf6e3;\n"
-    "  border: 1px solid #a42e79;\n"
-    "  border-radius: 8px;\n"
-    "  color: #a42e79;\n"
-    "  font-size: 12px;\n"
-    "  padding: 6px 14px;\n"
-    "  font-weight: bold;\n"
-    "}\n"
-    ".sync-now-btn:hover {\n"
-    "  background-color: #a42e79;\n"
-    "  color: #fdf6e3;\n"
-    "}\n"
-    ".kb-dialog {\n"
-    "  background-color: #fdf6e3;\n"
-    "  border-radius: 14px;\n"
-    "}\n"
-    ".kb-section-label {\n"
-    "  font-size: 10px;\n"
-    "  font-weight: 700;\n"
-    "  letter-spacing: 0.12em;\n"
-    "  color: #a42e79;\n"
-    "  margin-top: 10px;\n"
-    "}\n"
-    ".kb-key {\n"
-    "  background-color: #e4dbbe;\n"
-    "  border: 1px solid #d3c7a9;\n"
-    "  border-radius: 5px;\n"
-    "  color: #268bd2;\n"
-    "  font-size: 11px;\n"
-    "  font-weight: 700;\n"
-    "  padding: 2px 8px;\n"
-    "  min-width: 120px;\n"
-    "}\n"
-    ".kb-desc {\n"
-    "  color: #586e75;\n"
-    "  font-size: 12px;\n"
-    "  padding-left: 8px;\n"
-    "}\n"
-    ".add-action-btn {\n"
-    "  background-color: #e4dbbe;\n"
-    "  color: #a42e79;\n"
-    "  font-weight: 700;\n"
-    "  border: 1px solid #d3c7a9;\n"
-    "  border-radius: 8px;\n"
-    "  padding: 8px 16px;\n"
-    "}\n"
-    ".add-action-btn:hover {\n"
-    "  background-color: #eee8d5;\n"
-    "  color: #a42e79;\n"
-    "}\n"
-    ".bottom-toggle-btn {\n"
-    "  background: transparent;\n"
-    "  border: none;\n"
-    "  box-shadow: none;\n"
-    "  padding: 2px 6px;\n"
-    "  color: #586e75;\n"
-    "}\n"
-    ".bottom-toggle-btn:hover {\n"
-    "  color: #a42e79;\n"
-    "}\n"
-    ".bottom-icon-btn {\n"
-    "  background: transparent;\n"
-    "  border: none;\n"
-    "  box-shadow: none;\n"
-    "  border-radius: 6px;\n"
-    "  padding: 3px 6px;\n"
-    "  color: #586e75;\n"
-    "  transition: background 150ms, color 150ms;\n"
-    "}\n"
-    ".bottom-icon-btn:hover {\n"
-    "  background-color: #d3c7a9;\n"
-    "  color: #a42e79;\n"
-    "}\n"
-    ".bottom-icon-btn.active {\n"
-    "  background-color: #e4dbbe;\n"
-    "  color: #a42e79;\n"
-    "}\n"
-    ".bottom-icon-btn image { -gtk-icon-size: 14px; color: inherit; }\n"
-    "list { background-color: transparent; border: none; box-shadow: none; }\n"
-    "row { background-color: transparent; border: none; box-shadow: none; padding: 0; margin: 0; }\n"
-    "row:hover { background-color: transparent; border: none; box-shadow: none; }\n"
-    "row:selected { background-color: transparent; border: none; box-shadow: none; }\n"
-    /* ---- Tree Explorer ---- */
-    ".tree-row {\n"
-    "  background: transparent;\n"
-    "  border: none;\n"
-    "  box-shadow: none;\n"
-    "  border-radius: 5px;\n"
-    "  padding: 0px 4px;\n"
-    "  min-height: 26px;\n"
-    "  transition: background 120ms;\n"
-    "}\n"
-    ".tree-row:hover {\n"
-    "  background-color: #e4dbbe;\n"
-    "}\n"
-    ".tree-row.active {\n"
-    "  background-color: #e4dbbe;\n"
-    "  border-left: 2px solid #a42e79;\n"
-    "}\n"
-    ".tree-row-label {\n"
-    "  font-size: 12px;\n"
-    "  font-weight: 500;\n"
-    "  color: #403d2e;\n"
-    "  padding-left: 4px;\n"
-    "}\n"
-    ".tree-row-dir .tree-row-label {\n"
-    "  color: #073642;\n"
-    "  font-weight: 600;\n"
-    "}\n"
-    ".tree-arrow {\n"
-    "  font-size: 10px;\n"
-    "  color: #93a1a1;\n"
-    "  min-width: 14px;\n"
-    "}\n"
-    ".tree-icon { -gtk-icon-size: 14px; color: #93a1a1; }\n"
-    ".tree-icon-folder { -gtk-icon-size: 14px; color: #268bd2; }\n"
-    ".tree-icon-md { -gtk-icon-size: 14px; color: #a42e79; }\n"
-    ".tree-children {\n"
-    "  border-left: 1px solid #d3c7a9;\n"
-    "  margin-left: 10px;\n"
-    "}\n"
-    ".tree-container {\n"
-    "  background: transparent;\n"
-    "}\n";
-
-static const char *CSS_MIDNIGHT = 
-    "* { font-family: 'JetBrains Mono', 'Fira Mono', 'DejaVu Sans Mono', monospace; }\n"
-    "window { background-color: #000000; }\n"
-    ".sidebar {\n"
-    "  background-color: #080808;\n"
-    "  border-right: 1px solid #1c1c1c;\n"
-    "  min-width: 280px;\n"
-    "  padding: 16px 12px;\n"
-    "}\n"
-    ".logo-btn {\n"
-    "  background-color: #1a1a1a;\n"
-    "  color: #ffffff;\n"
-    "  font-weight: 700;\n"
-    "  font-size: 14px;\n"
-    "  border-radius: 8px;\n"
-    "  padding: 4px 12px;\n"
-    "  margin: 0 4px;\n"
-    "}\n"
-    ".nav-btn {\n"
-    "  background: transparent;\n"
-    "  border: none;\n"
-    "  box-shadow: none;\n"
-    "  border-radius: 10px;\n"
-    "  padding: 10px;\n"
-    "  margin: 2px 8px;\n"
-    "  color: #606060;\n"
-    "  transition: background 180ms, color 180ms;\n"
-    "}\n"
-    ".nav-btn:hover {\n"
-    "  background-color: #222222;\n"
-    "  color: #d0d0d0;\n"
-    "}\n"
-    ".nav-btn image {\n"
-    "  -gtk-icon-size: 18px;\n"
-    "  color: inherit;\n"
-    "}\n"
-    ".nav-btn.active {\n"
-    "  background-color: #1a1a1a;\n"
-    "  color: #ffffff;\n"
-    "  border-left: 2px solid #ff79c6;\n"
-    "}\n"
-    ".workspace { background-color: #000000; }\n"
-    ".pill {\n"
-    "  font-size: 11px;\n"
-    "  font-weight: 500;\n"
-    "  padding: 4px 14px;\n"
-    "  border-radius: 9999px;\n"
-    "  background-color: #161616;\n"
-    "  color: #888888;\n"
-    "}\n"
-    ".pill-time { color: #50fa7b; }\n"
-    ".status-saved  { color: #50fa7b; }\n"
-    ".status-saving { color: #f1fa8c; }\n"
-    ".status-failed { color: #ff5555; }\n"
-    ".path-label {\n"
-    "  color: #888888;\n"
-    "  font-size: 12px;\n"
-    "}\n"
-    ".search-bar-box {\n"
-    "  background-color: #080808;\n"
-    "  border-top: 1px solid #1c1c1c;\n"
-    "  padding: 6px 16px;\n"
-    "}\n"
-    "entry.search-entry {\n"
-    "  background-color: #121212;\n"
-    "  color: #ffffff;\n"
-    "  border: 1px solid #242424;\n"
-    "  border-radius: 8px;\n"
-    "  padding: 4px 12px;\n"
-    "  font-size: 13px;\n"
-    "  min-width: 260px;\n"
-    "  box-shadow: none;\n"
-    "}\n"
-    "entry.search-entry:focus {\n"
-    "  border-color: #ff79c6;\n"
-    "  box-shadow: none;\n"
-    "}\n"
-    ".search-match-label {\n"
-    "  color: #888888;\n"
-    "  font-size: 11px;\n"
-    "  margin: 0 8px;\n"
-    "}\n"
-    ".search-nav-btn {\n"
-    "  background: transparent;\n"
-    "  border: none;\n"
-    "  box-shadow: none;\n"
-    "  border-radius: 6px;\n"
-    "  padding: 4px 8px;\n"
-    "  color: #888888;\n"
-    "}\n"
-    ".search-nav-btn:hover { background-color: #222222; color: #ffffff; }\n"
-    "textview, textview text, textview.source-view {\n"
-    "  background-color: #000000;\n"
-    "  color: #ffffff;\n"
-    "  caret-color: #ff79c6;\n"
-    "}\n"
-    "textview text:selected {\n"
-    "  background-color: #222222;\n"
-    "  color: #ff79c6;\n"
-    "}\n"
-    "scrolledwindow {\n"
-    "  border: none;\n"
-    "  box-shadow: none;\n"
-    "  background-color: #000000;\n"
-    "}\n"
-    ".editor-scroll {\n"
-    "  border: 1px solid #222222;\n"
-    "  border-radius: 8px;\n"
-    "}\n"
-    ".explorer-header { padding: 24px 28px 12px 28px; }\n"
-    ".explorer-title {\n"
-    "  font-size: 15px;\n"
-    "  font-weight: 700;\n"
-    "  color: #ffffff;\n"
-    "}\n"
-    ".explorer-badge {\n"
-    "  font-size: 10px;\n"
-    "  font-weight: 500;\n"
-    "  padding: 2px 10px;\n"
-    "  border-radius: 9999px;\n"
-    "  background-color: #161616;\n"
-    "  color: #888888;\n"
-    "}\n"
-    ".explorer-card {\n"
-    "  background-color: #0c0c0c;\n"
-    "  border: 1px solid #1c1c1c;\n"
-    "  border-radius: 10px;\n"
-    "  padding: 14px 16px;\n"
-    "  min-width: 180px;\n"
-    "  transition: background 150ms, border-color 150ms;\n"
-    "}\n"
-    ".explorer-card:hover {\n"
-    "  background-color: #161616;\n"
-    "  border-color: #ff79c6;\n"
-    "}\n"
-    ".icon-folder  { color: #50fa7b; }\n"
-    ".icon-file-md { color: #ff79c6; }\n"
-    ".icon-file    { color: #888888; }\n"
-    ".card-name {\n"
-    "  font-size: 13px;\n"
-    "  font-weight: 600;\n"
-    "  color: #ffffff;\n"
-    "}\n"
-    ".card-meta {\n"
-    "  font-size: 10px;\n"
-    "  color: #888888;\n"
-    "  margin-top: 2px;\n"
-    "}\n"
-    ".stats-card {\n"
-    "  background-color: #080808;\n"
-    "  border: 1px solid #1c1c1c;\n"
-    "  border-radius: 12px;\n"
-    "  padding: 32px;\n"
-    "  min-width: 420px;\n"
-    "}\n"
-    ".stats-title {\n"
-    "  font-size: 11px;\n"
-    "  font-weight: 700;\n"
-    "  letter-spacing: 0.12em;\n"
-    "  color: #ff79c6;\n"
-    "  margin-bottom: 20px;\n"
-    "}\n"
-    ".stats-label { font-size: 12px; font-weight: 600; color: #888888; }\n"
-    ".stats-value { font-size: 12px; font-weight: 500; color: #50fa7b; }\n"
-    "headerbar {\n"
-    "  background-color: #080808;\n"
-    "  border-bottom: 1px solid #1c1c1c;\n"
-    "  box-shadow: none;\n"
-    "  min-height: 46px;\n"
-    "}\n"
-    ".pop-section-label {\n"
-    "  font-size: 10px;\n"
-    "  font-weight: 700;\n"
-    "  letter-spacing: 0.1em;\n"
-    "  color: #888888;\n"
-    "}\n"
-    ".pop-btn {\n"
-    "  background-color: #0c0c0c;\n"
-    "  border: 1px solid #1c1c1c;\n"
-    "  border-radius: 8px;\n"
-    "  color: #888888;\n"
-    "  font-size: 12px;\n"
-    "  padding: 6px 14px;\n"
-    "}\n"
-    ".pop-btn:hover {\n"
-    "  background-color: #1a1a1a;\n"
-    "  color: #ffffff;\n"
-    "  border-color: #ff79c6;\n"
-    "}\n"
-    "scrollbar { background-color: transparent; border: none; }\n"
-    "scrollbar slider {\n"
-    "  background-color: #1c1c1c;\n"
-    "  border-radius: 9999px;\n"
-    "  min-width: 4px;\n"
-    "  min-height: 4px;\n"
-    "}\n"
-    "scrollbar slider:hover { background-color: #ff79c6; }\n"
-    ".bottom-bar {\n"
-    "  background-color: #080808;\n"
-    "  border-top: 1px solid #1c1c1c;\n"
-    "  padding: 6px 16px;\n"
-    "}\n"
-    ".bottom-bar-lbl {\n"
-    "  color: #888888;\n"
-    "  font-size: 11px;\n"
-    "}\n"
-    ".status-dot {\n"
-    "  font-size: 14px;\n"
-    "}\n"
-    ".bottom-path {\n"
-    "  color: #00ffff;\n"
-    "  font-size: 11px;\n"
-    "  font-weight: 600;\n"
-    "  margin-left: 6px;\n"
-    "}\n"
-    ".sync-card {\n"
-    "  background-color: #040404;\n"
-    "  border: 1px solid #1c1c1c;\n"
-    "  border-radius: 8px;\n"
-    "  padding: 10px;\n"
-    "}\n"
-    ".pop-entry {\n"
-    "  background-color: #080808;\n"
-    "  border: 1px solid #1c1c1c;\n"
-    "  border-radius: 6px;\n"
-    "  color: #ffffff;\n"
-    "  padding: 4px 8px;\n"
-    "}\n"
-    ".sync-now-btn {\n"
-    "  background-color: #080808;\n"
-    "  border: 1px solid #ff79c6;\n"
-    "  border-radius: 8px;\n"
-    "  color: #ffafd7;\n"
-    "  font-size: 12px;\n"
-    "  padding: 6px 14px;\n"
-    "  font-weight: bold;\n"
-    "}\n"
-    ".sync-now-btn:hover {\n"
-    "  background-color: #ff79c6;\n"
-    "  color: #000000;\n"
-    "}\n"
-    ".kb-dialog {\n"
-    "  background-color: #000000;\n"
-    "  border-radius: 14px;\n"
-    "}\n"
-    ".kb-section-label {\n"
-    "  font-size: 10px;\n"
-    "  font-weight: 700;\n"
-    "  letter-spacing: 0.12em;\n"
-    "  color: #ff79c6;\n"
-    "  margin-top: 10px;\n"
-    "}\n"
-    ".kb-key {\n"
-    "  background-color: #161616;\n"
-    "  border: 1px solid #242424;\n"
-    "  border-radius: 5px;\n"
-    "  color: #50fa7b;\n"
-    "  font-size: 11px;\n"
-    "  font-weight: 700;\n"
-    "  padding: 2px 8px;\n"
-    "  min-width: 120px;\n"
-    "}\n"
-    ".kb-desc {\n"
-    "  color: #d0d0d0;\n"
-    "  font-size: 12px;\n"
-    "  padding-left: 8px;\n"
-    "}\n"
-    ".add-action-btn {\n"
-    "  background-color: #161616;\n"
-    "  color: #ffffff;\n"
-    "  font-weight: 700;\n"
-    "  border: 1px solid #242424;\n"
-    "  border-radius: 8px;\n"
-    "  padding: 8px 16px;\n"
-    "}\n"
-    ".add-action-btn:hover {\n"
-    "  background-color: #242424;\n"
-    "  color: #ff79c6;\n"
-    "}\n"
-    ".bottom-toggle-btn {\n"
-    "  background: transparent;\n"
-    "  border: none;\n"
-    "  box-shadow: none;\n"
-    "  padding: 2px 6px;\n"
-    "  color: #6c6c6c;\n"
-    "}\n"
-    ".bottom-toggle-btn:hover {\n"
-    "  color: #ff79c6;\n"
-    "}\n"
-    ".bottom-icon-btn {\n"
-    "  background: transparent;\n"
-    "  border: none;\n"
-    "  box-shadow: none;\n"
-    "  border-radius: 6px;\n"
-    "  padding: 3px 6px;\n"
-    "  color: #6c6c6c;\n"
-    "  transition: background 150ms, color 150ms;\n"
-    "}\n"
-    ".bottom-icon-btn:hover {\n"
-    "  background-color: #242424;\n"
-    "  color: #ff79c6;\n"
-    "}\n"
-    ".bottom-icon-btn.active {\n"
-    "  background-color: #1a1a1a;\n"
-    "  color: #ff79c6;\n"
-    "}\n"
-    ".bottom-icon-btn image { -gtk-icon-size: 14px; color: inherit; }\n"
-    "list { background-color: transparent; border: none; box-shadow: none; }\n"
-    "row { background-color: transparent; border: none; box-shadow: none; padding: 0; margin: 0; }\n"
-    "row:hover { background-color: transparent; border: none; box-shadow: none; }\n"
-    "row:selected { background-color: transparent; border: none; box-shadow: none; }\n"
-    ".tree-row { background: transparent; border: none; box-shadow: none; border-radius: 5px; padding: 0px 4px; min-height: 26px; transition: background 120ms; }\n"
-    ".tree-row:hover { background-color: #1a1a1a; }\n"
-    ".tree-row.active { background-color: #1a1a1a; border-left: 2px solid #ff79c6; }\n"
-    ".tree-row-label { font-size: 12px; font-weight: 500; color: #c0c0c0; padding-left: 4px; }\n"
-    ".tree-row-dir .tree-row-label { color: #e0e0e0; font-weight: 600; }\n"
-    ".tree-arrow { font-size: 10px; color: #606060; min-width: 14px; }\n"
-    ".tree-icon { -gtk-icon-size: 14px; color: #606060; }\n"
-    ".tree-icon-folder { -gtk-icon-size: 14px; color: #aaaaaa; }\n"
-    ".tree-icon-md { -gtk-icon-size: 14px; color: #ff79c6; }\n"
-".tree-children { border-left: 1px solid #1c1c1c; margin-left: 10px; }\n"
-    ".tree-container { background: transparent; }\n";
+    ".sidebar   { min-width: 280px; padding: 16px 12px; }\n"
+    ".workspace { padding: 0; }\n"
+    "textview   { padding: 24px; }\n"
+    ".search-bar-revealer { padding: 8px 16px; }\n"
+    ".tree-container { background: transparent; }\n"
+    ".tree-row   { padding: 4px 8px; border-radius: 6px; }\n"
+    ".bottom-bar { padding: 4px 12px; }\n";
 
 static char current_theme[32] = "dark";
 static char custom_theme_path[1024] = "";
@@ -1276,6 +310,10 @@ static gboolean on_cursor_tick(GtkWidget *widget, GdkFrameClock *frame_clock, gp
     (void)widget;
     (void)frame_clock;
     AppGui *gui = (AppGui *)user_data;
+    if (!gui->enable_cursor_trail) {
+        gui->trail_len = 0;
+        return G_SOURCE_CONTINUE;
+    }
     if (!gui->source_view || !gtk_widget_get_mapped(gui->source_view))
         return G_SOURCE_CONTINUE;
 
@@ -1431,7 +469,7 @@ static void draw_cursor_trail(GtkDrawingArea *drawing_area, cairo_t *cr, int wid
     }
 
     double caret_w = gui->cursor_width  < 2.5 ? 2.5 : gui->cursor_width;
-    double caret_h = gui->cursor_height;
+    double caret_h = gui->cursor_height * 1.35; /* slightly taller ghost */
 
     /* Collect all points in screen coordinates, ending at the current cursor position */
     int count = 0;
@@ -1478,16 +516,23 @@ static void draw_cursor_trail(GtkDrawingArea *drawing_area, cairo_t *cr, int wid
 
         double dx = xb - xa;
         double dy = yb - ya;
-        double dist = dx < 0 ? -dx : dx;
+        double abs_dx = dx < 0 ? -dx : dx;
         double abs_dy = dy < 0 ? -dy : dy;
 
-        // If they are on different lines, don't smear (that would cross text diagonally).
-        if (abs_dy > 5.0) {
+        /* Skip smearing only for true large teleport jumps (e.g. clicking
+         * somewhere far away). Normal diagonal navigation — like moving across
+         * a wrapped line — must still be smeared. Treat large horizontal or vertical
+         * shifts as jumps to prevent drawing excessive intermediate carets. */
+        double jump_threshold_y = caret_h * 1.5; /* more than one full line height */
+        if (abs_dy > jump_threshold_y || abs_dx > 80.0) {
             draw_ghost_caret(cr, xa, ya, caret_w, caret_h, r, g, b, alpha_a);
         } else {
-            // Draw closely spaced intermediate carets so they blend into "one ghost"
-            int steps = (int)(dist / 1.5);
+            /* Draw closely spaced intermediate carets so they blend into one smear.
+             * Works for horizontal, vertical, AND diagonal movement. */
+            double step_dist = abs_dx > abs_dy ? abs_dx : abs_dy;
+            int steps = (int)(step_dist / 2.0);
             if (steps < 1) steps = 1;
+            if (steps > 15) steps = 15; /* Cap maximum steps per segment to prevent lag */
             for (int s = 0; s < steps; s++) {
                 double t = (double)s / steps;
                 double ix = xa + dx * t;
@@ -1512,66 +557,66 @@ static void apply_theme(AppGui *gui, const char *theme_name) {
     }
 
     /* ── Step 1: pick fallback (embedded) CSS + gutter colors ── */
-    const char *fallback_css     = CSS_DEEP_SLATE;
+    const char *fallback_css     = CSS_FALLBACK_MINIMAL;
     const char *gutter_color     = "#555555";
     const char *active_num_color = "#ff79c6";
     const char *theme_css_path   = "src/ui/themes/theme-dark.css";
 
     if (strcmp(theme_name, "sepia") == 0) {
-        fallback_css     = CSS_CLASSIC_SEPIA;
         gutter_color     = "#586e75";
         active_num_color = "#a42e79";
         theme_css_path   = "src/ui/themes/theme-sepia.css";
     } else if (strcmp(theme_name, "midnight") == 0) {
-        fallback_css     = CSS_MIDNIGHT;
         gutter_color     = "#555555";
         active_num_color = "#ff79c6";
         theme_css_path   = "src/ui/themes/theme-midnight.css";
     } else if (strcmp(theme_name, "things") == 0) {
-        fallback_css     = CSS_DEEP_SLATE;
         gutter_color     = "#555555";
         active_num_color = "#2e80f2";
         theme_css_path   = "src/ui/themes/theme-things.css";
     } else if (strcmp(theme_name, "typewriter-light") == 0) {
-        fallback_css     = CSS_CLASSIC_SEPIA;
         gutter_color     = "#777777";
         active_num_color = "#b82e2e";
         theme_css_path   = "src/ui/themes/theme-typewriter-light.css";
     } else if (strcmp(theme_name, "typewriter-dark") == 0) {
-        fallback_css     = CSS_DEEP_SLATE;
         gutter_color     = "#666666";
         active_num_color = "#ff4d4d";
         theme_css_path   = "src/ui/themes/theme-typewriter-dark.css";
     } else if (strcmp(theme_name, "custom") == 0) {
-        fallback_css     = CSS_DEEP_SLATE;
         gutter_color     = "#555555";
         active_num_color = "#2e80f2";
         theme_css_path   = custom_theme_path;
     }
 
-    /* ── Step 2: try to load the external CSS file ── */
-    const char *base_css   = NULL;
-    gchar      *file_css   = NULL;   /* heap-allocated — must g_free() */
+    /* ── Step 2: try to load the external CSS file and base layout ── */
+    gchar *file_css        = NULL;   /* theme-specific variables */
+    gchar *base_layout_css = NULL;   /* base layout and selectors */
 
     GFile  *theme_file = g_file_new_for_path(theme_css_path);
     GError *file_error = NULL;
 
     if (g_file_query_exists(theme_file, NULL)) {
         gsize len = 0;
-        if (g_file_load_contents(theme_file, NULL, &file_css, &len, NULL, &file_error)) {
-            base_css = file_css;   /* use external file */
-        } else {
-            /* File exists but could not be read — fall back & log */
-            g_printerr("[theme] Could not read %s: %s\n",
+        if (!g_file_load_contents(theme_file, NULL, &file_css, &len, NULL, &file_error)) {
+            g_printerr("[theme] Could not read theme variables %s: %s\n",
                        theme_css_path, file_error ? file_error->message : "unknown");
             if (file_error) { g_error_free(file_error); file_error = NULL; }
         }
     }
     g_object_unref(theme_file);
 
-    /* If external file was not loaded, use the embedded fallback */
-    if (!base_css) {
-        base_css = fallback_css;
+    GFile *base_file = g_file_new_for_path("src/ui/themes/base.css");
+    if (g_file_query_exists(base_file, NULL)) {
+        g_file_load_contents(base_file, NULL, &base_layout_css, NULL, NULL, NULL);
+    }
+    g_object_unref(base_file);
+
+    /* Concatenate variables + base layout (or use fallback if loading failed) */
+    gchar *css_body = NULL;
+    if (file_css) {
+        css_body = g_strdup_printf("%s\n%s", file_css, base_layout_css ? base_layout_css : fallback_css);
+    } else {
+        css_body = g_strdup(fallback_css);
     }
 
     /* ── Step 3: build full CSS (base + gutter overrides) and apply ── */
@@ -1580,28 +625,49 @@ static void apply_theme(AppGui *gui, const char *theme_name) {
             "%s\n"
             "textview selection { padding: 0px; }\n"
             "textview.sourceview selection { padding: 0px; }\n"
-            "gutterview { background-color: transparent; background: transparent; color: %s; }\n"
+            "textview > border { background-color: var(--bg-window); }\n"
+            "gutterview { background-color: var(--bg-window); color: %s; }\n"
             "gutterview > line { color: %s; }\n"
             "gutterview > line.current-line-number {\n"
             "  color: %s;\n"
             "  font-weight: bold;\n"
             "}\n"
-            "gutter { background-color: transparent; background: transparent; color: %s; }\n"
+            "gutter { background-color: var(--bg-window); color: %s; }\n"
             "gutter > line { color: %s; }\n"
             "gutter > line.current-line-number {\n"
             "  color: %s;\n"
             "  font-weight: bold;\n"
+            "}\n"
+            ".linked > menubutton.add-action-btn:first-child,\n"
+            ".linked > menubutton.add-action-btn:first-child > button {\n"
+            "  border-top-right-radius: 0px;\n"
+            "  border-bottom-right-radius: 0px;\n"
+            "  border-right-style: none;\n"
+            "}\n"
+            ".linked > menubutton.add-action-btn:last-child,\n"
+            ".linked > menubutton.add-action-btn:last-child > button {\n"
+            "  border-top-left-radius: 0px;\n"
+            "  border-bottom-left-radius: 0px;\n"
+            "  border-left-style: none;\n"
+            "}\n"
+            "separator.hr-line {\n"
+            "  background-color: %s;\n"
+            "  min-height: 1px;\n"
+            "  margin-top: 16px;\n"
+            "  margin-bottom: 16px;\n"
             "}\n",
-            base_css,
+            css_body,
             gutter_color, gutter_color, active_num_color,
-            gutter_color, gutter_color, active_num_color
+            gutter_color, gutter_color, active_num_color,
+            gutter_color
         );
         gtk_css_provider_load_from_string(gui->css_provider, full_css);
         g_free(full_css);
     }
 
-    /* Free external file content if loaded */
     if (file_css) g_free(file_css);
+    if (base_layout_css) g_free(base_layout_css);
+    if (css_body) g_free(css_body);
 
     /* ── Step 4: set GtkSourceView syntax colour scheme ── */
     if (gui->source_view) {
@@ -2041,6 +1107,45 @@ static void on_open_dialog_response(GObject *source_object, GAsyncResult *res, g
     }
 }
 
+static void on_vault_dialog_response(GObject *source_object, GAsyncResult *res, gpointer user_data) {
+    GtkFileDialog *dialog = GTK_FILE_DIALOG(source_object);
+    AppGui *gui = (AppGui *)user_data;
+    GError *error = NULL;
+    GFile *folder = gtk_file_dialog_select_folder_finish(dialog, res, &error);
+    if (folder) {
+        char *path = g_file_get_path(folder);
+        if (path) {
+            zig_open_vault(path);
+            if (gui->vault_path_lbl_val) {
+                gtk_label_set_text(GTK_LABEL(gui->vault_path_lbl_val), path);
+            }
+            g_free(path);
+        }
+        g_object_unref(folder);
+    }
+}
+
+static void on_open_vault_clicked(GtkButton *btn, gpointer user_data) {
+    (void)btn;
+    AppGui *gui = (AppGui *)user_data;
+    GtkFileDialog *dialog = gtk_file_dialog_new();
+    gtk_file_dialog_set_title(dialog, "Open Vault Directory");
+    gtk_file_dialog_select_folder(dialog, GTK_WINDOW(gui->settings_window), NULL, on_vault_dialog_response, gui);
+}
+
+static void on_trail_toggled(GtkCheckButton *chk, gpointer user_data) {
+    AppGui *gui = (AppGui *)user_data;
+    gboolean active = gtk_check_button_get_active(chk);
+    gui->enable_cursor_trail = active;
+    zig_set_cursor_trail(active ? 1 : 0);
+    if (!active) {
+        gui->trail_len = 0;
+        if (gui->cursor_trail_area) {
+            gtk_widget_queue_draw(gui->cursor_trail_area);
+        }
+    }
+}
+
 static gboolean on_print_paginate(GtkPrintOperation *operation, GtkPrintContext *context, gpointer user_data) {
     GtkSourcePrintCompositor *compositor = GTK_SOURCE_PRINT_COMPOSITOR(user_data);
     if (gtk_source_print_compositor_paginate(compositor, context)) {
@@ -2392,6 +1497,85 @@ static void on_editor_left_click(GtkGestureClick *gesture, gint n_press, gdouble
     }
 }
 
+static gboolean on_editor_mouse_event(GtkEventControllerLegacy *controller,
+                                      GdkEvent *event,
+                                      gpointer user_data) {
+    (void)controller;
+    AppGui *gui = (AppGui *)user_data;
+    if (!gui->source_view) return FALSE;
+    
+    GdkEventType type = gdk_event_get_event_type(event);
+    
+    // Track primary mouse button dragging state
+    if (type == GDK_BUTTON_PRESS) {
+        GdkModifierType state = gdk_event_get_modifier_state(event);
+        if (state & GDK_BUTTON1_MASK) {
+            gui->mouse_dragging = TRUE;
+        }
+    } else if (type == GDK_BUTTON_RELEASE) {
+        GdkModifierType state = gdk_event_get_modifier_state(event);
+        if (!(state & GDK_BUTTON1_MASK)) {
+            gui->mouse_dragging = FALSE;
+        }
+    } else if (type == GDK_MOTION_NOTIFY) {
+        GdkModifierType state = gdk_event_get_modifier_state(event);
+        gui->mouse_dragging = (state & GDK_BUTTON1_MASK) != 0;
+    }
+
+    if (type == GDK_MOTION_NOTIFY || type == GDK_BUTTON_PRESS) {
+        double x = 0.0, y = 0.0;
+        if (gdk_event_get_position(event, &x, &y)) {
+            GtkTextBuffer *buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(gui->source_view));
+            GtkTextIter end_iter;
+            gtk_text_buffer_get_end_iter(buf, &end_iter);
+
+            GdkRectangle end_rect;
+            gtk_text_view_get_iter_location(GTK_TEXT_VIEW(gui->source_view), &end_iter, &end_rect);
+
+            int win_x = 0, win_y = 0;
+            gtk_text_view_buffer_to_window_coords(GTK_TEXT_VIEW(gui->source_view),
+                                                  GTK_TEXT_WINDOW_WIDGET,
+                                                  end_rect.x, end_rect.y,
+                                                  &win_x, &win_y);
+
+            /* Actual bottom of the last line of text in widget coordinates */
+            double text_end_y = (double)(win_y + end_rect.height);
+
+            if (y > text_end_y) {
+                /* Pointer is in genuine empty space below all text.
+                 * Place cursor/selection at the document end, clamp the
+                 * viewport, and consume the event so GTK's autoscroll
+                 * timer cannot feed this out-of-bounds position back.  */
+                if (type == GDK_BUTTON_PRESS) {
+                    gtk_text_buffer_place_cursor(buf, &end_iter);
+                } else {
+                    /* MOTION: extend selection to end while dragging */
+                    GtkTextMark *sel_bound =
+                        gtk_text_buffer_get_selection_bound(buf);
+                    GtkTextIter bound;
+                    gtk_text_buffer_get_iter_at_mark(buf, &bound, sel_bound);
+                    gtk_text_buffer_select_range(buf, &end_iter, &bound);
+                }
+
+                if (gui->vadjustment) {
+                    double ps  = gtk_adjustment_get_page_size(gui->vadjustment);
+                    double ms  = end_rect.y + end_rect.height - ps;
+                    if (ms < 0) ms = 0;
+                    double cur = gtk_adjustment_get_value(gui->vadjustment);
+                    if (cur > ms) {
+                        gui->in_scroll_update = TRUE;
+                        gtk_adjustment_set_value(gui->vadjustment, ms);
+                        gui->in_scroll_update = FALSE;
+                    }
+                }
+
+                return TRUE; /* consume — stop GTK autoscroll in empty zone */
+            }
+        }
+    }
+    return FALSE;
+}
+
 static void on_workspace_click(GtkGestureClick *gesture, gint n_press, gdouble x, gdouble y, gpointer user_data) {
     (void)gesture; (void)n_press; (void)x; (void)y;
     AppGui *gui = (AppGui *)user_data;
@@ -2407,14 +1591,25 @@ static void on_workspace_click(GtkGestureClick *gesture, gint n_press, gdouble x
 
 static void apply_regex_conceal(GtkTextBuffer *buf, const gchar *text, const gchar *pattern, gint cursor_char, gint delim_len, GtkTextTag *conceal_tag) {
     GError *error = NULL;
-    GRegex *regex = g_regex_new(pattern, G_REGEX_DEFAULT, 0, &error);
-    if (!regex) {
-        if (error) {
-            g_printerr("Failed to compile regex %s: %s\n", pattern, error->message);
-            g_clear_error(&error);
-        }
-        return;
+    static GRegex *regex_bold = NULL;
+    static GRegex *regex_highlight = NULL;
+    static GRegex *regex_italic = NULL;
+    
+    GRegex *regex = NULL;
+    if (strcmp(pattern, "\\*\\*([^\\n]+?)\\*\\*") == 0) {
+        if (!regex_bold) regex_bold = g_regex_new(pattern, G_REGEX_DEFAULT, 0, NULL);
+        regex = regex_bold;
+    } else if (strcmp(pattern, "==([^\\n]+?)==") == 0) {
+        if (!regex_highlight) regex_highlight = g_regex_new(pattern, G_REGEX_DEFAULT, 0, NULL);
+        regex = regex_highlight;
+    } else if (strcmp(pattern, "(?<!\\*)\\*([^\\n\\*]+?)\\*(?!\\*)") == 0) {
+        if (!regex_italic) regex_italic = g_regex_new(pattern, G_REGEX_DEFAULT, 0, NULL);
+        regex = regex_italic;
+    } else {
+        regex = g_regex_new(pattern, G_REGEX_DEFAULT, 0, NULL);
     }
+    
+    if (!regex) return;
 
     GMatchInfo *match_info = NULL;
     gboolean has_match = g_regex_match(regex, text, 0, &match_info);
@@ -2441,10 +1636,67 @@ static void apply_regex_conceal(GtkTextBuffer *buf, const gchar *text, const gch
         has_match = g_match_info_next(match_info, &error);
     }
     g_match_info_free(match_info);
-    g_regex_unref(regex);
+    if (regex != regex_bold && regex != regex_highlight && regex != regex_italic) {
+        g_regex_unref(regex);
+    }
 }
 
-static void update_conceal_markdown(GtkTextBuffer *buf) {
+static void apply_regex_conceal_local(GtkTextBuffer *buf, const gchar *text, gint range_start_offset, const gchar *pattern, gint cursor_char, gint delim_len, GtkTextTag *conceal_tag) {
+    GError *error = NULL;
+    static GRegex *regex_bold = NULL;
+    static GRegex *regex_highlight = NULL;
+    static GRegex *regex_italic = NULL;
+    
+    GRegex *regex = NULL;
+    if (strcmp(pattern, "\\*\\*([^\\n]+?)\\*\\*") == 0) {
+        if (!regex_bold) regex_bold = g_regex_new(pattern, G_REGEX_DEFAULT, 0, NULL);
+        regex = regex_bold;
+    } else if (strcmp(pattern, "==([^\\n]+?)==") == 0) {
+        if (!regex_highlight) regex_highlight = g_regex_new(pattern, G_REGEX_DEFAULT, 0, NULL);
+        regex = regex_highlight;
+    } else if (strcmp(pattern, "(?<!\\*)\\*([^\\n\\*]+?)\\*(?!\\*)") == 0) {
+        if (!regex_italic) regex_italic = g_regex_new(pattern, G_REGEX_DEFAULT, 0, NULL);
+        regex = regex_italic;
+    } else {
+        regex = g_regex_new(pattern, G_REGEX_DEFAULT, 0, NULL);
+    }
+    
+    if (!regex) return;
+
+    GMatchInfo *match_info = NULL;
+    gboolean has_match = g_regex_match(regex, text, 0, &match_info);
+    while (has_match) {
+        gint start_byte = 0;
+        gint end_byte = 0;
+        if (g_match_info_fetch_pos(match_info, 0, &start_byte, &end_byte)) {
+            gint start_char_local = g_utf8_pointer_to_offset(text, text + start_byte);
+            gint end_char_local = g_utf8_pointer_to_offset(text, text + end_byte);
+            
+            gint start_char = range_start_offset + start_char_local;
+            gint end_char = range_start_offset + end_char_local;
+            
+            gboolean cursor_inside = (cursor_char >= start_char && cursor_char <= end_char);
+            
+            if (!cursor_inside) {
+                GtkTextIter start_iter, end_iter;
+                gtk_text_buffer_get_iter_at_offset(buf, &start_iter, start_char);
+                gtk_text_buffer_get_iter_at_offset(buf, &end_iter, start_char + delim_len);
+                gtk_text_buffer_apply_tag(buf, conceal_tag, &start_iter, &end_iter);
+                
+                gtk_text_buffer_get_iter_at_offset(buf, &start_iter, end_char - delim_len);
+                gtk_text_buffer_get_iter_at_offset(buf, &end_iter, end_char);
+                gtk_text_buffer_apply_tag(buf, conceal_tag, &start_iter, &end_iter);
+            }
+        }
+        has_match = g_match_info_next(match_info, &error);
+    }
+    g_match_info_free(match_info);
+    if (regex != regex_bold && regex != regex_highlight && regex != regex_italic) {
+        g_regex_unref(regex);
+    }
+}
+
+static void update_conceal_markdown_all(GtkTextBuffer *buf) {
     GtkTextTagTable *table = gtk_text_buffer_get_tag_table(buf);
     GtkTextTag *conceal_tag = gtk_text_tag_table_lookup(table, "conceal");
     if (!conceal_tag) {
@@ -2466,20 +1718,197 @@ static void update_conceal_markdown(GtkTextBuffer *buf) {
     gtk_text_buffer_get_iter_at_mark(buf, &cursor_iter, insert_mark);
     gint cursor_char = gtk_text_iter_get_offset(&cursor_iter);
 
-    // Apply conceal to bold
     apply_regex_conceal(buf, text, "\\*\\*([^\\n]+?)\\*\\*", cursor_char, 2, conceal_tag);
-
-    // Apply conceal to highlight
     apply_regex_conceal(buf, text, "==([^\\n]+?)==", cursor_char, 2, conceal_tag);
-
-    // Apply conceal to italic
     apply_regex_conceal(buf, text, "(?<!\\*)\\*([^\\n\\*]+?)\\*(?!\\*)", cursor_char, 1, conceal_tag);
 
     g_free(text);
 }
 
+static void update_conceal_markdown(GtkTextBuffer *buf) {
+    GtkTextMark *insert_mark = gtk_text_buffer_get_insert(buf);
+    GtkTextIter cursor_iter;
+    gtk_text_buffer_get_iter_at_mark(buf, &cursor_iter, insert_mark);
+    
+    int cursor_line = gtk_text_iter_get_line(&cursor_iter);
+    int total_lines = gtk_text_buffer_get_line_count(buf);
+    
+    int start_line = cursor_line - 1;
+    if (start_line < 0) start_line = 0;
+    int end_line = cursor_line + 1;
+    if (end_line >= total_lines) end_line = total_lines - 1;
+    
+    GtkTextIter start, end;
+    gtk_text_buffer_get_iter_at_line(buf, &start, start_line);
+    gtk_text_buffer_get_iter_at_line(buf, &end, end_line);
+    gtk_text_iter_forward_to_line_end(&end);
+    
+    gchar *text = gtk_text_buffer_get_text(buf, &start, &end, FALSE);
+    if (!text || strlen(text) == 0) {
+        g_free(text);
+        return;
+    }
+    
+    /* Early return if no formatting markers exist in the neighborhood */
+    if (!strchr(text, '*') && !strchr(text, '=')) {
+        g_free(text);
+        return;
+    }
+    
+    GtkTextTagTable *table = gtk_text_buffer_get_tag_table(buf);
+    GtkTextTag *conceal_tag = gtk_text_tag_table_lookup(table, "conceal");
+    if (!conceal_tag) {
+        conceal_tag = gtk_text_buffer_create_tag(buf, "conceal", "invisible", TRUE, NULL);
+    }
+    
+    gtk_text_buffer_remove_tag(buf, conceal_tag, &start, &end);
+    
+    gint range_start_offset = gtk_text_iter_get_offset(&start);
+    gint cursor_char = gtk_text_iter_get_offset(&cursor_iter);
+    
+    apply_regex_conceal_local(buf, text, range_start_offset, "\\*\\*([^\\n]+?)\\*\\*", cursor_char, 2, conceal_tag);
+    apply_regex_conceal_local(buf, text, range_start_offset, "==([^\\n]+?)==", cursor_char, 2, conceal_tag);
+    apply_regex_conceal_local(buf, text, range_start_offset, "(?<!\\*)\\*([^\\n\\*]+?)\\*(?!\\*)", cursor_char, 1, conceal_tag);
+    
+    g_free(text);
+}
+
+static char *replace_anchors_with_hrs(const char *src) {
+    if (!src) return NULL;
+
+    GString *str = g_string_new("");
+    const char *p = src;
+    while (*p) {
+        if ((unsigned char)p[0] == 0xEF && (unsigned char)p[1] == 0xBF && (unsigned char)p[2] == 0xBC) {
+            g_string_append(str, "---");
+            p += 3;
+        } else {
+            g_string_append_c(str, *p);
+            p++;
+        }
+    }
+    return g_string_free(str, FALSE);
+}
+
+static void parse_and_render_hrs(GtkTextBuffer *buf, AppGui *gui) {
+    GtkTextIter iter;
+    gtk_text_buffer_get_start_iter(buf, &iter);
+
+    while (TRUE) {
+        GtkTextIter line_end = iter;
+        gtk_text_iter_forward_to_line_end(&line_end);
+
+        gchar *line_text = gtk_text_buffer_get_text(buf, &iter, &line_end, FALSE);
+        if (!line_text) break;
+
+        if (strcmp(line_text, "---") == 0) {
+            g_free(line_text);
+
+            GtkTextIter replace_start = iter;
+            GtkTextIter replace_end = line_end;
+
+            gtk_text_buffer_delete(buf, &replace_start, &replace_end);
+
+            GtkTextChildAnchor *anchor = gtk_text_child_anchor_new();
+            gtk_text_buffer_insert_child_anchor(buf, &replace_start, anchor);
+
+            GtkWidget *separator = gtk_separator_new(GTK_ORIENTATION_HORIZONTAL);
+            gtk_widget_set_hexpand(separator, TRUE);
+            gtk_widget_add_css_class(separator, "hr-line");
+
+            gtk_text_view_add_child_at_anchor(GTK_TEXT_VIEW(gui->source_view), separator, anchor);
+
+            iter = replace_start;
+        } else {
+            g_free(line_text);
+        }
+
+        if (!gtk_text_iter_forward_line(&iter)) {
+            break;
+        }
+    }
+}
+
+static void check_and_insert_hr(GtkTextBuffer *buf, AppGui *gui) {
+    GtkTextMark *insert_mark = gtk_text_buffer_get_insert(buf);
+    GtkTextIter cursor;
+    gtk_text_buffer_get_iter_at_mark(buf, &cursor, insert_mark);
+
+    GtkTextIter line_start = cursor;
+    gtk_text_iter_set_line_offset(&line_start, 0);
+
+    gchar *line_text = gtk_text_buffer_get_text(buf, &line_start, &cursor, FALSE);
+    if (!line_text) return;
+
+    gboolean is_hr = FALSE;
+    GtkTextIter replace_start = line_start;
+    GtkTextIter replace_end = cursor;
+
+    size_t len = strlen(line_text);
+    if (len >= 4 && strcmp(line_text + len - 4, "--- ") == 0) {
+        is_hr = TRUE;
+        replace_start = cursor;
+        gtk_text_iter_backward_chars(&replace_start, 4);
+    } else if (len >= 4 && strcmp(line_text + len - 4, "---\n") == 0) {
+        is_hr = TRUE;
+        replace_start = cursor;
+        gtk_text_iter_backward_chars(&replace_start, 4);
+    } else {
+        GtkTextIter prev_char = cursor;
+        if (gtk_text_iter_backward_char(&prev_char)) {
+            gunichar c = gtk_text_iter_get_char(&prev_char);
+            if (c == '\n') {
+                GtkTextIter prev_line_start = prev_char;
+                gtk_text_iter_set_line_offset(&prev_line_start, 0);
+                gchar *prev_line_text = gtk_text_buffer_get_text(buf, &prev_line_start, &prev_char, FALSE);
+                if (prev_line_text && strcmp(prev_line_text, "---") == 0) {
+                    is_hr = TRUE;
+                    replace_start = prev_line_start;
+                    replace_end = prev_char;
+                }
+                g_free(prev_line_text);
+            }
+        }
+    }
+
+    g_free(line_text);
+
+    if (is_hr) {
+        g_signal_handlers_block_by_func(buf, on_insert_text_before, gui);
+        g_signal_handlers_block_by_func(buf, on_insert_text_after, gui);
+        g_signal_handlers_block_by_func(buf, on_delete_range_after, gui);
+        g_signal_handlers_block_by_func(buf, on_buffer_changed, gui);
+
+        gtk_text_buffer_delete(buf, &replace_start, &replace_end);
+
+        GtkTextChildAnchor *anchor = gtk_text_child_anchor_new();
+        gtk_text_buffer_insert_child_anchor(buf, &replace_start, anchor);
+        
+        GtkWidget *separator = gtk_separator_new(GTK_ORIENTATION_HORIZONTAL);
+        gtk_widget_set_hexpand(separator, TRUE);
+        gtk_widget_add_css_class(separator, "hr-line");
+
+        gtk_text_view_add_child_at_anchor(GTK_TEXT_VIEW(gui->source_view), separator, anchor);
+
+        GtkTextIter next_char = replace_start;
+        gunichar nc = gtk_text_iter_get_char(&next_char);
+        if (nc != '\n' && nc != '\r' && !gtk_text_iter_is_end(&next_char)) {
+            gtk_text_buffer_insert(buf, &replace_start, "\n", 1);
+        } else if (gtk_text_iter_is_end(&next_char)) {
+            gtk_text_buffer_insert(buf, &replace_start, "\n", 1);
+        }
+
+        g_signal_handlers_unblock_by_func(buf, on_insert_text_before, gui);
+        g_signal_handlers_unblock_by_func(buf, on_insert_text_after, gui);
+        g_signal_handlers_unblock_by_func(buf, on_delete_range_after, gui);
+        g_signal_handlers_unblock_by_func(buf, on_buffer_changed, gui);
+    }
+}
+
 static void on_buffer_changed(GtkTextBuffer *buf, gpointer user_data) {
     AppGui *gui = (AppGui *)user_data;
+    
+    check_and_insert_hr(buf, gui);
     
     GtkTextIter start, end;
     gtk_text_buffer_get_bounds(buf, &start, &end);
@@ -2511,7 +1940,7 @@ static void on_buffer_changed(GtkTextBuffer *buf, gpointer user_data) {
     if (gui->lbl_chars) gtk_label_set_text(GTK_LABEL(gui->lbl_chars), c_buf);
     
     g_free(text);
-    update_conceal_markdown(buf);
+    update_conceal_markdown_all(buf);
 }
 
 static void on_mark_set(GtkTextBuffer *buf, GtkTextIter *location, GtkTextMark *mark, gpointer user_data) {
@@ -2583,9 +2012,10 @@ static void on_mark_set(GtkTextBuffer *buf, GtkTextIter *location, GtkTextMark *
 }
 
 static void on_cursor_position_changed(GObject *object, GParamSpec *pspec, gpointer user_data) {
+    (void)object;
     (void)pspec;
     (void)user_data;
-    update_conceal_markdown(GTK_TEXT_BUFFER(object));
+    /* Redundant: on_mark_set already updates formatting layout on cursor moves. */
 }
 
 static void on_insert_text_before(GtkTextBuffer *buf, GtkTextIter *location, gchar *text, gint len, gpointer user_data) {
@@ -2638,10 +2068,663 @@ static void on_insert_text_before(GtkTextBuffer *buf, GtkTextIter *location, gch
     }
 }
 
+static void apply_paragraph_alignment(GtkTextBuffer *buf, GtkJustification justification) {
+    GtkTextTagTable *table = gtk_text_buffer_get_tag_table(buf);
+    GtkTextTag *tag_left = gtk_text_tag_table_lookup(table, "align-left");
+    if (!tag_left) {
+        tag_left = gtk_text_buffer_create_tag(buf, "align-left", "justification", GTK_JUSTIFY_LEFT, NULL);
+    }
+    GtkTextTag *tag_center = gtk_text_tag_table_lookup(table, "align-center");
+    if (!tag_center) {
+        tag_center = gtk_text_buffer_create_tag(buf, "align-center", "justification", GTK_JUSTIFY_CENTER, NULL);
+    }
+    GtkTextTag *tag_right = gtk_text_tag_table_lookup(table, "align-right");
+    if (!tag_right) {
+        tag_right = gtk_text_buffer_create_tag(buf, "align-right", "justification", GTK_JUSTIFY_RIGHT, NULL);
+    }
+    GtkTextTag *tag_justify = gtk_text_tag_table_lookup(table, "align-justify");
+    if (!tag_justify) {
+        tag_justify = gtk_text_buffer_create_tag(buf, "align-justify", "justification", GTK_JUSTIFY_FILL, NULL);
+    }
+
+    GtkTextTag *target_tag = NULL;
+    switch (justification) {
+        case GTK_JUSTIFY_LEFT:   target_tag = tag_left; break;
+        case GTK_JUSTIFY_CENTER: target_tag = tag_center; break;
+        case GTK_JUSTIFY_RIGHT:  target_tag = tag_right; break;
+        case GTK_JUSTIFY_FILL:   target_tag = tag_justify; break;
+        default: return;
+    }
+
+    GtkTextIter start, end;
+    if (!gtk_text_buffer_get_selection_bounds(buf, &start, &end)) {
+        gtk_text_buffer_get_iter_at_mark(buf, &start, gtk_text_buffer_get_insert(buf));
+        end = start;
+    }
+
+    gint start_line = gtk_text_iter_get_line(&start);
+    gint end_line = gtk_text_iter_get_line(&end);
+
+    gtk_text_buffer_begin_user_action(buf);
+
+    for (gint l = start_line; l <= end_line; l++) {
+        GtkTextIter line_start, line_end;
+        gtk_text_buffer_get_iter_at_line(buf, &line_start, l);
+        line_end = line_start;
+        gtk_text_iter_forward_to_line_end(&line_end);
+
+        gtk_text_buffer_remove_tag(buf, tag_left, &line_start, &line_end);
+        gtk_text_buffer_remove_tag(buf, tag_center, &line_start, &line_end);
+        gtk_text_buffer_remove_tag(buf, tag_right, &line_start, &line_end);
+        gtk_text_buffer_remove_tag(buf, tag_justify, &line_start, &line_end);
+
+        gtk_text_buffer_apply_tag(buf, target_tag, &line_start, &line_end);
+    }
+
+    gtk_text_buffer_end_user_action(buf);
+}
+
+static void on_paste_plain_text_received(GObject *source_object, GAsyncResult *res, gpointer user_data) {
+    GdkClipboard *clipboard = GDK_CLIPBOARD(source_object);
+    GError *error = NULL;
+    char *text = gdk_clipboard_read_text_finish(clipboard, res, &error);
+    if (error) {
+        g_warning("Failed to read text from clipboard: %s", error->message);
+        g_clear_error(&error);
+        return;
+    }
+    if (text) {
+        AppGui *gui = (AppGui *)user_data;
+        GtkTextBuffer *buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(gui->source_view));
+        GtkTextIter start, end;
+        gtk_text_buffer_begin_user_action(buf);
+        if (gtk_text_buffer_get_selection_bounds(buf, &start, &end)) {
+            gtk_text_buffer_delete(buf, &start, &end);
+        }
+        gtk_text_buffer_insert_at_cursor(buf, text, -1);
+        gtk_text_buffer_end_user_action(buf);
+        g_free(text);
+    }
+}
+
+static void on_save_as_dialog_response(GObject *source_object, GAsyncResult *res, gpointer user_data) {
+    GtkFileDialog *dialog = GTK_FILE_DIALOG(source_object);
+    AppGui *gui = (AppGui *)user_data;
+    GError *error = NULL;
+    GFile *file = gtk_file_dialog_save_finish(dialog, res, &error);
+    if (file) {
+        char *path = g_file_get_path(file);
+        if (path) {
+            GtkTextBuffer *buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(gui->source_view));
+            GtkTextIter start, end;
+            gtk_text_buffer_get_bounds(buf, &start, &end);
+            char *text = gtk_text_buffer_get_text(buf, &start, &end, FALSE);
+            if (text) {
+                FILE *f = fopen(path, "w");
+                if (f) {
+                    fputs(text, f);
+                    fclose(f);
+                    gui_set_sync_status("Saved");
+                    zig_open_file(path);
+                } else {
+                    gui_set_sync_status("Save As Failed");
+                }
+                g_free(text);
+            }
+            g_free(path);
+        }
+        g_object_unref(file);
+    } else if (error) {
+        g_clear_error(&error);
+    }
+}
+
+static void trigger_save_as(AppGui *gui) {
+    if (!gui || !gui->window) return;
+
+    GtkFileDialog *dialog = gtk_file_dialog_new();
+    gtk_file_dialog_set_title(dialog, "Save As...");
+    gtk_file_dialog_set_initial_name(dialog, "untitled.md");
+
+    GtkFileFilter *filter = gtk_file_filter_new();
+    gtk_file_filter_set_name(filter, "Markdown Files");
+    gtk_file_filter_add_pattern(filter, "*.md");
+    gtk_file_filter_add_mime_type(filter, "text/markdown");
+
+    GListStore *filters = g_list_store_new(GTK_TYPE_FILE_FILTER);
+    g_list_store_append(filters, filter);
+    g_object_unref(filter);
+
+    gtk_file_dialog_set_filters(dialog, G_LIST_MODEL(filters));
+    g_object_unref(filters);
+
+    gtk_file_dialog_save(dialog, GTK_WINDOW(gui->window), NULL, on_save_as_dialog_response, gui);
+}
+
+static void move_current_line(GtkTextBuffer *buf, gboolean up) {
+    GtkTextIter cursor_iter;
+    gtk_text_buffer_get_iter_at_mark(buf, &cursor_iter, gtk_text_buffer_get_insert(buf));
+    gint line_num = gtk_text_iter_get_line(&cursor_iter);
+    gint col = gtk_text_iter_get_line_offset(&cursor_iter);
+    gint total_lines = gtk_text_buffer_get_line_count(buf);
+
+    if (up && line_num == 0) return;
+    if (!up && line_num >= total_lines - 1) return;
+
+    gint target_line = up ? line_num - 1 : line_num + 1;
+
+    gtk_text_buffer_begin_user_action(buf);
+
+    GtkTextIter line1_start, line1_end;
+    gtk_text_buffer_get_iter_at_line(buf, &line1_start, up ? target_line : line_num);
+    line1_end = line1_start;
+    gtk_text_iter_forward_to_line_end(&line1_end);
+
+    GtkTextIter line2_start, line2_end;
+    gtk_text_buffer_get_iter_at_line(buf, &line2_start, up ? line_num : target_line);
+    line2_end = line2_start;
+    gtk_text_iter_forward_to_line_end(&line2_end);
+
+    gchar *line1_text = gtk_text_buffer_get_text(buf, &line1_start, &line1_end, FALSE);
+    gchar *line2_text = gtk_text_buffer_get_text(buf, &line2_start, &line2_end, FALSE);
+
+    gtk_text_buffer_delete(buf, &line2_start, &line2_end);
+    GtkTextIter insert_iter2;
+    gtk_text_buffer_get_iter_at_line(buf, &insert_iter2, up ? line_num : target_line);
+    gtk_text_buffer_insert(buf, &insert_iter2, line1_text, -1);
+
+    gtk_text_buffer_get_iter_at_line(buf, &line1_start, up ? target_line : line_num);
+    line1_end = line1_start;
+    gtk_text_iter_forward_to_line_end(&line1_end);
+    gtk_text_buffer_delete(buf, &line1_start, &line1_end);
+    GtkTextIter insert_iter1;
+    gtk_text_buffer_get_iter_at_line(buf, &insert_iter1, up ? target_line : line_num);
+    gtk_text_buffer_insert(buf, &insert_iter1, line2_text, -1);
+
+    GtkTextIter final_cursor;
+    gtk_text_buffer_get_iter_at_line(buf, &final_cursor, target_line);
+    for (int i = 0; i < col; i++) {
+        if (gtk_text_iter_ends_line(&final_cursor)) break;
+        gtk_text_iter_forward_char(&final_cursor);
+    }
+    gtk_text_buffer_place_cursor(buf, &final_cursor);
+
+    g_free(line1_text);
+    g_free(line2_text);
+
+    gtk_text_buffer_end_user_action(buf);
+}
+
+static void clear_selection_formatting(GtkTextBuffer *buf) {
+    GtkTextIter start, end;
+    if (!gtk_text_buffer_get_selection_bounds(buf, &start, &end)) {
+        return;
+    }
+
+    gtk_text_buffer_begin_user_action(buf);
+
+    GtkTextTagTable *table = gtk_text_buffer_get_tag_table(buf);
+    GtkTextTag *tag_left = gtk_text_tag_table_lookup(table, "align-left");
+    GtkTextTag *tag_center = gtk_text_tag_table_lookup(table, "align-center");
+    GtkTextTag *tag_right = gtk_text_tag_table_lookup(table, "align-right");
+    GtkTextTag *tag_justify = gtk_text_tag_table_lookup(table, "align-justify");
+    if (tag_left) gtk_text_buffer_remove_tag(buf, tag_left, &start, &end);
+    if (tag_center) gtk_text_buffer_remove_tag(buf, tag_center, &start, &end);
+    if (tag_right) gtk_text_buffer_remove_tag(buf, tag_right, &start, &end);
+    if (tag_justify) gtk_text_buffer_remove_tag(buf, tag_justify, &start, &end);
+
+    gchar *text = gtk_text_buffer_get_text(buf, &start, &end, FALSE);
+    if (text && strlen(text) > 0) {
+        GString *cleaned = g_string_new("");
+        gchar *p = text;
+        while (*p) {
+            if (strncmp(p, "**", 2) == 0) {
+                p += 2;
+            } else if (strncmp(p, "~~", 2) == 0) {
+                p += 2;
+            } else if (strncmp(p, "==", 2) == 0) {
+                p += 2;
+            } else if (strncmp(p, "<u>", 3) == 0) {
+                p += 3;
+            } else if (strncmp(p, "</u>", 4) == 0) {
+                p += 4;
+            } else if (*p == '*' || *p == '`' || *p == '$') {
+                p++;
+            } else {
+                g_string_append_c(cleaned, *p);
+                p++;
+            }
+        }
+
+        gint start_offset = gtk_text_iter_get_offset(&start);
+        gtk_text_buffer_delete(buf, &start, &end);
+
+        GtkTextIter insert_iter;
+        gtk_text_buffer_get_iter_at_offset(buf, &insert_iter, start_offset);
+        gtk_text_buffer_insert(buf, &insert_iter, cleaned->str, -1);
+
+        GtkTextIter select_start, select_end;
+        gtk_text_buffer_get_iter_at_offset(buf, &select_start, start_offset);
+        gtk_text_buffer_get_iter_at_offset(buf, &select_end, start_offset + cleaned->len);
+        gtk_text_buffer_select_range(buf, &select_start, &select_end);
+
+        g_string_free(cleaned, TRUE);
+    }
+    g_free(text);
+
+    gtk_text_buffer_end_user_action(buf);
+}
+
+static void duplicate_current_line(GtkTextBuffer *buf) {
+    GtkTextIter cursor_iter;
+    gtk_text_buffer_get_iter_at_mark(buf, &cursor_iter, gtk_text_buffer_get_insert(buf));
+    gint line_num = gtk_text_iter_get_line(&cursor_iter);
+    gint col = gtk_text_iter_get_line_offset(&cursor_iter);
+
+    gtk_text_buffer_begin_user_action(buf);
+
+    GtkTextIter line_start, line_end;
+    gtk_text_buffer_get_iter_at_line(buf, &line_start, line_num);
+    line_end = line_start;
+    gtk_text_iter_forward_to_line_end(&line_end);
+
+    gchar *line_text = gtk_text_buffer_get_text(buf, &line_start, &line_end, FALSE);
+
+    gchar *dup_text = g_strconcat("\n", line_text, NULL);
+    gtk_text_buffer_insert(buf, &line_end, dup_text, -1);
+
+    GtkTextIter final_cursor;
+    gtk_text_buffer_get_iter_at_line(buf, &final_cursor, line_num);
+    for (int i = 0; i < col; i++) {
+        if (gtk_text_iter_ends_line(&final_cursor)) break;
+        gtk_text_iter_forward_char(&final_cursor);
+    }
+    gtk_text_buffer_place_cursor(buf, &final_cursor);
+
+    g_free(line_text);
+    g_free(dup_text);
+
+    gtk_text_buffer_end_user_action(buf);
+}
+
+static void toggle_comment_current_line(GtkTextBuffer *buf) {
+    GtkTextIter cursor_iter;
+    gtk_text_buffer_get_iter_at_mark(buf, &cursor_iter, gtk_text_buffer_get_insert(buf));
+    gint line_num = gtk_text_iter_get_line(&cursor_iter);
+    gint col = gtk_text_iter_get_line_offset(&cursor_iter);
+
+    gtk_text_buffer_begin_user_action(buf);
+
+    GtkTextIter line_start, line_end;
+    gtk_text_buffer_get_iter_at_line(buf, &line_start, line_num);
+    line_end = line_start;
+    gtk_text_iter_forward_to_line_end(&line_end);
+
+    gchar *line_text = gtk_text_buffer_get_text(buf, &line_start, &line_end, FALSE);
+
+    int ws = 0;
+    while (line_text[ws] == ' ' || line_text[ws] == '\t') ws++;
+
+    char *content = line_text + ws;
+    gboolean is_commented = FALSE;
+    if (strncmp(content, "<!--", 4) == 0) {
+        size_t len = strlen(content);
+        if (len >= 7 && strcmp(content + len - 3, "-->") == 0) {
+            is_commented = TRUE;
+        }
+    }
+
+    gchar *new_text = NULL;
+    if (is_commented) {
+        size_t len = strlen(content);
+        gchar *inner = g_strndup(content + 4, len - 7);
+        char *start_p = inner;
+        if (start_p[0] == ' ') start_p++;
+        size_t inner_len = strlen(start_p);
+        if (inner_len > 0 && start_p[inner_len - 1] == ' ') {
+            start_p[inner_len - 1] = '\0';
+        }
+        gchar *indent = g_strndup(line_text, ws);
+        new_text = g_strconcat(indent, start_p, NULL);
+        g_free(inner);
+        g_free(indent);
+    } else {
+        gchar *indent = g_strndup(line_text, ws);
+        new_text = g_strconcat(indent, "<!-- ", content, " -->", NULL);
+        g_free(indent);
+    }
+
+    gint start_offset = gtk_text_iter_get_offset(&line_start);
+    gtk_text_buffer_delete(buf, &line_start, &line_end);
+
+    GtkTextIter insert_iter;
+    gtk_text_buffer_get_iter_at_offset(buf, &insert_iter, start_offset);
+    gtk_text_buffer_insert(buf, &insert_iter, new_text, -1);
+
+    GtkTextIter final_cursor;
+    gtk_text_buffer_get_iter_at_line(buf, &final_cursor, line_num);
+    for (int i = 0; i < col; i++) {
+        if (gtk_text_iter_ends_line(&final_cursor)) break;
+        gtk_text_iter_forward_char(&final_cursor);
+    }
+    gtk_text_buffer_place_cursor(buf, &final_cursor);
+
+    g_free(line_text);
+    g_free(new_text);
+
+    gtk_text_buffer_end_user_action(buf);
+}
+
+static void delete_current_line(GtkTextBuffer *buf) {
+    GtkTextIter cursor_iter;
+    gtk_text_buffer_get_iter_at_mark(buf, &cursor_iter, gtk_text_buffer_get_insert(buf));
+    gint line_num = gtk_text_iter_get_line(&cursor_iter);
+
+    gtk_text_buffer_begin_user_action(buf);
+
+    GtkTextIter line_start, line_end;
+    gtk_text_buffer_get_iter_at_line(buf, &line_start, line_num);
+    line_end = line_start;
+
+    gint total_lines = gtk_text_buffer_get_line_count(buf);
+    if (line_num < total_lines - 1) {
+        gtk_text_iter_forward_line(&line_end);
+        gtk_text_buffer_delete(buf, &line_start, &line_end);
+    } else if (line_num > 0) {
+        gtk_text_buffer_get_iter_at_line(buf, &line_start, line_num - 1);
+        gtk_text_iter_forward_to_line_end(&line_start);
+        gtk_text_iter_forward_to_line_end(&line_end);
+        gtk_text_buffer_delete(buf, &line_start, &line_end);
+    } else {
+        gtk_text_iter_forward_to_line_end(&line_end);
+        gtk_text_buffer_delete(buf, &line_start, &line_end);
+    }
+
+    gtk_text_buffer_end_user_action(buf);
+}
+
+static void toggle_fullscreen(AppGui *gui) {
+    static gboolean is_fullscreen = FALSE;
+    if (is_fullscreen) {
+        gtk_window_unfullscreen(GTK_WINDOW(gui->window));
+        is_fullscreen = FALSE;
+    } else {
+        gtk_window_fullscreen(GTK_WINDOW(gui->window));
+        is_fullscreen = TRUE;
+    }
+}
+
+static AppShortcut app_shortcuts[] = {
+    { "bold", "Bold text", "<Control>b", 0, 0 },
+    { "italic", "Italic text", "<Control>i", 0, 0 },
+    { "underline", "Underline text", "<Control>u", 0, 0 },
+    { "strikethrough", "Strikethrough text", "<Control><Shift>x", 0, 0 },
+    { "left_align", "Left align text", "<Control><Shift>l", 0, 0 },
+    { "center_align", "Center align text", "<Control><Shift>e", 0, 0 },
+    { "right_align", "Right align text", "<Control><Shift>r", 0, 0 },
+    { "justify", "Justify text", "<Control><Shift>j", 0, 0 },
+    { "clear_format", "Clear formatting", "<Control>backslash", 0, 0 },
+    { "zoom_in", "Zoom In", "<Control>equal", 0, 0 },
+    { "zoom_out", "Zoom Out", "<Control>minus", 0, 0 },
+    { "reset_zoom", "Reset Zoom", "<Control>0", 0, 0 },
+    { "fullscreen", "Fullscreen / Focus Mode", "F11", 0, 0 },
+    { "copy", "Copy selected text", "<Control>c", 0, 0 },
+    { "cut", "Cut selected text", "<Control>x", 0, 0 },
+    { "paste", "Paste text", "<Control>v", 0, 0 },
+    { "paste_plain", "Paste plain text", "<Control><Shift>v", 0, 0 },
+    { "undo", "Undo last action", "<Control>z", 0, 0 },
+    { "redo", "Redo last action", "<Control>y", 0, 0 },
+    { "select_all", "Select all text", "<Control>a", 0, 0 },
+    { "duplicate_line", "Duplicate current line", "<Control>d", 0, 0 },
+    { "move_line_up", "Move line up", "<Alt>Up", 0, 0 },
+    { "move_line_down", "Move line down", "<Alt>Down", 0, 0 },
+    { "toggle_comment", "Toggle comment", "<Control>slash", 0, 0 },
+    { "delete_prev_word", "Delete previous word", "<Control>BackSpace", 0, 0 },
+    { "delete_next_word", "Delete next word", "<Control>Delete", 0, 0 },
+    { "delete_line", "Delete current line", "<Control><Shift>k", 0, 0 },
+    { "move_word_left", "Move word left", "<Control>Left", 0, 0 },
+    { "move_word_right", "Move word right", "<Control>Right", 0, 0 },
+    { "move_line_start", "Move to start of line", "Home", 0, 0 },
+    { "move_line_end", "Move to end of line", "End", 0, 0 },
+    { "move_doc_start", "Move to start of document", "<Control>Home", 0, 0 },
+    { "move_doc_end", "Move to end of document", "<Control>End", 0, 0 },
+    { "new_file", "Create new file", "<Control>n", 0, 0 },
+    { "open_file", "Open existing file", "<Control>o", 0, 0 },
+    { "save_file", "Save file", "<Control>s", 0, 0 },
+    { "save_file_as", "Save file as...", "<Control><Shift>s", 0, 0 },
+    { "export_pdf", "Print / Export PDF", "<Control>p", 0, 0 },
+    { "toggle_search", "Toggle search bar", "<Control>f", 0, 0 },
+    { "replace_text", "Replace text", "<Control>h", 0, 0 },
+    { "close_tab", "Close file / tab", "<Control>w", 0, 0 },
+    { "open_settings", "Open settings", "<Control>comma", 0, 0 },
+    { "shortcuts_ref", "Shortcuts reference", "<Control>question", 0, 0 },
+    { "toggle_sidebar", "Toggle Sidebar", "<Control><Shift>backslash", 0, 0 },
+    { "inline_code", "Inline code", "<Control>k", 0, 0 },
+    { "highlight", "Highlight", "<Control><Shift>h", 0, 0 },
+    { "blockquote", "Blockquote", "<Control>q", 0, 0 },
+    { "math", "Math", "<Control>m", 0, 0 },
+    { "ordered_list", "Ordered list", "<Control><Shift>o", 0, 0 },
+    { "task_list", "Task list", "<Control><Shift>t", 0, 0 }
+};
+#define NUM_APP_SHORTCUTS (sizeof(app_shortcuts)/sizeof(app_shortcuts[0]))
+
+static int shortcut_listening_index = -1;
+static GtkWidget *shortcut_value_labels[NUM_APP_SHORTCUTS] = { NULL };
+static GtkWidget *shortcut_edit_buttons[NUM_APP_SHORTCUTS] = { NULL };
+
+static gboolean parse_shortcut_string(const char *str, guint *out_keyval, GdkModifierType *out_state) {
+    if (!str || strlen(str) == 0) return FALSE;
+
+    GdkModifierType state = 0;
+    const char *p = str;
+
+    while (*p == '<') {
+        const char *end = strchr(p, '>');
+        if (!end) break;
+        
+        size_t len = end - p - 1;
+        if (g_ascii_strncasecmp(p + 1, "Control", len) == 0) {
+            state |= GDK_CONTROL_MASK;
+        } else if (g_ascii_strncasecmp(p + 1, "Shift", len) == 0) {
+            state |= GDK_SHIFT_MASK;
+        } else if (g_ascii_strncasecmp(p + 1, "Alt", len) == 0) {
+            state |= GDK_ALT_MASK;
+        } else if (g_ascii_strncasecmp(p + 1, "Meta", len) == 0 || g_ascii_strncasecmp(p + 1, "Super", len) == 0) {
+            state |= GDK_SUPER_MASK;
+        }
+        p = end + 1;
+    }
+
+    guint keyval = gdk_keyval_from_name(p);
+    if (keyval == GDK_KEY_VoidSymbol) {
+        if (strcmp(p, "+") == 0) keyval = GDK_KEY_plus;
+        else if (strcmp(p, "=") == 0) keyval = GDK_KEY_equal;
+        else if (strcmp(p, "-") == 0) keyval = GDK_KEY_minus;
+        else if (strcmp(p, "\\") == 0) keyval = GDK_KEY_backslash;
+        else return FALSE;
+    }
+
+    *out_keyval = keyval;
+    *out_state = state;
+    return TRUE;
+}
+
+static void init_app_shortcuts(void) {
+    sqlite3 *db = NULL;
+    if (sqlite3_open(DB_PATH, &db) == SQLITE_OK) {
+        const char *create_sql = "CREATE TABLE IF NOT EXISTS keyboard_shortcuts ("
+                                 "action_name TEXT PRIMARY KEY, "
+                                 "shortcut_val TEXT NOT NULL);";
+        sqlite3_exec(db, create_sql, NULL, NULL, NULL);
+
+        for (size_t i = 0; i < NUM_APP_SHORTCUTS; i++) {
+            sqlite3_stmt *stmt = NULL;
+            const char *select_sql = "SELECT shortcut_val FROM keyboard_shortcuts WHERE action_name = ?;";
+            if (sqlite3_prepare_v2(db, select_sql, -1, &stmt, NULL) == SQLITE_OK) {
+                sqlite3_bind_text(stmt, 1, app_shortcuts[i].action_id, -1, SQLITE_STATIC);
+                if (sqlite3_step(stmt) == SQLITE_ROW) {
+                    const char *val = (const char *)sqlite3_column_text(stmt, 0);
+                    if (val && strlen(val) > 0) {
+                        strncpy(app_shortcuts[i].shortcut_str, val, sizeof(app_shortcuts[i].shortcut_str) - 1);
+                        app_shortcuts[i].shortcut_str[sizeof(app_shortcuts[i].shortcut_str) - 1] = '\0';
+                    }
+                }
+                sqlite3_finalize(stmt);
+            }
+        }
+        sqlite3_close(db);
+    }
+
+    for (size_t i = 0; i < NUM_APP_SHORTCUTS; i++) {
+        parse_shortcut_string(app_shortcuts[i].shortcut_str, &app_shortcuts[i].keyval, &app_shortcuts[i].state);
+    }
+}
+
+static gboolean match_app_shortcut(const char *action_id, guint keyval, guint keycode, GdkModifierType state) {
+    for (size_t i = 0; i < NUM_APP_SHORTCUTS; i++) {
+        if (strcmp(app_shortcuts[i].action_id, action_id) == 0) {
+            GdkModifierType clean_state = state & (GDK_CONTROL_MASK | GDK_SHIFT_MASK | GDK_ALT_MASK | GDK_SUPER_MASK);
+            if (clean_state == app_shortcuts[i].state) {
+                if (keyval == app_shortcuts[i].keyval || keycode_matches_latin_keyval(keycode, app_shortcuts[i].keyval)) {
+                    return TRUE;
+                }
+            }
+            break;
+        }
+    }
+    return FALSE;
+}
+
+static gboolean is_modifier_key(guint keyval) {
+    return (keyval == GDK_KEY_Shift_L || keyval == GDK_KEY_Shift_R ||
+            keyval == GDK_KEY_Control_L || keyval == GDK_KEY_Control_R ||
+            keyval == GDK_KEY_Alt_L || keyval == GDK_KEY_Alt_R ||
+            keyval == GDK_KEY_Meta_L || keyval == GDK_KEY_Meta_R ||
+            keyval == GDK_KEY_Super_L || keyval == GDK_KEY_Super_R ||
+            keyval == GDK_KEY_Hyper_L || keyval == GDK_KEY_Hyper_R ||
+            keyval == GDK_KEY_Caps_Lock || keyval == GDK_KEY_Num_Lock ||
+            keyval == GDK_KEY_Scroll_Lock);
+}
+
+static gchar* get_pretty_shortcut_string(const char *shortcut_str) {
+    GString *pretty = g_string_new("");
+    const char *p = shortcut_str;
+    while (*p) {
+        if (strncmp(p, "<Control>", 9) == 0) {
+            g_string_append(pretty, "Ctrl + ");
+            p += 9;
+        } else if (strncmp(p, "<Shift>", 7) == 0) {
+            g_string_append(pretty, "Shift + ");
+            p += 7;
+        } else if (strncmp(p, "<Alt>", 5) == 0) {
+            g_string_append(pretty, "Alt + ");
+            p += 5;
+        } else if (strncmp(p, "<Super>", 7) == 0) {
+            g_string_append(pretty, "Super + ");
+            p += 7;
+        } else {
+            if (strlen(p) == 1 && *p >= 'a' && *p <= 'z') {
+                g_string_append_c(pretty, *p - 32);
+            } else {
+                g_string_append(pretty, p);
+            }
+            break;
+        }
+    }
+    return g_string_free(pretty, FALSE);
+}
+
+static gboolean on_settings_key_pressed(GtkEventControllerKey *ctrl,
+                                        guint keyval, guint keycode,
+                                        GdkModifierType state, gpointer user_data) {
+    (void)ctrl;
+    (void)keycode;
+    (void)user_data;
+
+    if (shortcut_listening_index < 0) return FALSE;
+
+    if (is_modifier_key(keyval)) {
+        return TRUE;
+    }
+
+    int idx = shortcut_listening_index;
+    shortcut_listening_index = -1;
+
+    GString *gstr = g_string_new("");
+    if (state & GDK_CONTROL_MASK) g_string_append(gstr, "<Control>");
+    if (state & GDK_SHIFT_MASK)   g_string_append(gstr, "<Shift>");
+    if (state & GDK_ALT_MASK)     g_string_append(gstr, "<Alt>");
+    if (state & GDK_SUPER_MASK)   g_string_append(gstr, "<Super>");
+
+    const char *key_name = gdk_keyval_name(keyval);
+    if (!key_name) {
+        key_name = "void";
+    }
+    g_string_append(gstr, key_name);
+
+    strncpy(app_shortcuts[idx].shortcut_str, gstr->str, sizeof(app_shortcuts[idx].shortcut_str) - 1);
+    app_shortcuts[idx].shortcut_str[sizeof(app_shortcuts[idx].shortcut_str) - 1] = '\0';
+    app_shortcuts[idx].keyval = keyval;
+    app_shortcuts[idx].state = state & (GDK_CONTROL_MASK | GDK_SHIFT_MASK | GDK_ALT_MASK | GDK_SUPER_MASK);
+
+    sqlite3 *db = NULL;
+    if (sqlite3_open(DB_PATH, &db) == SQLITE_OK) {
+        const char *insert_sql = "INSERT OR REPLACE INTO keyboard_shortcuts (action_name, shortcut_val) VALUES (?, ?);";
+        sqlite3_stmt *stmt = NULL;
+        if (sqlite3_prepare_v2(db, insert_sql, -1, &stmt, NULL) == SQLITE_OK) {
+            sqlite3_bind_text(stmt, 1, app_shortcuts[idx].action_id, -1, SQLITE_STATIC);
+            sqlite3_bind_text(stmt, 2, app_shortcuts[idx].shortcut_str, -1, SQLITE_STATIC);
+            sqlite3_step(stmt);
+            sqlite3_finalize(stmt);
+        }
+        sqlite3_close(db);
+    }
+
+    if (shortcut_value_labels[idx]) {
+        gchar *pretty_str = get_pretty_shortcut_string(app_shortcuts[idx].shortcut_str);
+        gtk_label_set_text(GTK_LABEL(shortcut_value_labels[idx]), pretty_str);
+        g_free(pretty_str);
+    }
+
+    if (shortcut_edit_buttons[idx]) {
+        gtk_button_set_label(GTK_BUTTON(shortcut_edit_buttons[idx]), "Edit");
+    }
+
+    g_string_free(gstr, TRUE);
+
+    return TRUE;
+}
+
+static void on_edit_shortcut_clicked(GtkButton *btn, gpointer user_data) {
+    int idx = GPOINTER_TO_INT(user_data);
+
+    if (shortcut_listening_index >= 0 && shortcut_listening_index != idx) {
+        int old_idx = shortcut_listening_index;
+        if (shortcut_edit_buttons[old_idx]) {
+            gtk_button_set_label(GTK_BUTTON(shortcut_edit_buttons[old_idx]), "Edit");
+        }
+    }
+
+    shortcut_listening_index = idx;
+    gtk_button_set_label(btn, "Press keys...");
+}
+
+static void on_kb_window_destroy(GtkWidget *widget, gpointer user_data) {
+    (void)widget;
+    (void)user_data;
+    if (shortcut_listening_index >= 0) {
+        shortcut_listening_index = -1;
+    }
+    for (size_t i = 0; i < NUM_APP_SHORTCUTS; i++) {
+        shortcut_value_labels[i] = NULL;
+        shortcut_edit_buttons[i] = NULL;
+    }
+}
+
 static void show_keybindings_window(AppGui *gui) {
     GtkWidget *dialog = gtk_window_new();
     gtk_window_set_title(GTK_WINDOW(dialog), "Keyboard Shortcuts");
-    gtk_window_set_default_size(GTK_WINDOW(dialog), 520, 560);
+    gtk_window_set_default_size(GTK_WINDOW(dialog), 550, 600);
     gtk_window_set_transient_for(GTK_WINDOW(dialog), GTK_WINDOW(gui->window));
     gtk_window_set_modal(GTK_WINDOW(dialog), TRUE);
     gtk_window_set_destroy_with_parent(GTK_WINDOW(dialog), TRUE);
@@ -2667,52 +2750,108 @@ static void show_keybindings_window(AppGui *gui) {
         gtk_box_append(GTK_BOX(vbox), _s); \
     }
     /* Helper: add keybinding row */
-    #define KB_ROW(shortcut, description) { \
-        GtkWidget *_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0); \
-        GtkWidget *_k = gtk_label_new(shortcut); \
+    #define KB_ROW(shortcut, description, act_id) { \
+        GtkWidget *_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12); \
+        gchar *_curr_shortcut = NULL; \
+        int _idx = -1; \
+        if (act_id && strlen(act_id) > 0) { \
+            for (int i = 0; i < (int)NUM_APP_SHORTCUTS; i++) { \
+                if (strcmp(app_shortcuts[i].action_id, act_id) == 0) { \
+                    _idx = i; \
+                    _curr_shortcut = get_pretty_shortcut_string(app_shortcuts[i].shortcut_str); \
+                    break; \
+                } \
+            } \
+        } \
+        GtkWidget *_k = gtk_label_new(_curr_shortcut ? _curr_shortcut : shortcut); \
         gtk_widget_add_css_class(_k, "kb-key"); \
         gtk_widget_set_halign(_k, GTK_ALIGN_START); \
+        if (_curr_shortcut) g_free(_curr_shortcut); \
         GtkWidget *_d = gtk_label_new(description); \
         gtk_widget_add_css_class(_d, "kb-desc"); \
         gtk_widget_set_halign(_d, GTK_ALIGN_START); \
         gtk_widget_set_hexpand(_d, TRUE); \
         gtk_box_append(GTK_BOX(_row), _k); \
         gtk_box_append(GTK_BOX(_row), _d); \
+        if (_idx >= 0) { \
+            shortcut_value_labels[_idx] = _k; \
+            GtkWidget *_edit_btn = gtk_button_new_with_label("Edit"); \
+            gtk_widget_add_css_class(_edit_btn, "pop-btn"); \
+            g_signal_connect(_edit_btn, "clicked", G_CALLBACK(on_edit_shortcut_clicked), GINT_TO_POINTER(_idx)); \
+            shortcut_edit_buttons[_idx] = _edit_btn; \
+            gtk_box_append(GTK_BOX(_row), _edit_btn); \
+        } \
         gtk_box_append(GTK_BOX(vbox), _row); \
     }
 
-    KB_SECTION("FORMATTING")
-    KB_ROW("Ctrl + B",       "Bold selected text");
-    KB_ROW("Ctrl + I",       "Italic selected text");
-    KB_ROW("Ctrl + K",       "Inline code");
-    KB_ROW("Ctrl + H",       "Highlight selected text");
-    KB_ROW("Ctrl + Shift+S", "Strikethrough selected text");
-    KB_ROW("Ctrl + Q",       "Blockquote selected text");
-    KB_ROW("Ctrl + M",       "Inline math ($…$)");
+    KB_SECTION("1. TEXT FORMATTING & ALIGNMENT")
+    KB_ROW("Ctrl + B",       "Bold text", "bold");
+    KB_ROW("Ctrl + I",       "Italic text", "italic");
+    KB_ROW("Ctrl + U",       "Underline text", "underline");
+    KB_ROW("Ctrl + Shift+X", "Strikethrough text", "strikethrough");
+    KB_ROW("Ctrl + Shift+L", "Left align text", "left_align");
+    KB_ROW("Ctrl + Shift+E", "Center align text", "center_align");
+    KB_ROW("Ctrl + Shift+R", "Right align text", "right_align");
+    KB_ROW("Ctrl + Shift+J", "Justify text", "justify");
+    KB_ROW("Ctrl + \\",      "Clear formatting", "clear_format");
+    KB_ROW("Ctrl + K",       "Inline code", "inline_code");
+    KB_ROW("Ctrl + H",       "Highlight", "highlight");
+    KB_ROW("Ctrl + Q",       "Blockquote", "blockquote");
+    KB_ROW("Ctrl + M",       "Math", "math");
+    KB_ROW("Ctrl + Shift+O", "Ordered list", "ordered_list");
+    KB_ROW("Ctrl + Shift+T", "Task list", "task_list");
 
-    KB_SECTION("PARAGRAPH")
-    KB_ROW("Ctrl + 1",       "Heading 1 (# )");
-    KB_ROW("Ctrl + 2",       "Heading 2 (## )");
-    KB_ROW("Ctrl + 3",       "Heading 3 (### )");
-    KB_ROW("Ctrl + 4",       "Heading 4 (#### )");
-    KB_ROW("Ctrl + 5",       "Heading 5 (##### )");
-    KB_ROW("Ctrl + 6",       "Heading 6 (###### )");
-    KB_ROW("Ctrl + 0",       "Body (remove prefix)");
-    KB_ROW("Ctrl + Shift+L", "Bullet list item");
-    KB_ROW("Ctrl + Shift+O", "Numbered list item");
-    KB_ROW("Ctrl + Shift+T", "Task / checkbox item");
+    KB_SECTION("2. ZOOM & TYPOGRAPHY")
+    KB_ROW("Ctrl + = / +",   "Zoom In", "zoom_in");
+    KB_ROW("Ctrl + -",       "Zoom Out", "zoom_out");
+    KB_ROW("Ctrl + 0",       "Reset Zoom", "reset_zoom");
+    KB_ROW("F11",            "Fullscreen / Focus Mode", "fullscreen");
 
-    KB_SECTION("NAVIGATION & UI")
-    KB_ROW("Ctrl + F",       "Toggle search bar");
-    KB_ROW("Ctrl + S",       "Force save now");
-    KB_ROW("Ctrl + ?",       "Show this shortcuts reference");
-    KB_ROW("Escape",         "Close search bar");
-    KB_ROW("Return (list)",  "Continue list on next line");
-    KB_ROW("Return (empty)", "Exit list / clear prefix");
-    KB_ROW("Click [[link]]", "Open / create wiki-link note");
+    KB_SECTION("3. ADVANCED EDITING")
+    KB_ROW("Ctrl + C",       "Copy selected text", "copy");
+    KB_ROW("Ctrl + X",       "Cut selected text", "cut");
+    KB_ROW("Ctrl + V",       "Paste text", "paste");
+    KB_ROW("Ctrl + Shift+V", "Paste plain text", "paste_plain");
+    KB_ROW("Ctrl + Z",       "Undo last action", "undo");
+    KB_ROW("Ctrl + Y / Shift+Z", "Redo last action", "redo");
+    KB_ROW("Ctrl + A",       "Select all text", "select_all");
+    KB_ROW("Ctrl + D / Enter", "Duplicate current line", "duplicate_line");
+    KB_ROW("Alt + Up",       "Move line up", "move_line_up");
+    KB_ROW("Alt + Down",     "Move line down", "move_line_down");
+    KB_ROW("Ctrl + /",       "Toggle comment", "toggle_comment");
+
+    KB_SECTION("4. NAVIGATION & DELETION")
+    KB_ROW("Ctrl + Backspace", "Delete previous word", "delete_prev_word");
+    KB_ROW("Ctrl + Delete",  "Delete next word", "delete_next_word");
+    KB_ROW("Ctrl + Shift+K", "Delete current line", "delete_line");
+    KB_ROW("Ctrl + Left",    "Move word left", "move_word_left");
+    KB_ROW("Ctrl + Right",   "Move word right", "move_word_right");
+    KB_ROW("Home",           "Move to start of line", "move_line_start");
+    KB_ROW("End",            "Move to end of line", "move_line_end");
+    KB_ROW("Ctrl + Home",    "Move to start of document", "move_doc_start");
+    KB_ROW("Ctrl + End",     "Move to end of document", "move_doc_end");
+
+    KB_SECTION("5. FILE & SEARCH")
+    KB_ROW("Ctrl + N",       "Create new file", "new_file");
+    KB_ROW("Ctrl + O",       "Open existing file", "open_file");
+    KB_ROW("Ctrl + S",       "Save file", "save_file");
+    KB_ROW("Ctrl + Shift+S", "Save file as...", "save_file_as");
+    KB_ROW("Ctrl + P",       "Print / Export PDF", "export_pdf");
+    KB_ROW("Ctrl + F",       "Toggle search bar", "toggle_search");
+    KB_ROW("Ctrl + H",       "Replace text", "replace_text");
+    KB_ROW("Ctrl + W / F4",  "Close file / tab", "close_tab");
+    KB_ROW("Ctrl + ,",       "Open settings", "open_settings");
+    KB_ROW("Ctrl + ?",       "Shortcuts reference", "shortcuts_ref");
+    KB_ROW("Ctrl + \\",      "Toggle Sidebar", "toggle_sidebar");
 
     #undef KB_SECTION
     #undef KB_ROW
+
+    GtkEventController *dialog_key_ctrl = gtk_event_controller_key_new();
+    g_signal_connect(dialog_key_ctrl, "key-pressed", G_CALLBACK(on_settings_key_pressed), gui);
+    gtk_widget_add_controller(dialog, dialog_key_ctrl);
+
+    g_signal_connect(dialog, "destroy", G_CALLBACK(on_kb_window_destroy), NULL);
 
     gtk_window_present(GTK_WINDOW(dialog));
 }
@@ -2752,42 +2891,114 @@ static gboolean on_editor_key_pressed(GtkEventControllerKey *ctrl,
     gboolean ctrl_held  = (state & GDK_CONTROL_MASK) != 0;
     gboolean shift_held = (state & GDK_SHIFT_MASK)   != 0;
 
-    /* ── Ctrl+B  Bold ── */
-    if (ctrl_held && !shift_held && (keyval == GDK_KEY_b || keyval == GDK_KEY_B || keycode_matches_latin_keyval(keycode, GDK_KEY_b))) {
+    /* ── Bold ── */
+    if (match_app_shortcut("bold", keyval, keycode, state)) {
         apply_format(buf, "**", "**");
         return TRUE;
     }
-    /* ── Ctrl+I  Italic ── */
-    if (ctrl_held && !shift_held && (keyval == GDK_KEY_i || keyval == GDK_KEY_I || keycode_matches_latin_keyval(keycode, GDK_KEY_i))) {
+    /* ── Italic ── */
+    if (match_app_shortcut("italic", keyval, keycode, state)) {
         apply_format(buf, "*", "*");
         return TRUE;
     }
-    /* ── Ctrl+K  Inline code ── */
-    if (ctrl_held && !shift_held && (keyval == GDK_KEY_k || keyval == GDK_KEY_K || keycode_matches_latin_keyval(keycode, GDK_KEY_k))) {
-        apply_format(buf, "`", "`");
+    /* ── Underline ── */
+    if (match_app_shortcut("underline", keyval, keycode, state)) {
+        apply_format(buf, "<u>", "</u>");
         return TRUE;
     }
-    /* ── Ctrl+H  Highlight ── */
-    if (ctrl_held && !shift_held && (keyval == GDK_KEY_h || keyval == GDK_KEY_H || keycode_matches_latin_keyval(keycode, GDK_KEY_h))) {
-        apply_format(buf, "==", "==");
-        return TRUE;
-    }
-    /* ── Ctrl+Shift+S  Strikethrough ── */
-    if (ctrl_held && shift_held && (keyval == GDK_KEY_s || keyval == GDK_KEY_S || keycode_matches_latin_keyval(keycode, GDK_KEY_s))) {
+    /* ── Strikethrough ── */
+    if (match_app_shortcut("strikethrough", keyval, keycode, state)) {
         apply_format(buf, "~~", "~~");
         return TRUE;
     }
-    /* ── Ctrl+Q  Blockquote ── */
-    if (ctrl_held && !shift_held && (keyval == GDK_KEY_q || keyval == GDK_KEY_Q || keycode_matches_latin_keyval(keycode, GDK_KEY_q))) {
+    /* ── Center Align ── */
+    if (match_app_shortcut("center_align", keyval, keycode, state)) {
+        apply_paragraph_alignment(buf, GTK_JUSTIFY_CENTER);
+        return TRUE;
+    }
+    /* ── Left Align ── */
+    if (match_app_shortcut("left_align", keyval, keycode, state)) {
+        apply_paragraph_alignment(buf, GTK_JUSTIFY_LEFT);
+        return TRUE;
+    }
+    /* ── Right Align ── */
+    if (match_app_shortcut("right_align", keyval, keycode, state)) {
+        apply_paragraph_alignment(buf, GTK_JUSTIFY_RIGHT);
+        return TRUE;
+    }
+    /* ── Justify ── */
+    if (match_app_shortcut("justify", keyval, keycode, state)) {
+        apply_paragraph_alignment(buf, GTK_JUSTIFY_FILL);
+        return TRUE;
+    }
+    /* ── Clear Formatting ── */
+    if (match_app_shortcut("clear_format", keyval, keycode, state)) {
+        clear_selection_formatting(buf);
+        return TRUE;
+    }
+    /* ── Paste Plain Text ── */
+    if (match_app_shortcut("paste_plain", keyval, keycode, state)) {
+        GdkClipboard *clipboard = gtk_widget_get_clipboard(GTK_WIDGET(gui->source_view));
+        gdk_clipboard_read_text_async(clipboard, NULL, on_paste_plain_text_received, gui);
+        return TRUE;
+    }
+    /* ── Duplicate Line ── */
+    if (match_app_shortcut("duplicate_line", keyval, keycode, state) ||
+        (ctrl_held && (keyval == GDK_KEY_Return || keyval == GDK_KEY_KP_Enter))) {
+        duplicate_current_line(buf);
+        return TRUE;
+    }
+    /* ── Move Line Up ── */
+    if (match_app_shortcut("move_line_up", keyval, keycode, state)) {
+        move_current_line(buf, TRUE);
+        return TRUE;
+    }
+    /* ── Move Line Down ── */
+    if (match_app_shortcut("move_line_down", keyval, keycode, state)) {
+        move_current_line(buf, FALSE);
+        return TRUE;
+    }
+    /* ── Toggle Comment ── */
+    if (match_app_shortcut("toggle_comment", keyval, keycode, state)) {
+        toggle_comment_current_line(buf);
+        return TRUE;
+    }
+    /* ── Delete Line ── */
+    if (match_app_shortcut("delete_line", keyval, keycode, state)) {
+        delete_current_line(buf);
+        return TRUE;
+    }
+    /* ── Inline code ── */
+    if (match_app_shortcut("inline_code", keyval, keycode, state)) {
+        apply_format(buf, "`", "`");
+        return TRUE;
+    }
+    /* ── Highlight ── */
+    if (match_app_shortcut("highlight", keyval, keycode, state)) {
+        apply_format(buf, "==", "==");
+        return TRUE;
+    }
+    /* ── Blockquote ── */
+    if (match_app_shortcut("blockquote", keyval, keycode, state)) {
         apply_paragraph_format(buf, "> ");
         return TRUE;
     }
-    /* ── Ctrl+M  Math ── */
-    if (ctrl_held && !shift_held && (keyval == GDK_KEY_m || keyval == GDK_KEY_M || keycode_matches_latin_keyval(keycode, GDK_KEY_m))) {
+    /* ── Math ── */
+    if (match_app_shortcut("math", keyval, keycode, state)) {
         apply_format(buf, "$", "$");
         return TRUE;
     }
-    /* ── Ctrl+1..6  Headings ── */
+    /* ── Ordered list ── */
+    if (match_app_shortcut("ordered_list", keyval, keycode, state)) {
+        apply_paragraph_format(buf, "1. ");
+        return TRUE;
+    }
+    /* ── Task list ── */
+    if (match_app_shortcut("task_list", keyval, keycode, state)) {
+        apply_paragraph_format(buf, "- [ ] ");
+        return TRUE;
+    }
+    /* ── Headings Ctrl+1..6 ── */
     if (ctrl_held && !shift_held) {
         const char *h_prefix = NULL;
         if      (keyval == GDK_KEY_1) h_prefix = "# ";
@@ -2802,24 +3013,107 @@ static gboolean on_editor_key_pressed(GtkEventControllerKey *ctrl,
             return TRUE;
         }
     }
-    /* ── Ctrl+Shift+L  Bullet list ── */
-    if (ctrl_held && shift_held && (keyval == GDK_KEY_l || keyval == GDK_KEY_L || keycode_matches_latin_keyval(keycode, GDK_KEY_l))) {
-        apply_paragraph_format(buf, "- ");
-        return TRUE;
-    }
-    /* ── Ctrl+Shift+O  Ordered list ── */
-    if (ctrl_held && shift_held && (keyval == GDK_KEY_o || keyval == GDK_KEY_O || keycode_matches_latin_keyval(keycode, GDK_KEY_o))) {
-        apply_paragraph_format(buf, "1. ");
-        return TRUE;
-    }
-    /* ── Ctrl+Shift+T  Task list ── */
-    if (ctrl_held && shift_held && (keyval == GDK_KEY_t || keyval == GDK_KEY_T || keycode_matches_latin_keyval(keycode, GDK_KEY_t))) {
-        apply_paragraph_format(buf, "- [ ] ");
-        return TRUE;
-    }
-    /* ── Ctrl+S  Force save ── */
-    if (ctrl_held && !shift_held && (keyval == GDK_KEY_s || keyval == GDK_KEY_S || keycode_matches_latin_keyval(keycode, GDK_KEY_s))) {
+    /* ── Force Save ── */
+    if (match_app_shortcut("save_file", keyval, keycode, state)) {
         zig_force_save();
+        return TRUE;
+    }
+    /* ── Undo & Redo ── */
+    if (match_app_shortcut("undo", keyval, keycode, state)) {
+        if (gtk_text_buffer_get_enable_undo(buf)) {
+            gtk_text_buffer_undo(buf);
+            return TRUE;
+        }
+    }
+    if (match_app_shortcut("redo", keyval, keycode, state) ||
+        (ctrl_held && shift_held && (keyval == GDK_KEY_z || keyval == GDK_KEY_Z || keycode_matches_latin_keyval(keycode, GDK_KEY_z)))) {
+        if (gtk_text_buffer_get_enable_undo(buf)) {
+            gtk_text_buffer_redo(buf);
+            return TRUE;
+        }
+    }
+    /* ── Copy, Cut, Paste ── */
+    if (match_app_shortcut("copy", keyval, keycode, state)) {
+        g_signal_emit_by_name(gui->source_view, "copy-clipboard");
+        return TRUE;
+    }
+    if (match_app_shortcut("cut", keyval, keycode, state)) {
+        g_signal_emit_by_name(gui->source_view, "cut-clipboard");
+        return TRUE;
+    }
+    if (match_app_shortcut("paste", keyval, keycode, state)) {
+        g_signal_emit_by_name(gui->source_view, "paste-clipboard");
+        return TRUE;
+    }
+    /* ── Select All ── */
+    if (match_app_shortcut("select_all", keyval, keycode, state)) {
+        GtkTextIter start, end;
+        gtk_text_buffer_get_bounds(buf, &start, &end);
+        gtk_text_buffer_select_range(buf, &start, &end);
+        return TRUE;
+    }
+    /* ── Delete Word Previous/Next ── */
+    if (match_app_shortcut("delete_prev_word", keyval, keycode, state)) {
+        GtkTextIter start, end;
+        gtk_text_buffer_get_iter_at_mark(buf, &end, gtk_text_buffer_get_insert(buf));
+        start = end;
+        gtk_text_iter_backward_word_start(&start);
+        gtk_text_buffer_delete_interactive(buf, &start, &end, TRUE);
+        return TRUE;
+    }
+    if (match_app_shortcut("delete_next_word", keyval, keycode, state)) {
+        GtkTextIter start, end;
+        gtk_text_buffer_get_iter_at_mark(buf, &start, gtk_text_buffer_get_insert(buf));
+        end = start;
+        gtk_text_iter_forward_word_end(&end);
+        gtk_text_buffer_delete_interactive(buf, &start, &end, TRUE);
+        return TRUE;
+    }
+    /* ── Cursor Movements ── */
+    if (match_app_shortcut("move_word_left", keyval, keycode, state)) {
+        GtkTextIter iter;
+        gtk_text_buffer_get_iter_at_mark(buf, &iter, gtk_text_buffer_get_insert(buf));
+        gtk_text_iter_backward_word_start(&iter);
+        gtk_text_buffer_place_cursor(buf, &iter);
+        gtk_text_view_scroll_mark_onscreen(GTK_TEXT_VIEW(gui->source_view), gtk_text_buffer_get_insert(buf));
+        return TRUE;
+    }
+    if (match_app_shortcut("move_word_right", keyval, keycode, state)) {
+        GtkTextIter iter;
+        gtk_text_buffer_get_iter_at_mark(buf, &iter, gtk_text_buffer_get_insert(buf));
+        gtk_text_iter_forward_word_end(&iter);
+        gtk_text_buffer_place_cursor(buf, &iter);
+        gtk_text_view_scroll_mark_onscreen(GTK_TEXT_VIEW(gui->source_view), gtk_text_buffer_get_insert(buf));
+        return TRUE;
+    }
+    if (match_app_shortcut("move_line_start", keyval, keycode, state)) {
+        GtkTextIter iter;
+        gtk_text_buffer_get_iter_at_mark(buf, &iter, gtk_text_buffer_get_insert(buf));
+        gtk_text_iter_set_line_offset(&iter, 0);
+        gtk_text_buffer_place_cursor(buf, &iter);
+        gtk_text_view_scroll_mark_onscreen(GTK_TEXT_VIEW(gui->source_view), gtk_text_buffer_get_insert(buf));
+        return TRUE;
+    }
+    if (match_app_shortcut("move_line_end", keyval, keycode, state)) {
+        GtkTextIter iter;
+        gtk_text_buffer_get_iter_at_mark(buf, &iter, gtk_text_buffer_get_insert(buf));
+        gtk_text_iter_forward_to_line_end(&iter);
+        gtk_text_buffer_place_cursor(buf, &iter);
+        gtk_text_view_scroll_mark_onscreen(GTK_TEXT_VIEW(gui->source_view), gtk_text_buffer_get_insert(buf));
+        return TRUE;
+    }
+    if (match_app_shortcut("move_doc_start", keyval, keycode, state)) {
+        GtkTextIter iter;
+        gtk_text_buffer_get_start_iter(buf, &iter);
+        gtk_text_buffer_place_cursor(buf, &iter);
+        gtk_text_view_scroll_mark_onscreen(GTK_TEXT_VIEW(gui->source_view), gtk_text_buffer_get_insert(buf));
+        return TRUE;
+    }
+    if (match_app_shortcut("move_doc_end", keyval, keycode, state)) {
+        GtkTextIter iter;
+        gtk_text_buffer_get_end_iter(buf, &iter);
+        gtk_text_buffer_place_cursor(buf, &iter);
+        gtk_text_view_scroll_mark_onscreen(GTK_TEXT_VIEW(gui->source_view), gtk_text_buffer_get_insert(buf));
         return TRUE;
     }
 
@@ -3559,8 +3853,12 @@ static gboolean on_window_key_pressed(GtkEventControllerKey *ctrl,
                                       GdkModifierType state, gpointer user_data) {
     (void)ctrl;
     AppGui *gui = (AppGui *)user_data;
+    gboolean ctrl_held = (state & GDK_CONTROL_MASK) != 0;
+    gboolean shift_held = (state & GDK_SHIFT_MASK) != 0;
 
-    if ((state & GDK_CONTROL_MASK) && (keyval == GDK_KEY_f || keyval == GDK_KEY_F || keycode_matches_latin_keyval(keycode, GDK_KEY_f))) {
+    /* Toggle search bar */
+    if (match_app_shortcut("toggle_search", keyval, keycode, state) ||
+        match_app_shortcut("replace_text", keyval, keycode, state)) {
         toggle_search(gui);
         return TRUE;
     }
@@ -3570,27 +3868,95 @@ static gboolean on_window_key_pressed(GtkEventControllerKey *ctrl,
         return TRUE;
     }
 
-    /* Ctrl+? — Keybindings reference window */
-    if ((state & GDK_CONTROL_MASK) && keyval == GDK_KEY_question) {
+    /* Keybindings reference window */
+    if (match_app_shortcut("shortcuts_ref", keyval, keycode, state)) {
         show_keybindings_window(gui);
         return TRUE;
     }
 
-    /* Ctrl+Q — Quit application */
-    if ((state & GDK_CONTROL_MASK) && (keyval == GDK_KEY_q || keyval == GDK_KEY_Q || keycode_matches_latin_keyval(keycode, GDK_KEY_q))) {
+    /* Close file / tab / Quit application */
+    if (match_app_shortcut("close_tab", keyval, keycode, state) ||
+        (ctrl_held && (keyval == GDK_KEY_q || keyval == GDK_KEY_Q || keycode_matches_latin_keyval(keycode, GDK_KEY_q))) ||
+        (keyval == GDK_KEY_F4 && ctrl_held)) {
         g_application_quit(g_application_get_default());
         return TRUE;
     }
 
-    /* Ctrl+comma — Settings */
-    if ((state & GDK_CONTROL_MASK) && keyval == GDK_KEY_comma) {
+    /* Open settings */
+    if (match_app_shortcut("open_settings", keyval, keycode, state)) {
         on_settings_btn_clicked(NULL, gui);
         return TRUE;
     }
 
-    /* Ctrl+backslash — Toggle Sidebar */
-    if ((state & GDK_CONTROL_MASK) && keyval == GDK_KEY_backslash) {
+    /* Toggle Sidebar */
+    if (match_app_shortcut("toggle_sidebar", keyval, keycode, state)) {
         on_logo_clicked(NULL, gui);
+        return TRUE;
+    }
+
+    /* Create New File */
+    if (match_app_shortcut("new_file", keyval, keycode, state)) {
+        if (global_add_popover_widgets) {
+            AddPopoverWidgets *w = (AddPopoverWidgets *)global_add_popover_widgets;
+            gtk_widget_set_visible(gui->sidebar, TRUE);
+            gtk_popover_popup(GTK_POPOVER(w->popover));
+            on_create_new_clicked(NULL, w);
+        }
+        return TRUE;
+    }
+
+    /* Open Existing File */
+    if (match_app_shortcut("open_file", keyval, keycode, state)) {
+        GtkFileDialog *dialog = gtk_file_dialog_new();
+        gtk_file_dialog_set_title(dialog, "Open Existing File");
+        gtk_file_dialog_open(dialog, GTK_WINDOW(gui->window), NULL, on_open_dialog_response, gui);
+        return TRUE;
+    }
+
+    /* Force Save */
+    if (match_app_shortcut("save_file", keyval, keycode, state)) {
+        zig_force_save();
+        return TRUE;
+    }
+
+    /* Save As */
+    if (match_app_shortcut("save_file_as", keyval, keycode, state)) {
+        trigger_save_as(gui);
+        return TRUE;
+    }
+
+    /* Print / Export PDF */
+    if (match_app_shortcut("export_pdf", keyval, keycode, state)) {
+        qirtas_export_to_pdf(gui);
+        return TRUE;
+    }
+
+    /* Fullscreen / Focus Mode */
+    if (match_app_shortcut("fullscreen", keyval, keycode, state)) {
+        toggle_fullscreen(gui);
+        return TRUE;
+    }
+
+    /* Zoom In */
+    if (match_app_shortcut("zoom_in", keyval, keycode, state)) {
+        current_font_size += 1.0;
+        update_editor_font(gui);
+        return TRUE;
+    }
+
+    /* Zoom Out */
+    if (match_app_shortcut("zoom_out", keyval, keycode, state)) {
+        if (current_font_size > 6.0) {
+            current_font_size -= 1.0;
+            update_editor_font(gui);
+        }
+        return TRUE;
+    }
+
+    /* Reset Zoom */
+    if (match_app_shortcut("reset_zoom", keyval, keycode, state)) {
+        current_font_size = 16.0;
+        update_editor_font(gui);
         return TRUE;
     }
 
@@ -3653,6 +4019,13 @@ static void on_settings_btn_clicked(GtkButton *btn, gpointer user_data) {
 
 static gboolean on_settings_window_close_request(GtkWindow *window, gpointer user_data) {
     (void)user_data;
+    if (shortcut_listening_index >= 0) {
+        int old_idx = shortcut_listening_index;
+        shortcut_listening_index = -1;
+        if (shortcut_edit_buttons[old_idx]) {
+            gtk_button_set_label(GTK_BUTTON(shortcut_edit_buttons[old_idx]), "Edit");
+        }
+    }
     gtk_widget_set_visible(GTK_WIDGET(window), FALSE);
     return TRUE;
 }
@@ -3793,6 +4166,36 @@ static void on_github_now_clicked(GtkButton *btn, gpointer user_data) {
     zig_github_now();
 }
 
+static void on_status_bar_pos_changed(GObject *gobject, GParamSpec *pspec, gpointer user_data) {
+    (void)pspec;
+    AppGui *gui = (AppGui *)user_data;
+    GtkDropDown *dropdown = GTK_DROP_DOWN(gobject);
+    guint selected = gtk_drop_down_get_selected(dropdown);
+
+    if (gui->main_vertical_box && gui->bottom_bar_widget && gui->sidebar_editor_box) {
+        if (selected == 1) { // Top
+            gtk_box_reorder_child_after(GTK_BOX(gui->main_vertical_box), gui->bottom_bar_widget, NULL);
+        } else { // Bottom
+            gtk_box_reorder_child_after(GTK_BOX(gui->main_vertical_box), gui->sidebar_editor_box, NULL);
+        }
+    }
+}
+
+static void on_sidebar_side_changed(GObject *gobject, GParamSpec *pspec, gpointer user_data) {
+    (void)pspec;
+    AppGui *gui = (AppGui *)user_data;
+    GtkDropDown *dropdown = GTK_DROP_DOWN(gobject);
+    guint selected = gtk_drop_down_get_selected(dropdown);
+
+    if (gui->sidebar_editor_box && gui->sidebar && gui->stack) {
+        if (selected == 0) { // Left
+            gtk_box_reorder_child_after(GTK_BOX(gui->sidebar_editor_box), gui->sidebar, NULL);
+        } else { // Right
+            gtk_box_reorder_child_after(GTK_BOX(gui->sidebar_editor_box), gui->stack, NULL);
+        }
+    }
+}
+
 
 
 static int get_line_height(GtkWidget *text_view) {
@@ -3816,6 +4219,21 @@ static void on_scroll_changed(GtkAdjustment *adj, gpointer user_data) {
     
     int line_h = get_line_height(gui->source_view);
     if (line_h <= 0) line_h = 24;
+    
+    /* Use GTK's own layout-computed upper as the authoritative ceiling.
+     * gtk_adjustment_set_value already clamps to [lower, upper-page_size]
+     * internally, so the autoscroll timer can never overshoot — no fight.
+     * We only need an explicit guard for the top boundary (value < 0).   */
+    double max_scroll = gtk_adjustment_get_upper(adj) - page_size;
+    if (max_scroll < 0) max_scroll = 0;
+
+    if (value < 0.0) {
+        gui->in_scroll_update = TRUE;
+        gtk_adjustment_set_value(adj, 0.0);
+        value = 0.0;
+        gui->in_scroll_update = FALSE;
+    }
+    /* (bottom overshoot is handled natively by GTK's adjustment clamping) */
     
     int view_start_line = (int)(value / line_h);
     int view_lines = (int)(page_size / line_h);
@@ -3858,20 +4276,34 @@ static void on_scroll_changed(GtkAdjustment *adj, gpointer user_data) {
         extern void on_insert_text_before(GtkTextBuffer *buf, GtkTextIter *location, gchar *text, gint len, gpointer user_data);
         extern void on_insert_text_after(GtkTextBuffer *buf, GtkTextIter *location, gchar *text, gint len, gpointer user_data);
         extern void on_delete_range_after(GtkTextBuffer *buf, GtkTextIter *start, GtkTextIter *end, gpointer user_data);
-        
+
+        /* Block ALL buffer signals that touch iterators before replacing content.
+         * gtk_text_buffer_set_text() fires delete-range then insert-text, which
+         * also moves the insert mark → fires mark-set → on_mark_set() →
+         * update_conceal_markdown() which uses iterators invalidated by set_text.
+         * Block on_buffer_changed and on_cursor_position_changed for the same reason. */
         g_signal_handlers_block_by_func(buf, on_insert_text_before, gui);
         g_signal_handlers_block_by_func(buf, on_insert_text_after, gui);
         g_signal_handlers_block_by_func(buf, on_delete_range_after, gui);
+        g_signal_handlers_block_by_func(buf, on_mark_set, gui);
+        g_signal_handlers_block_by_func(buf, on_buffer_changed, gui);
+        g_signal_handlers_block_by_func(buf, on_cursor_position_changed, gui);
         
         gtk_text_buffer_set_text(buf, new_text ? new_text : "", new_len);
         
         g_signal_handlers_unblock_by_func(buf, on_insert_text_before, gui);
         g_signal_handlers_unblock_by_func(buf, on_insert_text_after, gui);
         g_signal_handlers_unblock_by_func(buf, on_delete_range_after, gui);
-        
-        update_all_paragraphs_direction(buf);
+        g_signal_handlers_unblock_by_func(buf, on_mark_set, gui);
+        g_signal_handlers_unblock_by_func(buf, on_buffer_changed, gui);
+        g_signal_handlers_unblock_by_func(buf, on_cursor_position_changed, gui);
+
+        /* Defer post-update work to idle so GTK finishes its own iterator
+         * bookkeeping (IM context, layout) before we touch the buffer again. */
+        g_idle_add_once((GSourceOnceFunc)update_all_paragraphs_direction, buf);
         extern void apply_wiki_link_tags(GtkTextBuffer *buf);
-        apply_wiki_link_tags(buf);
+        g_idle_add_once((GSourceOnceFunc)apply_wiki_link_tags, buf);
+        g_idle_add_once((GSourceOnceFunc)update_conceal_markdown, buf);
         
         gui->active_page_start_line = new_start;
         gui->active_page_end_line = new_end;
@@ -3893,6 +4325,7 @@ static void on_scroll_changed(GtkAdjustment *adj, gpointer user_data) {
 
 static void activate(GtkApplication *app, gpointer user_data) {
     (void)user_data;
+    init_app_shortcuts();
 
     g_object_set(gtk_settings_get_default(), 
                  "gtk-cursor-blink", FALSE, 
@@ -3911,6 +4344,7 @@ static void activate(GtkApplication *app, gpointer user_data) {
     gui->search_visible = FALSE;
     gui->font_provider  = NULL;
     gui->css_provider   = NULL;
+    gui->enable_cursor_trail = zig_get_cursor_trail();
 
     init_css(gui);
 
@@ -4018,6 +4452,7 @@ static void activate(GtkApplication *app, gpointer user_data) {
     }
 
     AddPopoverWidgets *w = g_new0(AddPopoverWidgets, 1);
+    global_add_popover_widgets = w;
     w->popover = gtk_popover_new();
     w->gui = gui;
 
@@ -4039,10 +4474,7 @@ static void activate(GtkApplication *app, gpointer user_data) {
     g_signal_connect(btn_new, "clicked", G_CALLBACK(on_create_new_clicked), w);
     gtk_box_append(GTK_BOX(w->box_actions), btn_new);
 
-    GtkWidget *btn_pdf = gtk_button_new_with_label("تصدير كـ PDF");
-    gtk_widget_add_css_class(btn_pdf, "pop-btn");
-    g_signal_connect(btn_pdf, "clicked", G_CALLBACK(on_export_pdf_clicked), gui);
-    gtk_box_append(GTK_BOX(w->box_actions), btn_pdf);
+
 
     w->box_input = gtk_box_new(GTK_ORIENTATION_VERTICAL, 6);
     gtk_widget_set_visible(w->box_input, FALSE);
@@ -4077,20 +4509,26 @@ static void activate(GtkApplication *app, gpointer user_data) {
     gui->btn_files = NULL;
     gui->btn_search = NULL;
 
-    /* ── Root box: sidebar | stack ── */
-    GtkWidget *overlay = gtk_overlay_new();
-    gtk_widget_set_vexpand(overlay, TRUE);
-    gtk_widget_set_hexpand(overlay, TRUE);
-    adw_toolbar_view_set_content(ADW_TOOLBAR_VIEW(toolbar_view), overlay);
-    gui->root_box = overlay;
+    /* ── Root box: main_vertical_box holding (sidebar+stack horizontal box) and bottom_bar ── */
+    GtkWidget *main_vertical_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+    gtk_widget_set_vexpand(main_vertical_box, TRUE);
+    gtk_widget_set_hexpand(main_vertical_box, TRUE);
+    adw_toolbar_view_set_content(ADW_TOOLBAR_VIEW(toolbar_view), main_vertical_box);
+    gui->main_vertical_box = main_vertical_box;
+
+    GtkWidget *sidebar_editor_box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
+    gtk_widget_set_vexpand(sidebar_editor_box, TRUE);
+    gtk_widget_set_hexpand(sidebar_editor_box, TRUE);
+    gui->sidebar_editor_box = sidebar_editor_box;
+    gui->root_box = sidebar_editor_box;
 
     GtkWidget *sidebar = gtk_box_new(GTK_ORIENTATION_VERTICAL, 10);
     gtk_widget_add_css_class(sidebar, "sidebar");
     gtk_widget_set_size_request(sidebar, 280, -1); /* fixed 280px */
     gtk_widget_set_visible(sidebar, FALSE); /* not visible on app open */
-    gtk_widget_set_halign(sidebar, GTK_ALIGN_START);
+    gtk_widget_set_halign(sidebar, GTK_ALIGN_FILL);
     gtk_widget_set_valign(sidebar, GTK_ALIGN_FILL);
-    gtk_overlay_add_overlay(GTK_OVERLAY(overlay), sidebar);
+    gtk_box_append(GTK_BOX(sidebar_editor_box), sidebar);
     gui->sidebar = sidebar;
 
     /* 1. Global Workspace Search Entry */
@@ -4100,13 +4538,41 @@ static void activate(GtkApplication *app, gpointer user_data) {
     gui->exp_search_entry = exp_search;
     g_signal_connect(exp_search, "search-changed", G_CALLBACK(on_explorer_search_changed), gui);
 
-    /* 2. Unified Add Note Button (Menu button with popover) */
+    /* 2. Unified Add Note Button & Export Menu (Linked Buttons) */
     GtkWidget *add_action_button = gtk_menu_button_new();
     gtk_menu_button_set_label(GTK_MENU_BUTTON(add_action_button), "New Note");
     gtk_widget_add_css_class(add_action_button, "add-action-btn");
     gtk_widget_set_hexpand(add_action_button, TRUE);
     gtk_menu_button_set_popover(GTK_MENU_BUTTON(add_action_button), w->popover);
-    gtk_box_append(GTK_BOX(sidebar), add_action_button);
+
+    /* Create a separate popover for PDF export */
+    GtkWidget *export_popover = gtk_popover_new();
+    GtkWidget *export_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 6);
+    gtk_widget_set_margin_start(export_box, 8);
+    gtk_widget_set_margin_end(export_box, 8);
+    gtk_widget_set_margin_top(export_box, 8);
+    gtk_widget_set_margin_bottom(export_box, 8);
+
+    GtkWidget *btn_pdf = gtk_button_new_with_label("تصدير كـ PDF");
+    gtk_widget_add_css_class(btn_pdf, "pop-btn");
+    g_signal_connect(btn_pdf, "clicked", G_CALLBACK(on_export_pdf_clicked), gui);
+    gtk_box_append(GTK_BOX(export_box), btn_pdf);
+    gtk_popover_set_child(GTK_POPOVER(export_popover), export_box);
+
+    /* Export button with document-send-symbolic icon */
+    GtkWidget *export_menu_button = gtk_menu_button_new();
+    gtk_menu_button_set_icon_name(GTK_MENU_BUTTON(export_menu_button), "document-send-symbolic");
+    gtk_widget_add_css_class(export_menu_button, "add-action-btn");
+    gtk_widget_set_hexpand(export_menu_button, FALSE);
+    gtk_menu_button_set_popover(GTK_MENU_BUTTON(export_menu_button), export_popover);
+
+    /* Wrap both buttons inside a horizontal GtkBox and apply "linked" CSS class */
+    GtkWidget *link_box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
+    gtk_widget_add_css_class(link_box, "linked");
+    gtk_widget_set_hexpand(link_box, TRUE);
+    gtk_box_append(GTK_BOX(link_box), add_action_button);
+    gtk_box_append(GTK_BOX(link_box), export_menu_button);
+    gtk_box_append(GTK_BOX(sidebar), link_box);
 
     /* Notes section header (Title + Count Badge) */
     GtkWidget *exp_title_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
@@ -4168,7 +4634,7 @@ static void activate(GtkApplication *app, gpointer user_data) {
     gtk_widget_set_hexpand(stack, TRUE);
     gtk_widget_set_vexpand(stack, TRUE);
     gtk_widget_add_css_class(stack, "workspace");
-    gtk_overlay_set_child(GTK_OVERLAY(overlay), stack);
+    gtk_box_append(GTK_BOX(sidebar_editor_box), stack);
     gui->stack = stack;
 
     GtkGesture *workspace_click = gtk_gesture_click_new();
@@ -4234,7 +4700,7 @@ static void activate(GtkApplication *app, gpointer user_data) {
     gtk_widget_set_vexpand(scrolled, TRUE);
     gtk_widget_set_halign(scrolled, GTK_ALIGN_FILL);
     gtk_widget_set_valign(scrolled, GTK_ALIGN_FILL);
-    gtk_widget_set_margin_start(scrolled, 12);
+    gtk_widget_set_margin_start(scrolled, 6);
     gtk_widget_set_margin_end(scrolled, 12);
     gtk_widget_set_margin_top(scrolled, 12);
     gtk_widget_set_margin_bottom(scrolled, 12);
@@ -4280,7 +4746,7 @@ static void activate(GtkApplication *app, gpointer user_data) {
     gtk_widget_set_vexpand(source_view, TRUE);
     gtk_widget_set_halign(source_view, GTK_ALIGN_FILL);
     gtk_widget_set_valign(source_view, GTK_ALIGN_FILL);
-    gtk_widget_set_margin_start(source_view, 16);
+    gtk_widget_set_margin_start(source_view, 0);
     gtk_widget_set_margin_end(source_view, 16);
     gtk_widget_set_margin_top(source_view, 16);
     gtk_widget_set_margin_bottom(source_view, 320);
@@ -4412,6 +4878,38 @@ static void activate(GtkApplication *app, gpointer user_data) {
     gtk_widget_set_margin_top(pop_box, 14);
     gtk_widget_set_margin_bottom(pop_box, 14);
 
+    /* --- VAULT GROUP --- */
+    GtkWidget *vault_lbl = gtk_label_new("VAULT");
+    gtk_widget_add_css_class(vault_lbl, "pop-section-label");
+    gtk_widget_set_halign(vault_lbl, GTK_ALIGN_START);
+    gtk_box_append(GTK_BOX(pop_box), vault_lbl);
+
+    GtkWidget *vault_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
+    GtkWidget *vault_path_lbl = gtk_label_new("Current Vault");
+    gtk_widget_set_hexpand(vault_path_lbl, TRUE);
+    gtk_widget_set_halign(vault_path_lbl, GTK_ALIGN_START);
+
+    char cwd_buf[PATH_MAX];
+    if (getcwd(cwd_buf, sizeof(cwd_buf)) == NULL) {
+        strcpy(cwd_buf, "Unknown");
+    }
+    gui->vault_path_lbl_val = gtk_label_new(cwd_buf);
+    gtk_widget_add_css_class(gui->vault_path_lbl_val, "stats-value");
+    gtk_widget_set_halign(gui->vault_path_lbl_val, GTK_ALIGN_START);
+    gtk_label_set_ellipsize(GTK_LABEL(gui->vault_path_lbl_val), PANGO_ELLIPSIZE_END);
+    gtk_label_set_max_width_chars(GTK_LABEL(gui->vault_path_lbl_val), 20);
+
+    GtkWidget *vault_open_btn = gtk_button_new_with_label("Open Vault");
+    gtk_widget_add_css_class(vault_open_btn, "pop-btn");
+    g_signal_connect(vault_open_btn, "clicked", G_CALLBACK(on_open_vault_clicked), gui);
+
+    gtk_box_append(GTK_BOX(vault_row), vault_path_lbl);
+    gtk_box_append(GTK_BOX(vault_row), gui->vault_path_lbl_val);
+    gtk_box_append(GTK_BOX(vault_row), vault_open_btn);
+    gtk_box_append(GTK_BOX(pop_box), vault_row);
+
+    gtk_box_append(GTK_BOX(pop_box), gtk_separator_new(GTK_ORIENTATION_HORIZONTAL));
+
     GtkWidget *th_lbl = gtk_label_new("THEME");
     gtk_widget_add_css_class(th_lbl, "pop-section-label");
     gtk_widget_set_halign(th_lbl, GTK_ALIGN_START);
@@ -4460,6 +4958,11 @@ static void activate(GtkApplication *app, gpointer user_data) {
     gtk_check_button_set_active(GTK_CHECK_BUTTON(wrap_chk), TRUE);
     g_signal_connect(wrap_chk, "toggled", G_CALLBACK(on_wrap_toggled), source_view);
     gtk_box_append(GTK_BOX(pop_box), wrap_chk);
+
+    GtkWidget *trail_chk = gtk_check_button_new_with_label("Pointer Trail Animation");
+    gtk_check_button_set_active(GTK_CHECK_BUTTON(trail_chk), gui->enable_cursor_trail);
+    g_signal_connect(trail_chk, "toggled", G_CALLBACK(on_trail_toggled), gui);
+    gtk_box_append(GTK_BOX(pop_box), trail_chk);
 
     GtkWidget *font_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
     GtkWidget *font_lbl = gtk_label_new("Font Size");
@@ -4527,6 +5030,45 @@ static void activate(GtkApplication *app, gpointer user_data) {
     gtk_box_append(GTK_BOX(ar_font_row), ar_font_dropdown);
     gtk_box_append(GTK_BOX(pop_box), ar_font_row);
 
+
+    gtk_box_append(GTK_BOX(pop_box), gtk_separator_new(GTK_ORIENTATION_HORIZONTAL));
+
+    GtkWidget *layout_lbl = gtk_label_new("LAYOUT PREFERENCES");
+    gtk_widget_add_css_class(layout_lbl, "pop-section-label");
+    gtk_widget_set_halign(layout_lbl, GTK_ALIGN_START);
+    gtk_box_append(GTK_BOX(pop_box), layout_lbl);
+
+    const char *status_bar_positions[] = {
+        "Bottom",
+        "Top",
+        NULL
+    };
+    GtkWidget *sb_pos_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
+    GtkWidget *sb_pos_lbl = gtk_label_new("Status Bar Position");
+    gtk_widget_set_hexpand(sb_pos_lbl, TRUE);
+    gtk_widget_set_halign(sb_pos_lbl, GTK_ALIGN_START);
+    GtkWidget *sb_pos_dropdown = gtk_drop_down_new_from_strings(status_bar_positions);
+    gtk_drop_down_set_selected(GTK_DROP_DOWN(sb_pos_dropdown), 0); // Default Bottom
+    g_signal_connect(sb_pos_dropdown, "notify::selected", G_CALLBACK(on_status_bar_pos_changed), gui);
+    gtk_box_append(GTK_BOX(sb_pos_row), sb_pos_lbl);
+    gtk_box_append(GTK_BOX(sb_pos_row), sb_pos_dropdown);
+    gtk_box_append(GTK_BOX(pop_box), sb_pos_row);
+
+    const char *sidebar_sides[] = {
+        "Left",
+        "Right",
+        NULL
+    };
+    GtkWidget *sb_side_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
+    GtkWidget *sb_side_lbl = gtk_label_new("Sidebar Side");
+    gtk_widget_set_hexpand(sb_side_lbl, TRUE);
+    gtk_widget_set_halign(sb_side_lbl, GTK_ALIGN_START);
+    GtkWidget *sb_side_dropdown = gtk_drop_down_new_from_strings(sidebar_sides);
+    gtk_drop_down_set_selected(GTK_DROP_DOWN(sb_side_dropdown), 0); // Default Left
+    g_signal_connect(sb_side_dropdown, "notify::selected", G_CALLBACK(on_sidebar_side_changed), gui);
+    gtk_box_append(GTK_BOX(sb_side_row), sb_side_lbl);
+    gtk_box_append(GTK_BOX(sb_side_row), sb_side_dropdown);
+    gtk_box_append(GTK_BOX(pop_box), sb_side_row);
 
     gtk_box_append(GTK_BOX(pop_box), gtk_separator_new(GTK_ORIENTATION_HORIZONTAL));
 
@@ -4862,6 +5404,12 @@ static void activate(GtkApplication *app, gpointer user_data) {
     g_signal_connect(left_click_gesture, "pressed", G_CALLBACK(on_editor_left_click), gui);
     gtk_widget_add_controller(source_view, GTK_EVENT_CONTROLLER(left_click_gesture));
 
+    // Setup mouse event controller to clamp cursor and scrollbar past document end
+    GtkEventController *editor_mouse_ctrl = gtk_event_controller_legacy_new();
+    gtk_event_controller_set_propagation_phase(editor_mouse_ctrl, GTK_PHASE_CAPTURE);
+    g_signal_connect(editor_mouse_ctrl, "event", G_CALLBACK(on_editor_mouse_event), gui);
+    gtk_widget_add_controller(source_view, editor_mouse_ctrl);
+
     /* ============================================================
      * BOTTOM BAR
      * ============================================================ */
@@ -4916,7 +5464,9 @@ static void activate(GtkApplication *app, gpointer user_data) {
     gtk_box_append(GTK_BOX(bottom_bar), gui->lbl_chars);
     gtk_box_append(GTK_BOX(bottom_bar), gui->btn_sync_icon_bottom);
 
-    adw_toolbar_view_add_bottom_bar(ADW_TOOLBAR_VIEW(toolbar_view), bottom_bar);
+    gui->bottom_bar_widget = bottom_bar;
+    gtk_box_append(GTK_BOX(main_vertical_box), sidebar_editor_box);
+    gtk_box_append(GTK_BOX(main_vertical_box), bottom_bar);
 
     /* ============================================================
      * GLOBALS + PRESENT
@@ -5202,7 +5752,11 @@ char *gui_get_text(void) {
     GtkTextBuffer *buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(global_source_view));
     GtkTextIter start, end;
     gtk_text_buffer_get_bounds(buf, &start, &end);
-    return gtk_text_buffer_get_text(buf, &start, &end, FALSE);
+    char *raw = gtk_text_buffer_get_text(buf, &start, &end, FALSE);
+    if (!raw) return NULL;
+    char *clean = replace_anchors_with_hrs(raw);
+    g_free(raw);
+    return clean;
 }
 
 void gui_free_text(char *text) { g_free(text); }
@@ -5214,12 +5768,16 @@ void gui_set_text(const char *text, int len) {
     g_signal_handlers_block_by_func(buf, on_insert_text_before, global_gui);
     g_signal_handlers_block_by_func(buf, on_insert_text_after, global_gui);
     g_signal_handlers_block_by_func(buf, on_delete_range_after, global_gui);
+    g_signal_handlers_block_by_func(buf, on_buffer_changed, global_gui);
     
     gtk_text_buffer_set_text(buf, text, len);
+    
+    parse_and_render_hrs(buf, global_gui);
     
     g_signal_handlers_unblock_by_func(buf, on_insert_text_before, global_gui);
     g_signal_handlers_unblock_by_func(buf, on_insert_text_after, global_gui);
     g_signal_handlers_unblock_by_func(buf, on_delete_range_after, global_gui);
+    g_signal_handlers_unblock_by_func(buf, on_buffer_changed, global_gui);
     
     update_all_paragraphs_direction(buf);
     apply_wiki_link_tags(buf);

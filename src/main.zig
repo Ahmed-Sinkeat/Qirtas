@@ -16,6 +16,7 @@ const c = @cImport({
     @cInclude("sys/stat.h");
     @cInclude("fcntl.h");
     @cInclude("sqlite3.h");
+    @cInclude("dirent.h");
 });
 
 extern fn run_gui(argc: c_int, argv: ?[*]? [*]const u8) c_int;
@@ -72,14 +73,47 @@ pub fn main(init: std.process.Init) !void {
     const gpa = std.heap.page_allocator;
 
     var workspace_path: []const u8 = ".";
+    var saved_vault: ?[]const u8 = null;
     if (init.minimal.args.vector.len > 1) {
         workspace_path = std.mem.span(init.minimal.args.vector[1]);
+    } else {
+        var db: ?*c.sqlite3 = null;
+        if (c.sqlite3_open(DB_PATH, &db) == c.SQLITE_OK) {
+            defer _ = c.sqlite3_close(db);
+            _ = c.sqlite3_busy_timeout(db, 5000);
+            
+            // Ensure table and column exist
+            _ = c.sqlite3_exec(db, "CREATE TABLE IF NOT EXISTS session_state (id INTEGER PRIMARY KEY CHECK (id = 1), active_file TEXT, cursor_line INTEGER, cursor_col INTEGER, vault_path TEXT);", null, null, null);
+            _ = c.sqlite3_exec(db, "ALTER TABLE session_state ADD COLUMN vault_path TEXT;", null, null, null);
+
+            var stmt: ?*c.sqlite3_stmt = null;
+            const query_sql = "SELECT vault_path FROM session_state WHERE id = 1;";
+            if (c.sqlite3_prepare_v2(db, query_sql.ptr, -1, &stmt, null) == c.SQLITE_OK) {
+                defer _ = c.sqlite3_finalize(stmt);
+                if (c.sqlite3_step(stmt) == c.SQLITE_ROW) {
+                    const vault_text = c.sqlite3_column_text(stmt, 0);
+                    if (vault_text != null) {
+                        const vault_span = std.mem.span(vault_text);
+                        if (vault_span.len > 0) {
+                            saved_vault = gpa.dupe(u8, vault_span) catch null;
+                        }
+                    }
+                }
+            }
+        }
     }
+
+    if (saved_vault) |sv| {
+        workspace_path = sv;
+    }
+    defer if (saved_vault) |sv| gpa.free(sv);
 
     // Change working directory to the target workspace
     const workspace_path_z = try gpa.dupeZ(u8, workspace_path);
     defer gpa.free(workspace_path_z);
-    _ = c.chdir(workspace_path_z.ptr);
+    if (c.chdir(workspace_path_z.ptr) != 0) {
+        _ = c.chdir(".");
+    }
 
     // Default to Economics_Notes.md on launch
     const default_file = "Economics_Notes.md";
@@ -98,6 +132,26 @@ fn is_indexable_file(filename: []const u8) bool {
            std.mem.endsWith(u8, filename, ".zon") or
            std.mem.endsWith(u8, filename, ".c") or
            std.mem.endsWith(u8, filename, ".h");
+}
+
+fn find_first_indexable_file_posix(out_buf: []u8) bool {
+    const dir = c.opendir(".") orelse return false;
+    defer _ = c.closedir(dir);
+    
+    while (true) {
+        const entry = c.readdir(dir) orelse break;
+        const name_ptr = @as([*:0]const u8, @ptrCast(&entry.*.d_name));
+        const name = std.mem.span(name_ptr);
+        if (name.len == 0 or name[0] == '.') continue;
+        if (is_indexable_file(name)) {
+            if (name.len < out_buf.len) {
+                @memcpy(out_buf[0..name.len], name);
+                out_buf[name.len] = 0;
+                return true;
+            }
+        }
+    }
+    return false;
 }
 
 // Exported function called by the C GUI layer when the interface is active
@@ -135,6 +189,8 @@ pub export fn zig_on_gui_ready() callconv(.c) void {
     // Run initial scan and index all files in background/boot-time via C FTS5 engine
     gui_index_all_files();
 
+    const gpa = std.heap.page_allocator;
+
     // Register initial watch in inotify
     global_inotify_fd = c.inotify_init();
     if (global_inotify_fd >= 0) {
@@ -143,8 +199,26 @@ pub export fn zig_on_gui_ready() callconv(.c) void {
         directory_wd.store(c.inotify_add_watch(global_inotify_fd, ".", c.IN_CREATE | c.IN_DELETE | c.IN_MOVED_TO | c.IN_MOVED_FROM | c.IN_MODIFY), .monotonic);
     }
 
-    // Load initial notes (either restored from db or default)
-    load_file_and_update_gui(active_file_path[0..active_file_path_len]) catch |err| {
+    // Load initial notes (either restored from db or default or first file found)
+    var file_to_load: []const u8 = active_file_path[0..active_file_path_len];
+    var path_exists = true;
+    const file_to_load_z = gpa.dupeZ(u8, file_to_load) catch file_to_load;
+    defer if (file_to_load_z.ptr != file_to_load.ptr) gpa.free(file_to_load_z);
+    Io.Dir.cwd().access(global_io, file_to_load_z, .{}) catch {
+        path_exists = false;
+    };
+
+    if (!path_exists) {
+        var file_buf: [256]u8 = undefined;
+        if (find_first_indexable_file_posix(&file_buf)) {
+            const tf = std.mem.span(@as([*:0]const u8, @ptrCast(&file_buf)));
+            @memcpy(active_file_path[0..tf.len], tf);
+            active_file_path_len = tf.len;
+            file_to_load = active_file_path[0..active_file_path_len];
+        }
+    }
+
+    load_file_and_update_gui(file_to_load) catch |err| {
         std.debug.print("Failed to load active notes: {}\n", .{err});
     };
 
@@ -213,6 +287,113 @@ pub export fn zig_open_file(filename_ptr: [*:0]const u8) callconv(.c) void {
         };
     }
 }
+
+pub export fn zig_set_cursor_trail(enabled: c_int) callconv(.c) void {
+    var db: ?*c.sqlite3 = null;
+    if (c.sqlite3_open(DB_PATH, &db) == c.SQLITE_OK) {
+        defer _ = c.sqlite3_close(db);
+        _ = c.sqlite3_busy_timeout(db, 5000);
+        _ = c.sqlite3_exec(db, "INSERT OR IGNORE INTO session_state (id) VALUES (1);", null, null, null);
+        const sql = "UPDATE session_state SET enable_cursor_trail = ? WHERE id = 1;";
+        var stmt: ?*c.sqlite3_stmt = null;
+        if (c.sqlite3_prepare_v2(db, sql.ptr, -1, &stmt, null) == c.SQLITE_OK) {
+            defer _ = c.sqlite3_finalize(stmt);
+            _ = c.sqlite3_bind_int(stmt, 1, enabled);
+            _ = c.sqlite3_step(stmt);
+        }
+    }
+}
+
+pub export fn zig_get_cursor_trail() callconv(.c) c_int {
+    var db: ?*c.sqlite3 = null;
+    var enabled: c_int = 1; // default enabled
+    if (c.sqlite3_open(DB_PATH, &db) == c.SQLITE_OK) {
+        defer _ = c.sqlite3_close(db);
+        _ = c.sqlite3_busy_timeout(db, 5000);
+        _ = c.sqlite3_exec(db, "CREATE TABLE IF NOT EXISTS session_state (id INTEGER PRIMARY KEY CHECK (id = 1), active_file TEXT, cursor_line INTEGER, cursor_col INTEGER, vault_path TEXT, enable_cursor_trail INTEGER DEFAULT 1);", null, null, null);
+        _ = c.sqlite3_exec(db, "ALTER TABLE session_state ADD COLUMN enable_cursor_trail INTEGER DEFAULT 1;", null, null, null);
+
+        var stmt: ?*c.sqlite3_stmt = null;
+        const sql = "SELECT enable_cursor_trail FROM session_state WHERE id = 1;";
+        if (c.sqlite3_prepare_v2(db, sql.ptr, -1, &stmt, null) == c.SQLITE_OK) {
+            defer _ = c.sqlite3_finalize(stmt);
+            if (c.sqlite3_step(stmt) == c.SQLITE_ROW) {
+                if (c.sqlite3_column_type(stmt, 0) != c.SQLITE_NULL) {
+                    enabled = c.sqlite3_column_int(stmt, 0);
+                }
+            }
+        }
+    }
+    return enabled;
+}
+
+pub export fn zig_open_vault(dir_path_ptr: [*:0]const u8) callconv(.c) void {
+    const dir_path = std.mem.span(dir_path_ptr);
+    const gpa = std.heap.page_allocator;
+
+    // 1. Change working directory
+    const dir_path_z = gpa.dupeZ(u8, dir_path) catch return;
+    defer gpa.free(dir_path_z);
+    if (c.chdir(dir_path_z.ptr) != 0) {
+        std.debug.print("Failed to chdir to {s}\n", .{dir_path});
+        return;
+    }
+
+    // 2. Clear database index tables for the old vault
+    var db: ?*c.sqlite3 = null;
+    if (c.sqlite3_open(DB_PATH, &db) == c.SQLITE_OK) {
+        defer _ = c.sqlite3_close(db);
+        _ = c.sqlite3_busy_timeout(db, 5000);
+        _ = c.sqlite3_exec(db, "DELETE FROM file_metadata;", null, null, null);
+        _ = c.sqlite3_exec(db, "DELETE FROM note_search;", null, null, null);
+        _ = c.sqlite3_exec(db, "DELETE FROM file_content_fts;", null, null, null);
+        
+        // Save the new vault path
+        _ = c.sqlite3_exec(db, "INSERT OR IGNORE INTO session_state (id) VALUES (1);", null, null, null);
+        const save_sql = "UPDATE session_state SET vault_path = ?, active_file = NULL, cursor_line = 1, cursor_col = 0 WHERE id = 1;";
+        var stmt: ?*c.sqlite3_stmt = null;
+        if (c.sqlite3_prepare_v2(db, save_sql.ptr, -1, &stmt, null) == c.SQLITE_OK) {
+            defer _ = c.sqlite3_finalize(stmt);
+            _ = c.sqlite3_bind_text(stmt, 1, dir_path_z.ptr, -1, null);
+            _ = c.sqlite3_step(stmt);
+        }
+    }
+
+    // 3. Update the directory watcher for inotify
+    if (global_inotify_fd >= 0) {
+        const old_dir_wd = directory_wd.load(.monotonic);
+        if (old_dir_wd >= 0) {
+            _ = c.inotify_rm_watch(global_inotify_fd, old_dir_wd);
+        }
+        directory_wd.store(c.inotify_add_watch(global_inotify_fd, ".", c.IN_CREATE | c.IN_DELETE | c.IN_MOVED_TO | c.IN_MOVED_FROM | c.IN_MODIFY), .monotonic);
+    }
+
+    // 4. Find the first indexable file in the new vault, or create a default one
+    var file_buf: [256]u8 = undefined;
+    const file_to_open = if (find_first_indexable_file_posix(&file_buf))
+        std.mem.span(@as([*:0]const u8, @ptrCast(&file_buf)))
+    else
+        "Welcome.md";
+
+    @memcpy(active_file_path[0..file_to_open.len], file_to_open);
+    active_file_path_len = file_to_open.len;
+
+    // 5. Update UI title, refresh explorer, re-index
+    gui_index_all_files();
+    gui_refresh_explorer();
+
+    // 6. Register file watch on the active file
+    register_file_watch(file_to_open);
+
+    // 7. Load file contents
+    load_file_and_update_gui(file_to_open) catch |err| {
+        std.debug.print("Failed to open file {s}: {}\n", .{file_to_open, err});
+    };
+
+    // 8. Reset cursor
+    gui_set_cursor_position(1, 0);
+}
+
 
 // Exported FFI: Create new file dynamically
 pub export fn zig_create_new_file(name_ptr: [*:0]const u8) callconv(.c) void {
@@ -597,7 +778,8 @@ fn save_session(file_path: []const u8, line: c_int, col: c_int) !void {
     defer _ = c.sqlite3_close(db);
     _ = c.sqlite3_busy_timeout(db, 5000);
 
-    const sql = "INSERT OR REPLACE INTO session_state (id, active_file, cursor_line, cursor_col) VALUES (1, ?, ?, ?);";
+    _ = c.sqlite3_exec(db, "INSERT OR IGNORE INTO session_state (id) VALUES (1);", null, null, null);
+    const sql = "UPDATE session_state SET active_file = ?, cursor_line = ?, cursor_col = ? WHERE id = 1;";
     var stmt: ?*c.sqlite3_stmt = null;
     if (c.sqlite3_prepare_v2(db, sql.ptr, -1, &stmt, null) != c.SQLITE_OK) return error.DbPrepareFailed;
     defer _ = c.sqlite3_finalize(stmt);

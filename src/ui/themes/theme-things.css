@@ -1,0 +1,30 @@
+/* ============================================================
+ *  Qirtas — "Things" Theme
+ *  theme-things.css
+ * ============================================================ */
+
+
+:root {
+  --font-family: 'JetBrains Mono', 'Fira Mono', 'DejaVu Sans Mono', monospace;
+  --bg-window: #1c2127;
+  --bg-sidebar: #181c20;
+  --bg-card: #2c313c;
+  --bg-hover: #35393e;
+  --bg-active: #2c313c;
+  --border: #35393e;
+  --border-focus: #2e80f2;
+  --accent: #2e80f2;
+  --accent-light: #5b9cf6;
+  --text-primary: #dadada;
+  --text-muted: #999999;
+  --text-dim: #bababa;
+  --cyan: #3eb4bf;
+
+  --folder-icon: #3eb4bf;
+  --file-icon: #666666;
+  --md-icon: #ff82b2;
+
+  --status-saved: #3eb4bf;
+  --status-saving: #5b9cf6;
+  --status-failed: #ff82b2;
+}

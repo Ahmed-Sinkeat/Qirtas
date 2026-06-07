@@ -9,7 +9,7 @@
   <color name="gray"       value="#6b6e7a"/>
   <color name="white"      value="#e8e8f0"/>
   <color name="bg"         value="#111318"/>
-  <color name="bg-line"    value="#161820"/>
+  <color name="bg-line"    value="#ff79c60d"/>
   <color name="search-bg"  value="#ff79c6"/>
   <color name="h1"         value="#ff79c6"/>
   <color name="h2"         value="#8be9fd"/>

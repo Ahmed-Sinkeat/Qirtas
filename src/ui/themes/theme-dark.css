@@ -1,0 +1,30 @@
+/* ============================================================
+ *  Qirtas — Deep Slate Dark Theme
+ *  theme-dark.css
+ * ============================================================ */
+
+
+:root {
+  --font-family: 'JetBrains Mono', 'Fira Mono', 'DejaVu Sans Mono', monospace;
+  --bg-window: #111318;
+  --bg-sidebar: #0c0e13;
+  --bg-card: #1a1c21;
+  --bg-hover: #1e2025;
+  --bg-active: #282a2f;
+  --border: #1e2025;
+  --border-focus: #ff79c6;
+  --accent: #ff79c6;
+  --accent-light: #ffafd7;
+  --text-primary: #e2e2e9;
+  --text-muted: #6b6e7a;
+  --text-dim: #dac0ca;
+  --cyan: #75d4e8;
+
+  --folder-icon: #75d4e8;
+  --file-icon: #6b6e7a;
+  --md-icon: #ff79c6;
+
+  --status-saved: #31e368;
+  --status-saving: #75d4e8;
+  --status-failed: #ffb4ab;
+}
