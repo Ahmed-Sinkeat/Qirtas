@@ -25,6 +25,9 @@ Qirtas/
 │   │   ├── gui_conceal.c
 │   │   ├── gui_wiki.c
 │   │   ├── gui_popover.c
+│   │   ├── gui_explorer.c
+│   │   ├── gui_tabs.c
+│   │   ├── gui_editor.c
 │   │   └── gui_sync.c
 │   └── ui/
 │       ├── themes/
@@ -52,7 +55,7 @@ Qirtas/
 
 1. `src/main.zig` as the Zig application root.
 2. `src/root.zig` as the `qirtas` Zig module.
-3. `src/gui.c`, `src/gui_sync.c`, and `src/gui/` phase-1 modular GUI sources as the compiled C UI sources.
+3. `src/gui.c`, `src/gui/gui_sync.c`, and all modular C GUI source files under `src/gui/` as compiled C UI sources.
 
 ## Where To Edit What
 
@@ -61,8 +64,8 @@ Qirtas/
 | App behaviour, file I/O, autosave, inotify | `src/main.zig` |
 | BIP-39 recovery phrase helpers | `src/bip39.zig` |
 | Cloud sync logic | `src/sync.zig` |
-| GTK UI layout and widget wiring | `src/gui.c` |
-| Cloud sync status UI callbacks | `src/gui_sync.c` |
+| GTK UI layout and window setup | `src/gui.c` |
+| Cloud sync status UI callbacks | `src/gui/gui_sync.c` |
 | UI-only shared state, window pointers, and module hooks | `src/gui_internal.h` |
 | Zig-facing FFI declarations | `src/gui_shared.h` |
 | App theme variables | `src/ui/themes/theme-<name>.css` |
@@ -71,23 +74,23 @@ Qirtas/
 | Editor colour schemes | `src/ui/qirtas*.style-scheme.xml` |
 | Build configuration | `build.zig` |
 
-## GUI Layout In `gui.c`
+## GUI Layout and Modules
 
-`src/gui.c` contains the GTK UI in logical sections. The other `gui_*.c` files in the `src/` directory are stubs for a planned modular split. The current split is internal organization within `gui.c`, not separate compiled modules.
+`src/gui.c` contains the main entry point, application setup, and main layout structure. Other specific UI modules are split into separate C source files under `src/gui/`:
 
-| Section | Responsibility |
-|---|---|
-| `gui_theme` | CSS loading, theme switching, font updates (`src/gui/gui_theme.c`) |
-| `gui_cursor_trail` | Cursor trail animation (`src/gui/gui_cursor.c`) |
-| `gui_editor` | Editing, formatting, keyboard shortcuts |
-| `gui_popover` | Formatting popover |
-| `gui_wiki` | Wiki-link tagging and navigation |
-| `gui_hr` | Horizontal rule rendering (`src/gui/gui_hr.c`) |
-| `gui_conceal` | Markdown concealment |
-| `gui_search` | In-file search bar |
-| `gui_explorer` | File/vault tree explorer |
-| `gui_settings` | Settings window and shortcuts |
-| `gui_sync` | Sync status UI callbacks (in `src/gui_sync.c`) |
+| Module | Responsibility | File Path |
+|---|---|---|
+| `gui_theme` | CSS loading, theme switching, font selection options | `src/gui/gui_theme.c` |
+| `gui_cursor` | Smear pointer trail animations | `src/gui/gui_cursor.c` |
+| `gui_editor` | Editing, buffer event handling, shortcuts | `src/gui/gui_editor.c` |
+| `gui_popover` | Formatting markdown tooltip popup | `src/gui/gui_popover.c` |
+| `gui_wiki` | Wiki-link parsing and document navigation | `src/gui/gui_wiki.c` |
+| `gui_hr` | Custom horizontal line formatting renderer | `src/gui/gui_hr.c` |
+| `gui_conceal` | Markdown syntax concealment passes and headers | `src/gui/gui_conceal.c` |
+| `gui_search` | Editor inline query search bar overlay | `src/gui/gui_search.c` |
+| `gui_explorer` | Directory trees and active files drawer | `src/gui/gui_explorer.c` |
+| `gui_tabs` | Document tab controls and active buffers | `src/gui/gui_tabs.c` |
+| `gui_sync` | Cloud credentials and synchronization events UI | `src/gui/gui_sync.c` |
 
 ## Theme System
 
@@ -120,6 +123,7 @@ Themes use two layers:
 - `void gui_get_cursor_position(int *line, int *col)`: Retrieves current cursor position.
 - `void gui_set_cursor_position(int line, int col)`: Restores cursor position.
 - `void gui_refresh_explorer(void)`: Refreshes directory tree explorer on idle.
+- `void gui_set_virtual_scroll_mode(int enabled, int total_lines)`: Configures virtual scrolling mode.
 - `void gui_init_virtual_document(int total_lines, int start_line, int end_line)`: Sets up virtual layout variables.
 - `void gui_trigger_autosave(void)`: Invokes active page save logic in Zig backend.
 - `void gui_get_active_page_bounds(int *start_line, int *end_line, int *total_lines)`: Gets current layout bounds.

@@ -16,7 +16,7 @@ Qirtas is designed to be a lightweight, distraction-free desktop markdown editor
 ### 1.3 Technical Scope & Hybrid Architecture
 Qirtas utilizes a hybrid architecture combining two programming languages to achieve the optimal balance between performance and native GUI layout:
 - **Backend (Zig):** The application core, file input/output (I/O) management, autosaving, encryption, and local data synchronization are implemented in Zig (`src/main.zig` and `src/sync.zig`).
-- **Frontend (C GTK4/Adwaita):** The graphical user interface is natively implemented in C utilizing GTK4 and Libadwaita (`src/gui.c`, `src/gui_sync.c`, and the phase-1 modular files under `src/gui/`), ensuring smooth desktop integration, theme compatibility (e.g., ADW style manager), and hardware-accelerated rendering.
+- **Frontend (C GTK4/Adwaita):** The graphical user interface is natively implemented in C utilizing GTK4 and Libadwaita (`src/gui.c` and the modular files under `src/gui/`), ensuring smooth desktop integration, theme compatibility (e.g., ADW style manager), and hardware-accelerated rendering.
 - **FFI Bridge:** Both layers communicate seamlessly through a bidirectional Foreign Function Interface (FFI) without any middle layer affecting processing speed.
 
 
@@ -31,7 +31,7 @@ Zig is the primary engine for file management, background routines, and data log
 - **Seamless C Interoperability:** Zig provides native support for C headers and libraries, allowing highly efficient bidirectional FFI calls with GTK4/Adwaita without wrapper overhead.
 - **Independent Build Tooling:** Standard `build.zig` and `build.zig.zon` manage compilation of both Zig and C sources into a single optimized executable, eliminating the need for CMake or Make.
 
-### 2.2 Frontend: C GTK4 & Libadwaita (`src/gui.c` & `src/gui_sync.c`)
+### 2.2 Frontend: C GTK4 & Libadwaita (`src/gui.c` & `src/gui/gui_sync.c`)
 The graphical layout, windows, and editor controls are natively implemented using GTK4 and Libadwaita.
 - **Native UI Performance:** Renders hardware-accelerated layouts directly, avoiding heavy web-based frameworks (like Electron) that consume hundreds of megabytes of RAM.
 - **Advanced GtkSourceView Engine:** Leverages `GtkSourceView` for text editing features, syntax highlighting, and custom editor coloring schemes defined via standard XML (`src/ui/qirtas_markdown.lang`).
@@ -83,11 +83,18 @@ The layout of the project separates backend system routines from the graphical f
 | `src/root.zig` | Zig | Zig module configuration package. |
 | `src/gui.c` | C | UI engine; initializes and wires GTK4/Adwaita layout components. |
 | `src/gui_internal.h` | C | Internal UI state, shared window pointers, and module hooks for the C frontend. |
-| `src/gui_sync.c` | C | Sync status UI callbacks and credentials views. |
 | `src/gui_shared.h` | C | Zig-facing C FFI declarations and cross-language hooks. |
-| `src/gui/gui_theme.c` | C | Theme loading, CSS injection, and font settings. |
-| `src/gui/gui_cursor.c` | C | Cursor trail animation and pointer color persistence. |
-| `src/gui/gui_hr.c` | C | Horizontal rule detection and rendering. |
+| `src/gui/gui_theme.c` | C | Theme loading, CSS variables/styles injection, and custom font management. |
+| `src/gui/gui_cursor.c` | C | Smear pointer/cursor trail animations and trail persistence. |
+| `src/gui/gui_hr.c` | C | Detection and custom formatting/rendering of horizontal rules. |
+| `src/gui/gui_search.c` | C | Search overlay control and query matching inside active buffers. |
+| `src/gui/gui_conceal.c` | C | Markdown concealment tags and custom header scaling. |
+| `src/gui/gui_wiki.c` | C | Wiki-link parsing, navigation triggers, and document opening. |
+| `src/gui/gui_popover.c` | C | Rich text formatting floating popover. |
+| `src/gui/gui_explorer.c` | C | Directory hierarchy explorer drawer and vault management UI. |
+| `src/gui/gui_tabs.c` | C | Tab control bar, document tabs lifecycle, and buffer cache mapping. |
+| `src/gui/gui_editor.c` | C | Primary text editing area setup, event filters, word wrap coordinate mapping. |
+| `src/gui/gui_sync.c` | C | Cloud credentials connection views, synchronization status bar widgets. |
 | `build.zig` | Zig | Build script compiling Zig modules and C sources into a single executable. |
 
 
@@ -107,23 +114,35 @@ High-performance communication between the backend and frontend is achieved via 
 - `gui_get_cursor_position(int*, int*)`: Gets current cursor line and offset.
 - `gui_set_cursor_position(int, int)`: Restores editor cursor position.
 - `gui_refresh_explorer(void)`: Requests directory tree explorer update.
+- `gui_set_virtual_scroll_mode(int, int)`: Configures virtual scrolling mode.
 - `gui_init_virtual_document(int, int, int)`: Wires virtual document scrolling.
 - `gui_trigger_autosave(void)`: Triggers Zig autosaving routines.
+- `gui_update_sync_status(int, const char*)`: Updates Google Drive sync status.
+- `gui_update_dropbox_status(int, const char*)`: Updates Dropbox sync status.
+- `gui_update_github_status(int, const char*)`: Updates GitHub sync status.
+- `gui_update_local_sync_status(int, const char*)`: Updates local sync status.
 - `gui_tabs_save_active_to_cache(void)`: Saves current active tab text/modified state to cache.
 - `gui_tabs_restore_active_from_cache(void)`: Restores active tab text/modified state from cache.
 
 ### 5.2 Zig Functions Called from C
 - `zig_on_gui_ready(void)`: Invoked when C UI construction is complete.
 - `zig_has_active_master_key(void)`: Reports whether the backend has unlocked the master key.
-- `zig_open_file(char*)`: Loads file contents, registers file watch descriptors, and updates sessions.
-- `zig_open_vault(char*)`: Sets directory folder context.
-- `zig_search_workspace(char*)`: Performs regex searches across workspace.
-- `zig_get_search_snippet(char*)`: Fetches matching line snippets.
-- `zig_get_search_rank(char*)`: Ranks file relevance for search results.
-- `zig_open_wiki_link(char*)`: Resolves or generates linked markdown files.
-- `zig_create_new_file(char*)`: Initializes new files.
-- `zig_on_shutdown(void)`: Cleans up handles and saves session states.
-- `zig_force_save(void)`: Instantly flushes working buffer to disk.
+- `zig_open_file(const char *filename)`: Opens a file, updates watch lists, and loads content.
+- `zig_open_vault(const char *dir_path)`: Toggles active project directories.
+- `zig_search_workspace(const char *query)`: Queries local files for matches.
+- `const char *zig_get_search_snippet(const char *filepath)`: Retrieves search match highlight preview.
+- `int zig_get_search_rank(const char *filepath)`: Ranks search results.
+- `void zig_set_cursor_trail(int enabled)`: Saves user configuration for the cursor animation.
+- `int zig_get_cursor_trail(void)`: Returns active cursor trail configuration.
+- `void zig_open_wiki_link(const char *note_name)`: Resolves or auto-generates linked markdown files.
+- `void zig_create_new_file(const char *filename)`: Initializes new notebook documents.
+- `void zig_on_shutdown(void)`: Triggered on window close to save states.
+- `void zig_force_save(void)`: Triggers immediate data flush to disk.
+- `void zig_save_sync_credentials(...)` / `zig_sync_connect(...)` / `zig_sync_now(...)`: Google Drive sync routines.
+- `void zig_save_dropbox_credentials(...)` / `zig_dropbox_connect(...)` / `zig_dropbox_now(...)`: Dropbox sync routines.
+- `void zig_save_github_credentials(...)` / `zig_github_connect(...)` / `zig_github_now(...)`: GitHub sync routines.
+- `void zig_local_sync_now(...)`: Direct folder-to-folder synchronization.
+- `void zig_set_editor_border(int enabled)` / `int zig_get_editor_border(void)`: Configures layout margins.
 
 ### 5.3 Memory Safety Guidelines
 Strings are passed using standard `const char*` C pointers. Zig reads these pointers, converts them to slices, and immediately zeroes any volatile stack memory after processing to keep the memory footprint optimized and secure.
