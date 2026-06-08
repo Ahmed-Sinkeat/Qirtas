@@ -281,6 +281,20 @@ void update_conceal_markdown_all(GtkTextBuffer *buf) {
     apply_regex_conceal(buf, text, "==([^\\n]*?[^\\n=][^\\n]*?)==", cursor_char, 2, conceal_tag);
     apply_regex_conceal(buf, text, "(?<!\\*)\\*([^\\n\\*]+?)\\*(?!\\*)", cursor_char, 1, conceal_tag);
 
+    /* Heading markers: match and conceal the # characters and the trailing space */
+    apply_regex_conceal(buf, text, "(?m)^#[ \\t]", cursor_char, 2, conceal_tag);
+    apply_regex_conceal(buf, text, "(?m)^##[ \\t]", cursor_char, 3, conceal_tag);
+    apply_regex_conceal(buf, text, "(?m)^###[ \\t]", cursor_char, 4, conceal_tag);
+    apply_regex_conceal(buf, text, "(?m)^####[ \\t]", cursor_char, 5, conceal_tag);
+    apply_regex_conceal(buf, text, "(?m)^#####[ \\t]", cursor_char, 6, conceal_tag);
+    apply_regex_conceal(buf, text, "(?m)^######[ \\t]", cursor_char, 7, conceal_tag);
+
+    /* Inline links: match and conceal opening [ and closing ](url) */
+    apply_regex_conceal(buf, text, "\\[([^\\]]+)\\]\\([^)]*\\)", cursor_char, 1, conceal_tag);
+
+    /* Images: match and conceal entire match */
+    apply_regex_conceal(buf, text, "!\\[[^\\]]*\\]\\([^)]*\\)", cursor_char, 2, conceal_tag);
+
     g_free(text);
 
     /* Heading size tags pass */
