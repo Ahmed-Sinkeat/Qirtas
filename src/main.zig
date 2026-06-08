@@ -36,6 +36,8 @@ extern fn gui_init_virtual_document(total_lines: c_int, start_line: c_int, end_l
 extern fn gui_trigger_autosave() void;
 extern fn gui_get_active_page_bounds(start_line: *c_int, end_line: *c_int, total_lines: *c_int) void;
 extern fn gui_update_total_virtual_lines(total_lines: c_int) void;
+extern fn gui_tabs_save_active_to_cache() void;
+extern fn gui_tabs_restore_active_from_cache() void;
 
 const GuiIdleCallback = *const fn (user_data: ?*anyopaque) callconv(.c) void;
 extern fn gui_run_on_main_thread(callback: GuiIdleCallback, user_data: ?*anyopaque) void;
@@ -85,6 +87,7 @@ pub fn main(init: std.process.Init) !void {
             // Ensure table and column exist
             _ = c.sqlite3_exec(db, "CREATE TABLE IF NOT EXISTS session_state (id INTEGER PRIMARY KEY CHECK (id = 1), active_file TEXT, cursor_line INTEGER, cursor_col INTEGER, vault_path TEXT);", null, null, null);
             _ = c.sqlite3_exec(db, "ALTER TABLE session_state ADD COLUMN vault_path TEXT;", null, null, null);
+            _ = c.sqlite3_exec(db, "CREATE TABLE IF NOT EXISTS system_keys (id INTEGER PRIMARY KEY CHECK (id = 1), encrypted_master_key_machine TEXT NOT NULL, encrypted_master_key_passphrase TEXT, passphrase_salt TEXT);", null, null, null);
 
             var stmt: ?*c.sqlite3_stmt = null;
             const query_sql = "SELECT vault_path FROM session_state WHERE id = 1;";
@@ -226,9 +229,9 @@ pub export fn zig_on_gui_ready() callconv(.c) void {
     gui_set_cursor_position(initial_cursor_line, initial_cursor_col);
 
     // Spawn Asynchronous Autosave Thread
-    _ = std.Thread.spawn(.{}, autosave_thread_loop, .{}) catch |err| {
-        std.debug.print("Failed to spawn autosave thread: {}\n", .{err});
-    };
+    // _ = std.Thread.spawn(.{}, autosave_thread_loop, .{}) catch |err| {
+    //     std.debug.print("Failed to spawn autosave thread: {}\n", .{err});
+    // };
 
     // Spawn File System Watcher Thread
     _ = std.Thread.spawn(.{}, file_watcher_thread_loop, .{}) catch |err| {
@@ -236,15 +239,43 @@ pub export fn zig_on_gui_ready() callconv(.c) void {
     };
 }
 
-// Exported FFI: called when a user double clicks a file in the grid explorer
 pub export fn zig_open_file(filename_ptr: [*:0]const u8) callconv(.c) void {
+    gui_tabs_save_active_to_cache();
+
     const filename = std.mem.span(filename_ptr);
 
     // Save previous cursor position first
     var old_line: c_int = 1;
     var old_col: c_int = 0;
     gui_get_cursor_position(&old_line, &old_col);
-    save_session(active_file_path[0..active_file_path_len], old_line, old_col) catch {};
+    if (active_file_path_len > 0 and !std.mem.eql(u8, active_file_path[0..active_file_path_len], "Untitled")) {
+        save_session(active_file_path[0..active_file_path_len], old_line, old_col) catch {};
+    }
+
+    if (std.mem.eql(u8, filename, "Untitled")) {
+        // Unload existing mapping
+        if (active_mmap_ptr) |ptr| {
+            unload_file_mmap(ptr, active_mmap_size);
+            active_mmap_ptr = null;
+            active_mmap_size = 0;
+        }
+
+        // Clear line offsets
+        line_offsets.clearRetainingCapacity();
+        const gpa = std.heap.page_allocator;
+        line_offsets.append(gpa, 0) catch {};
+
+        @memcpy(active_file_path[0..filename.len], filename);
+        active_file_path_len = filename.len;
+
+        gui_set_text("", 0);
+        gui_init_virtual_document(1, 0, 1);
+        gui_set_title("Untitled - Qirtas");
+        gui_set_sync_status("Not Synced");
+        gui_show_editor();
+        gui_tabs_restore_active_from_cache();
+        return;
+    }
 
     // Filter editable extensions
     if (std.mem.endsWith(u8, filename, ".md") or 
@@ -285,6 +316,7 @@ pub export fn zig_open_file(filename_ptr: [*:0]const u8) callconv(.c) void {
         load_file_and_update_gui(display_name) catch |err| {
             std.debug.print("Failed to open file {s}: {}\n", .{display_name, err});
         };
+        gui_tabs_restore_active_from_cache();
     }
 }
 
@@ -315,6 +347,163 @@ pub export fn zig_get_cursor_trail() callconv(.c) c_int {
 
         var stmt: ?*c.sqlite3_stmt = null;
         const sql = "SELECT enable_cursor_trail FROM session_state WHERE id = 1;";
+        if (c.sqlite3_prepare_v2(db, sql.ptr, -1, &stmt, null) == c.SQLITE_OK) {
+            defer _ = c.sqlite3_finalize(stmt);
+            if (c.sqlite3_step(stmt) == c.SQLITE_ROW) {
+                if (c.sqlite3_column_type(stmt, 0) != c.SQLITE_NULL) {
+                    enabled = c.sqlite3_column_int(stmt, 0);
+                }
+            }
+        }
+    }
+    return enabled;
+}
+
+pub export fn zig_set_layout_dividers(enabled: c_int) callconv(.c) void {
+    var db: ?*c.sqlite3 = null;
+    if (c.sqlite3_open(DB_PATH, &db) == c.SQLITE_OK) {
+        defer _ = c.sqlite3_close(db);
+        _ = c.sqlite3_busy_timeout(db, 5000);
+        _ = c.sqlite3_exec(db, "INSERT OR IGNORE INTO session_state (id) VALUES (1);", null, null, null);
+        const sql = "UPDATE session_state SET enable_layout_dividers = ? WHERE id = 1;";
+        var stmt: ?*c.sqlite3_stmt = null;
+        if (c.sqlite3_prepare_v2(db, sql.ptr, -1, &stmt, null) == c.SQLITE_OK) {
+            defer _ = c.sqlite3_finalize(stmt);
+            _ = c.sqlite3_bind_int(stmt, 1, enabled);
+            _ = c.sqlite3_step(stmt);
+        }
+    }
+}
+
+pub export fn zig_get_layout_dividers() callconv(.c) c_int {
+    var db: ?*c.sqlite3 = null;
+    var enabled: c_int = 0; // default disabled
+    if (c.sqlite3_open(DB_PATH, &db) == c.SQLITE_OK) {
+        defer _ = c.sqlite3_close(db);
+        _ = c.sqlite3_busy_timeout(db, 5000);
+        _ = c.sqlite3_exec(db, "CREATE TABLE IF NOT EXISTS session_state (id INTEGER PRIMARY KEY CHECK (id = 1), active_file TEXT, cursor_line INTEGER, cursor_col INTEGER, vault_path TEXT, enable_cursor_trail INTEGER DEFAULT 1, enable_layout_dividers INTEGER DEFAULT 0);", null, null, null);
+        _ = c.sqlite3_exec(db, "ALTER TABLE session_state ADD COLUMN enable_layout_dividers INTEGER DEFAULT 0;", null, null, null);
+
+        var stmt: ?*c.sqlite3_stmt = null;
+        const sql = "SELECT enable_layout_dividers FROM session_state WHERE id = 1;";
+        if (c.sqlite3_prepare_v2(db, sql.ptr, -1, &stmt, null) == c.SQLITE_OK) {
+            defer _ = c.sqlite3_finalize(stmt);
+            if (c.sqlite3_step(stmt) == c.SQLITE_ROW) {
+                if (c.sqlite3_column_type(stmt, 0) != c.SQLITE_NULL) {
+                    enabled = c.sqlite3_column_int(stmt, 0);
+                }
+            }
+        }
+    }
+    return enabled;
+}
+
+pub export fn zig_set_bottom_margin(enabled: c_int) callconv(.c) void {
+    var db: ?*c.sqlite3 = null;
+    if (c.sqlite3_open(DB_PATH, &db) == c.SQLITE_OK) {
+        defer _ = c.sqlite3_close(db);
+        _ = c.sqlite3_busy_timeout(db, 5000);
+        _ = c.sqlite3_exec(db, "INSERT OR IGNORE INTO session_state (id) VALUES (1);", null, null, null);
+        const sql = "UPDATE session_state SET enable_bottom_margin = ? WHERE id = 1;";
+        var stmt: ?*c.sqlite3_stmt = null;
+        if (c.sqlite3_prepare_v2(db, sql.ptr, -1, &stmt, null) == c.SQLITE_OK) {
+            defer _ = c.sqlite3_finalize(stmt);
+            _ = c.sqlite3_bind_int(stmt, 1, enabled);
+            _ = c.sqlite3_step(stmt);
+        }
+    }
+}
+
+pub export fn zig_get_bottom_margin() callconv(.c) c_int {
+    var db: ?*c.sqlite3 = null;
+    var enabled: c_int = 0; // default disabled
+    if (c.sqlite3_open(DB_PATH, &db) == c.SQLITE_OK) {
+        defer _ = c.sqlite3_close(db);
+        _ = c.sqlite3_busy_timeout(db, 5000);
+        _ = c.sqlite3_exec(db, "CREATE TABLE IF NOT EXISTS session_state (id INTEGER PRIMARY KEY CHECK (id = 1), active_file TEXT, cursor_line INTEGER, cursor_col INTEGER, vault_path TEXT, enable_cursor_trail INTEGER DEFAULT 1, enable_layout_dividers INTEGER DEFAULT 0, enable_bottom_margin INTEGER DEFAULT 0);", null, null, null);
+        _ = c.sqlite3_exec(db, "ALTER TABLE session_state ADD COLUMN enable_bottom_margin INTEGER DEFAULT 0;", null, null, null);
+
+        var stmt: ?*c.sqlite3_stmt = null;
+        const sql = "SELECT enable_bottom_margin FROM session_state WHERE id = 1;";
+        if (c.sqlite3_prepare_v2(db, sql.ptr, -1, &stmt, null) == c.SQLITE_OK) {
+            defer _ = c.sqlite3_finalize(stmt);
+            if (c.sqlite3_step(stmt) == c.SQLITE_ROW) {
+                if (c.sqlite3_column_type(stmt, 0) != c.SQLITE_NULL) {
+                    enabled = c.sqlite3_column_int(stmt, 0);
+                }
+            }
+        }
+    }
+    return enabled;
+}
+
+pub export fn zig_set_focus_mode(enabled: c_int) callconv(.c) void {
+    var db: ?*c.sqlite3 = null;
+    if (c.sqlite3_open(DB_PATH, &db) == c.SQLITE_OK) {
+        defer _ = c.sqlite3_close(db);
+        _ = c.sqlite3_busy_timeout(db, 5000);
+        _ = c.sqlite3_exec(db, "INSERT OR IGNORE INTO session_state (id) VALUES (1);", null, null, null);
+        const sql = "UPDATE session_state SET enable_focus_mode = ? WHERE id = 1;";
+        var stmt: ?*c.sqlite3_stmt = null;
+        if (c.sqlite3_prepare_v2(db, sql.ptr, -1, &stmt, null) == c.SQLITE_OK) {
+            defer _ = c.sqlite3_finalize(stmt);
+            _ = c.sqlite3_bind_int(stmt, 1, enabled);
+            _ = c.sqlite3_step(stmt);
+        }
+    }
+}
+
+pub export fn zig_get_focus_mode() callconv(.c) c_int {
+    var db: ?*c.sqlite3 = null;
+    var enabled: c_int = 0; // default disabled
+    if (c.sqlite3_open(DB_PATH, &db) == c.SQLITE_OK) {
+        defer _ = c.sqlite3_close(db);
+        _ = c.sqlite3_busy_timeout(db, 5000);
+        _ = c.sqlite3_exec(db, "CREATE TABLE IF NOT EXISTS session_state (id INTEGER PRIMARY KEY CHECK (id = 1), active_file TEXT, cursor_line INTEGER, cursor_col INTEGER, vault_path TEXT, enable_cursor_trail INTEGER DEFAULT 1, enable_layout_dividers INTEGER DEFAULT 0, enable_bottom_margin INTEGER DEFAULT 0, enable_focus_mode INTEGER DEFAULT 0, enable_editor_border INTEGER DEFAULT 1);", null, null, null);
+        _ = c.sqlite3_exec(db, "ALTER TABLE session_state ADD COLUMN enable_focus_mode INTEGER DEFAULT 0;", null, null, null);
+        _ = c.sqlite3_exec(db, "ALTER TABLE session_state ADD COLUMN enable_editor_border INTEGER DEFAULT 1;", null, null, null);
+
+        var stmt: ?*c.sqlite3_stmt = null;
+        const sql = "SELECT enable_focus_mode FROM session_state WHERE id = 1;";
+        if (c.sqlite3_prepare_v2(db, sql.ptr, -1, &stmt, null) == c.SQLITE_OK) {
+            defer _ = c.sqlite3_finalize(stmt);
+            if (c.sqlite3_step(stmt) == c.SQLITE_ROW) {
+                if (c.sqlite3_column_type(stmt, 0) != c.SQLITE_NULL) {
+                    enabled = c.sqlite3_column_int(stmt, 0);
+                }
+            }
+        }
+    }
+    return enabled;
+}
+
+pub export fn zig_set_editor_border(enabled: c_int) callconv(.c) void {
+    var db: ?*c.sqlite3 = null;
+    if (c.sqlite3_open(DB_PATH, &db) == c.SQLITE_OK) {
+        defer _ = c.sqlite3_close(db);
+        _ = c.sqlite3_busy_timeout(db, 5000);
+        _ = c.sqlite3_exec(db, "INSERT OR IGNORE INTO session_state (id) VALUES (1);", null, null, null);
+        const sql = "UPDATE session_state SET enable_editor_border = ? WHERE id = 1;";
+        var stmt: ?*c.sqlite3_stmt = null;
+        if (c.sqlite3_prepare_v2(db, sql.ptr, -1, &stmt, null) == c.SQLITE_OK) {
+            defer _ = c.sqlite3_finalize(stmt);
+            _ = c.sqlite3_bind_int(stmt, 1, enabled);
+            _ = c.sqlite3_step(stmt);
+        }
+    }
+}
+
+pub export fn zig_get_editor_border() callconv(.c) c_int {
+    var db: ?*c.sqlite3 = null;
+    var enabled: c_int = 1; // default enabled
+    if (c.sqlite3_open(DB_PATH, &db) == c.SQLITE_OK) {
+        defer _ = c.sqlite3_close(db);
+        _ = c.sqlite3_busy_timeout(db, 5000);
+        _ = c.sqlite3_exec(db, "CREATE TABLE IF NOT EXISTS session_state (id INTEGER PRIMARY KEY CHECK (id = 1), active_file TEXT, cursor_line INTEGER, cursor_col INTEGER, vault_path TEXT, enable_cursor_trail INTEGER DEFAULT 1, enable_layout_dividers INTEGER DEFAULT 0, enable_bottom_margin INTEGER DEFAULT 0, enable_focus_mode INTEGER DEFAULT 0, enable_editor_border INTEGER DEFAULT 1);", null, null, null);
+        _ = c.sqlite3_exec(db, "ALTER TABLE session_state ADD COLUMN enable_editor_border INTEGER DEFAULT 1;", null, null, null);
+
+        var stmt: ?*c.sqlite3_stmt = null;
+        const sql = "SELECT enable_editor_border FROM session_state WHERE id = 1;";
         if (c.sqlite3_prepare_v2(db, sql.ptr, -1, &stmt, null) == c.SQLITE_OK) {
             defer _ = c.sqlite3_finalize(stmt);
             if (c.sqlite3_step(stmt) == c.SQLITE_ROW) {
@@ -460,7 +649,9 @@ pub export fn zig_on_shutdown() callconv(.c) void {
     var line: c_int = 1;
     var col: c_int = 0;
     gui_get_cursor_position(&line, &col);
-    save_session(active_file_path[0..active_file_path_len], line, col) catch {};
+    if (active_file_path_len > 0 and !std.mem.eql(u8, active_file_path[0..active_file_path_len], "Untitled")) {
+        save_session(active_file_path[0..active_file_path_len], line, col) catch {};
+    }
     if (active_mmap_ptr) |ptr| {
         unload_file_mmap(ptr, active_mmap_size);
         active_mmap_ptr = null;

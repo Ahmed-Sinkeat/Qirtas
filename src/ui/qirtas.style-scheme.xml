@@ -4,12 +4,13 @@
   <description>Qirtas Ink style scheme (Paper &amp; Ink contrast)</description>
 
   <!-- ── Palette ── -->
-  <color name="ink"        value="#000000"/>
-  <color name="ink-muted"  value="#444444"/>
-  <color name="ink-faint"  value="#777777"/>
-  <color name="bg"         value="#ffffff"/>
-  <color name="bg-line"    value="#f4f3f0"/>
-  <color name="selection"  value="#eae8e4"/>
+  <color name="ink"        value="#1b1816"/>
+  <color name="ink-muted"  value="#3f3935"/>
+  <color name="ink-faint"  value="#726861"/>
+  <color name="bg"         value="#f6f3eb"/>
+  <color name="bg-line"    value="#ede9dc"/>
+  <color name="selection"  value="#e5dbbe"/>
+  <color name="indigo"     value="#142d4c"/>
 
   <!-- ── Editor base ── -->
   <style name="text"               foreground="ink"     background="bg"/>
@@ -28,8 +29,8 @@
   <style name="def:preformatted-section" foreground="ink-muted"/>
   <style name="def:comment"             foreground="ink-faint" italic="true"/>
   <style name="def:string"              foreground="ink-muted"/>
-  <style name="def:net-address"         foreground="ink"   underline="true"/>
-  <style name="def:link-destination"    foreground="ink-muted"   underline="true"/>
+  <style name="def:net-address"         foreground="indigo"   underline="true"/>
+  <style name="def:link-destination"    foreground="indigo"   underline="true"/>
   <style name="def:link-text"           foreground="ink"/>
   <style name="def:list-marker"         foreground="ink-muted"/>
   <style name="def:shebang"             foreground="ink-faint"   italic="true"/>
@@ -57,8 +58,8 @@
 
   <!-- ── Links ── -->
   <style name="qirtas_markdown:link-text"   foreground="ink"/>
-  <style name="qirtas_markdown:url"         foreground="ink-muted"   underline="true" italic="true"/>
-  <style name="qirtas_markdown:wiki-link"   foreground="ink" underline="true"/>
+  <style name="qirtas_markdown:url"         foreground="indigo"   underline="true" italic="true"/>
+  <style name="qirtas_markdown:wiki-link"   foreground="indigo" underline="true"/>
 
   <!-- ── Special ── -->
   <style name="qirtas_markdown:highlight"   background="selection" foreground="ink"/>
@@ -79,7 +80,7 @@
   <style name="markdown:inline-code"     foreground="ink-muted"/>
   <style name="markdown:code"            foreground="ink-muted"   background="selection"/>
   <style name="markdown:link-text"       foreground="ink"/>
-  <style name="markdown:url"             foreground="ink-muted"   underline="true"/>
+  <style name="markdown:url"             foreground="indigo"   underline="true"/>
   <style name="markdown:blockquote-line" foreground="ink-muted"   italic="true"/>
   <style name="markdown:list-marker"     foreground="ink-muted"/>
 </style-scheme>

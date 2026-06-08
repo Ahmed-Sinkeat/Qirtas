@@ -12,6 +12,11 @@ pub const wordlist = blk: {
         if (i >= 2048) {
             @compileError("Wordlist has more than 2048 words!");
         }
+        if (i > 0) {
+            if (std.mem.order(u8, list[i - 1], word) != .lt) {
+                @compileError("Wordlist is not sorted lexicographically or contains duplicates!");
+            }
+        }
         list[i] = word;
         i += 1;
     }
@@ -24,11 +29,13 @@ pub const wordlist = blk: {
 pub fn entropyToMnemonic(entropy: [32]u8, out_words: *[24][]const u8) !void {
     // 1. Calculate SHA-256 checksum (first 8 bits of hash)
     var hash: [32]u8 = undefined;
+    defer std.crypto.secureZero(u8, &hash);
     std.crypto.hash.sha2.Sha256.hash(&entropy, &hash, .{});
     const checksum = hash[0];
 
     // 2. Concatenate 256 bits of entropy + 8 bits checksum = 264 bits
     var bits: [264]bool = undefined;
+    defer std.crypto.secureZero(bool, &bits);
     for (entropy, 0..) |byte, i| {
         for (0..8) |b| {
             bits[i * 8 + b] = ((byte >> @intCast(7 - b)) & 1) == 1;
@@ -53,6 +60,7 @@ pub fn mnemonicToEntropy(words: []const []const u8) ![32]u8 {
 
     // 1. Map words back to 11-bit indices
     var bits: [264]bool = undefined;
+    defer std.crypto.secureZero(bool, &bits);
     for (words, 0..) |word, i| {
         const index = try findWordIndex(word);
         for (0..11) |b| {
@@ -62,6 +70,7 @@ pub fn mnemonicToEntropy(words: []const []const u8) ![32]u8 {
 
     // 2. Extract entropy (first 256 bits)
     var entropy: [32]u8 = undefined;
+    errdefer std.crypto.secureZero(u8, &entropy);
     for (0..32) |i| {
         var byte: u8 = 0;
         for (0..8) |b| {
@@ -72,6 +81,7 @@ pub fn mnemonicToEntropy(words: []const []const u8) ![32]u8 {
 
     // 3. Verify checksum (last 8 bits)
     var hash: [32]u8 = undefined;
+    defer std.crypto.secureZero(u8, &hash);
     std.crypto.hash.sha2.Sha256.hash(&entropy, &hash, .{});
     const expected_checksum = hash[0];
 
@@ -105,14 +115,14 @@ fn findWordIndex(word: []const u8) !u11 {
 test "BIP-39 entropy to mnemonic and back" {
     const entropy = [_]u8{0x00} ** 32;
     var mnemonic_buf: [24][]const u8 = undefined;
-    
+
     // We expect standard BIP-39 mapping for 32 bytes of zeros to be 23 "abandon" words and the last to be "art" (checksum)
     try entropyToMnemonic(entropy, &mnemonic_buf);
     for (mnemonic_buf[0..23]) |word| {
         try std.testing.expectEqualStrings("abandon", word);
     }
     try std.testing.expectEqualStrings("art", mnemonic_buf[23]);
-    
+
     const parsed_entropy = try mnemonicToEntropy(&mnemonic_buf);
     try std.testing.expectEqualSlices(u8, &entropy, &parsed_entropy);
 }

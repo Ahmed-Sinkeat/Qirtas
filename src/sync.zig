@@ -9,11 +9,13 @@ const c = @cImport({
     @cInclude("fcntl.h");
     @cInclude("time.h");
     @cInclude("dirent.h");
+    @cInclude("stdlib.h");
 });
 
 extern fn gui_update_sync_status(connected: c_int, status_text: [*:0]const u8) void;
 extern fn gui_update_dropbox_status(connected: c_int, status_text: [*:0]const u8) void;
 extern fn gui_update_github_status(connected: c_int, status_text: [*:0]const u8) void;
+extern fn gui_update_local_sync_status(connected: c_int, status_text: [*:0]const u8) void;
 extern fn gui_refresh_explorer() void;
 extern fn gui_index_file(filename: [*:0]const u8) void;
 extern fn gui_trigger_autosave() void;
@@ -78,11 +80,27 @@ fn get_credentials(allocator: std.mem.Allocator) !SyncCredentials {
         const ref_tok = c.sqlite3_column_text(stmt, 3);
         const exp_time = c.sqlite3_column_int64(stmt, 4);
 
+        if (c_id == null or c_sec == null) return error.CredentialsNotFound;
+
+        const secret_raw = std.mem.span(c_sec);
+        const client_secret = if (secret_raw.len == 0)
+            try allocator.dupe(u8, "")
+        else
+            decryptToken(allocator, secret_raw) catch try allocator.dupe(u8, secret_raw);
+        errdefer allocator.free(client_secret);
+
+        const dec_access = if (acc_tok != null and std.mem.span(acc_tok).len > 0)
+            decryptToken(allocator, std.mem.span(acc_tok)) catch null
+        else null;
+        const dec_refresh = if (ref_tok != null and std.mem.span(ref_tok).len > 0)
+            decryptToken(allocator, std.mem.span(ref_tok)) catch null
+        else null;
+
         return SyncCredentials{
             .client_id = try allocator.dupe(u8, std.mem.span(c_id)),
-            .client_secret = try allocator.dupe(u8, std.mem.span(c_sec)),
-            .access_token = if (acc_tok != null) try allocator.dupe(u8, std.mem.span(acc_tok)) else null,
-            .refresh_token = if (ref_tok != null) try allocator.dupe(u8, std.mem.span(ref_tok)) else null,
+            .client_secret = client_secret,
+            .access_token = dec_access,
+            .refresh_token = dec_refresh,
             .expiry_time = exp_time,
         };
     }
@@ -93,8 +111,14 @@ fn get_credentials(allocator: std.mem.Allocator) !SyncCredentials {
 fn free_credentials(creds: *SyncCredentials, allocator: std.mem.Allocator) void {
     allocator.free(creds.client_id);
     allocator.free(creds.client_secret);
-    if (creds.access_token) |t| allocator.free(t);
-    if (creds.refresh_token) |t| allocator.free(t);
+    if (creds.access_token) |t| {
+        @memset(@constCast(t), 0);
+        allocator.free(t);
+    }
+    if (creds.refresh_token) |t| {
+        @memset(@constCast(t), 0);
+        allocator.free(t);
+    }
 }
 
 // FFI: Save credentials entered by user
@@ -119,11 +143,24 @@ pub export fn zig_save_sync_credentials(client_id_ptr: [*:0]const u8, client_sec
     ;
     _ = c.sqlite3_exec(db, create_table_sql.ptr, null, null, null);
 
+    const allocator = std.heap.page_allocator;
+    const client_id = std.mem.span(client_id_ptr);
+    const client_secret = std.mem.span(client_secret_ptr);
+    const stored_secret = if (client_secret.len == 0)
+        allocator.dupe(u8, "") catch return
+    else
+        encryptToken(allocator, client_secret) catch return;
+    defer allocator.free(stored_secret);
+
     const sql = "INSERT OR REPLACE INTO sync_tokens (id, client_id, client_secret) VALUES (1, ?, ?);";
     var stmt: ?*c.sqlite3_stmt = null;
     if (c.sqlite3_prepare_v2(db, sql.ptr, -1, &stmt, null) == c.SQLITE_OK) {
-        _ = c.sqlite3_bind_text(stmt, 1, client_id_ptr, -1, null);
-        _ = c.sqlite3_bind_text(stmt, 2, client_secret_ptr, -1, null);
+        const client_id_z = allocator.dupeZ(u8, client_id) catch return;
+        defer allocator.free(client_id_z);
+        const stored_secret_z = allocator.dupeZ(u8, stored_secret) catch return;
+        defer allocator.free(stored_secret_z);
+        _ = c.sqlite3_bind_text(stmt, 1, client_id_z.ptr, -1, null);
+        _ = c.sqlite3_bind_text(stmt, 2, stored_secret_z.ptr, -1, null);
         _ = c.sqlite3_step(stmt);
         _ = c.sqlite3_finalize(stmt);
     }
@@ -132,7 +169,7 @@ pub export fn zig_save_sync_credentials(client_id_ptr: [*:0]const u8, client_sec
 // FFI: Spawns browser for Google Auth flow
 pub export fn zig_sync_connect() callconv(.c) void {
     const allocator = std.heap.page_allocator;
-    var creds = get_credentials(allocator) catch blk: {
+    var creds = get_credentials(allocator) catch {
         var db: ?*c.sqlite3 = null;
         if (c.sqlite3_open(DB_PATH, &db) == c.SQLITE_OK) {
             _ = c.sqlite3_busy_timeout(db, 5000);
@@ -147,12 +184,12 @@ pub export fn zig_sync_connect() callconv(.c) void {
                 \\);
             ;
             _ = c.sqlite3_exec(db, create_table_sql.ptr, null, null, null);
-            _ = c.sqlite3_exec(db, "INSERT OR IGNORE INTO sync_tokens (id, client_id, client_secret) VALUES (1, '100982736451-example.apps.googleusercontent.com', 'GOCSPX-examplesecret');", null, null, null);
             _ = c.sqlite3_close(db);
         } else {
             if (db != null) _ = c.sqlite3_close(db);
         }
-        break :blk get_credentials(allocator) catch return;
+        gui_update_sync_status(0, "Configure Google client ID");
+        return;
     };
     defer free_credentials(&creds, allocator);
 
@@ -215,7 +252,8 @@ fn exchange_token_worker(allocator: std.mem.Allocator, code: []const u8, client_
 
     exchange_token_impl(allocator, code, client_id, client_secret) catch |err| {
         std.debug.print("Token exchange failed: {}\n", .{err});
-        gui_update_sync_status(0, "Authentication Failed");
+        var msg_buf: [128]u8 = undefined;
+        gui_update_sync_status(sync_error_connection_state(err), sync_error_message_z(err, &msg_buf));
         return;
     };
 
@@ -235,10 +273,16 @@ fn exchange_token_impl(allocator: std.mem.Allocator, code: []const u8, client_id
     });
     defer req.deinit();
 
-    const body = try std.fmt.allocPrint(allocator, 
-        "code={s}&client_id={s}&client_secret={s}&redirect_uri=http://127.0.0.1:12345&grant_type=authorization_code",
-       .{code, client_id, client_secret}
-    );
+    const body = if (client_secret.len > 0)
+        try std.fmt.allocPrint(allocator,
+            "code={s}&client_id={s}&client_secret={s}&redirect_uri=http://127.0.0.1:12345&grant_type=authorization_code",
+            .{ code, client_id, client_secret },
+        )
+    else
+        try std.fmt.allocPrint(allocator,
+            "code={s}&client_id={s}&redirect_uri=http://127.0.0.1:12345&grant_type=authorization_code",
+            .{ code, client_id },
+        );
     defer allocator.free(body);
 
     try req.sendBodyComplete(body);
@@ -281,13 +325,22 @@ fn exchange_token_impl(allocator: std.mem.Allocator, code: []const u8, client_id
     const sql = "UPDATE sync_tokens SET access_token = ?, refresh_token = ?, expiry_time = ? WHERE id = 1;";
     var stmt: ?*c.sqlite3_stmt = null;
     if (c.sqlite3_prepare_v2(db, sql.ptr, -1, &stmt, null) == c.SQLITE_OK) {
-        const access_token_z = try allocator.dupeZ(u8, parsed.value.access_token);
+        const enc_access = try encryptToken(allocator, parsed.value.access_token);
+        defer allocator.free(enc_access);
+        const access_token_z = try allocator.dupeZ(u8, enc_access);
         defer allocator.free(access_token_z);
-        const refresh_token_z = try allocator.dupeZ(u8, parsed.value.refresh_token orelse "");
-        defer allocator.free(refresh_token_z);
+
+        const enc_refresh = if (parsed.value.refresh_token) |rt| try encryptToken(allocator, rt) else null;
+        defer if (enc_refresh) |er| allocator.free(er);
+        const refresh_token_z = if (enc_refresh) |er| try allocator.dupeZ(u8, er) else null;
+        defer if (refresh_token_z) |erz| allocator.free(erz);
 
         _ = c.sqlite3_bind_text(stmt, 1, access_token_z.ptr, -1, null);
-        _ = c.sqlite3_bind_text(stmt, 2, refresh_token_z.ptr, -1, null);
+        if (refresh_token_z) |erz| {
+            _ = c.sqlite3_bind_text(stmt, 2, erz.ptr, -1, null);
+        } else {
+            _ = c.sqlite3_bind_text(stmt, 2, "", -1, null);
+        }
         _ = c.sqlite3_bind_int64(stmt, 3, expiry);
         _ = c.sqlite3_step(stmt);
         _ = c.sqlite3_finalize(stmt);
@@ -313,10 +366,16 @@ fn refresh_token_if_needed(allocator: std.mem.Allocator, creds: *SyncCredentials
     });
     defer req.deinit();
 
-    const body = try std.fmt.allocPrint(allocator, 
-        "refresh_token={s}&client_id={s}&client_secret={s}&grant_type=refresh_token",
-        .{creds.refresh_token.?, creds.client_id, creds.client_secret}
-    );
+    const body = if (creds.client_secret.len > 0)
+        try std.fmt.allocPrint(allocator,
+            "refresh_token={s}&client_id={s}&client_secret={s}&grant_type=refresh_token",
+            .{ creds.refresh_token.?, creds.client_id, creds.client_secret },
+        )
+    else
+        try std.fmt.allocPrint(allocator,
+            "refresh_token={s}&client_id={s}&grant_type=refresh_token",
+            .{ creds.refresh_token.?, creds.client_id },
+        );
     defer allocator.free(body);
 
     try req.sendBodyComplete(body);
@@ -364,7 +423,9 @@ fn refresh_token_if_needed(allocator: std.mem.Allocator, creds: *SyncCredentials
     const sql = "UPDATE sync_tokens SET access_token = ?, expiry_time = ? WHERE id = 1;";
     var stmt: ?*c.sqlite3_stmt = null;
     if (c.sqlite3_prepare_v2(db, sql.ptr, -1, &stmt, null) == c.SQLITE_OK) {
-        const access_token_z = try allocator.dupeZ(u8, parsed.value.access_token);
+        const enc_access = try encryptToken(allocator, parsed.value.access_token);
+        defer allocator.free(enc_access);
+        const access_token_z = try allocator.dupeZ(u8, enc_access);
         defer allocator.free(access_token_z);
 
         _ = c.sqlite3_bind_text(stmt, 1, access_token_z.ptr, -1, null);
@@ -486,6 +547,43 @@ fn is_transient_error(status: std.http.Status) bool {
            status == .bad_gateway or 
            status == .service_unavailable or 
            status == .gateway_timeout;
+}
+
+fn sync_error_message(err: anyerror) []const u8 {
+    return switch (err) {
+        error.AuthenticationExpired => "Error: auth expired. reconnect.",
+        error.NoRefreshToken => "Error: missing refresh token.",
+        error.CredentialsNotFound => "Error: missing credentials.",
+        error.DbOpenFailed => "Error: database unavailable.",
+        error.DbPrepareFailed => "Error: database query failed.",
+        error.OpenDirFailed => "Error: cannot open folder.",
+        error.CreateSyncDirectoryFailed => "Error: cannot create sync folder.",
+        error.SyncTargetIsNotDirectory => "Error: sync target is not a directory.",
+        error.TokenExchangeFailed => "Error: token exchange failed.",
+        error.TokenRefreshFailed => "Error: token refresh failed.",
+        error.DriveDownloadFailed => "Error: Google Drive download failed.",
+        error.DriveUpdateFailed => "Error: Google Drive update failed.",
+        error.DriveCreateFailed => "Error: Google Drive upload failed.",
+        error.DriveListFailed => "Error: Google Drive list failed.",
+        error.DriveMetaFailed => "Error: Google Drive metadata failed.",
+        error.ConnectionRefused => "Error: connection refused.",
+        error.UnknownHostName => "Error: unknown host.",
+        error.ConnectionReset => "Error: connection reset.",
+        error.NetworkUnreachable => "Error: network unreachable.",
+        error.HostLacksNetworkAddresses => "Error: no network addresses.",
+        else => "Error: sync failed.",
+    };
+}
+
+fn sync_error_message_z(err: anyerror, buf: []u8) [:0]const u8 {
+    return std.fmt.bufPrintZ(buf, "{s}", .{sync_error_message(err)}) catch unreachable;
+}
+
+fn sync_error_connection_state(err: anyerror) c_int {
+    return switch (err) {
+        error.AuthenticationExpired, error.NoRefreshToken, error.CredentialsNotFound => 0,
+        else => 1,
+    };
 }
 
 fn download_file_from_drive(allocator: std.mem.Allocator, access_token: []const u8, file_id: []const u8) ![]const u8 {
@@ -824,6 +922,128 @@ fn update_local_metadata(allocator: std.mem.Allocator, filename: []const u8, dri
     _ = c.sqlite3_step(stmt);
 }
 
+fn local_sync_dir_path(allocator: std.mem.Allocator) ![]u8 {
+    if (c.getenv("QIRTAS_LOCAL_SYNC_DIR")) |env_path| {
+        const path = std.mem.span(env_path);
+        if (path.len > 0) return try allocator.dupe(u8, path);
+    }
+
+    if (c.getenv("HOME")) |home| {
+        return try std.fmt.allocPrint(allocator, "{s}/QirtasSync", .{std.mem.span(home)});
+    }
+
+    return try allocator.dupe(u8, "/tmp/QirtasSync");
+}
+
+fn ensure_directory(path: []const u8) !void {
+    const path_z = try std.heap.page_allocator.dupeZ(u8, path);
+    defer std.heap.page_allocator.free(path_z);
+
+    var st: c.struct_stat = undefined;
+    if (c.stat(path_z.ptr, &st) == 0) {
+        if ((st.st_mode & c.S_IFMT) == c.S_IFDIR) return;
+        return error.SyncTargetIsNotDirectory;
+    }
+
+    if (c.mkdir(path_z.ptr, @as(c.mode_t, 0o700)) < 0) return error.CreateSyncDirectoryFailed;
+}
+
+fn join_path(allocator: std.mem.Allocator, dir: []const u8, filename: []const u8) ![]u8 {
+    if (dir.len > 0 and dir[dir.len - 1] == '/') {
+        return try std.fmt.allocPrint(allocator, "{s}{s}", .{ dir, filename });
+    }
+    return try std.fmt.allocPrint(allocator, "{s}/{s}", .{ dir, filename });
+}
+
+fn stat_path(path: []const u8) ?c.struct_stat {
+    const path_z = std.heap.page_allocator.dupeZ(u8, path) catch return null;
+    defer std.heap.page_allocator.free(path_z);
+
+    var st: c.struct_stat = undefined;
+    if (c.stat(path_z.ptr, &st) != 0) return null;
+    return st;
+}
+
+fn copy_file_path(allocator: std.mem.Allocator, source_path: []const u8, dest_path: []const u8) !void {
+    const content = try read_file_content(allocator, source_path);
+    defer allocator.free(content);
+    try write_file_mmap(dest_path, content);
+}
+
+pub export fn zig_local_sync_now() callconv(.c) void {
+    gui_trigger_autosave();
+    gui_update_local_sync_status(2, "Syncing...");
+    _ = std.Thread.spawn(.{}, local_sync_worker, .{}) catch {
+        gui_update_local_sync_status(0, "Error: local sync start failed.");
+    };
+}
+
+fn local_sync_worker() void {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+
+    local_sync_impl(arena.allocator()) catch |err| {
+        std.debug.print("Local sync failed: {}\n", .{err});
+        var msg_buf: [128]u8 = undefined;
+        gui_update_local_sync_status(0, sync_error_message_z(err, &msg_buf));
+        return;
+    };
+
+    gui_refresh_explorer();
+    gui_update_local_sync_status(1, "~/QirtasSync");
+}
+
+fn local_sync_impl(allocator: std.mem.Allocator) !void {
+    const target_dir = try local_sync_dir_path(allocator);
+    try ensure_directory(target_dir);
+
+    const local_dir = c.opendir(".");
+    if (local_dir == null) return error.OpenDirFailed;
+    defer _ = c.closedir(local_dir);
+
+    while (true) {
+        const entry = c.readdir(local_dir);
+        if (entry == null) break;
+        const name = std.mem.span(@as([*:0]const u8, @ptrCast(&entry.*.d_name)));
+        if (!is_syncable_file(name)) continue;
+
+        const target_path = try join_path(allocator, target_dir, name);
+        const local_stat = stat_path(name) orelse continue;
+        const target_stat = stat_path(target_path);
+
+        if (target_stat) |remote_stat| {
+            if (local_stat.st_mtim.tv_sec > remote_stat.st_mtim.tv_sec) {
+                try copy_file_path(allocator, name, target_path);
+            } else if (remote_stat.st_mtim.tv_sec > local_stat.st_mtim.tv_sec) {
+                try copy_file_path(allocator, target_path, name);
+                const name_z = try allocator.dupeZ(u8, name);
+                gui_index_file(name_z.ptr);
+            }
+        } else {
+            try copy_file_path(allocator, name, target_path);
+        }
+    }
+
+    const remote_dir_z = try allocator.dupeZ(u8, target_dir);
+    const remote_dir = c.opendir(remote_dir_z.ptr);
+    if (remote_dir == null) return error.OpenDirFailed;
+    defer _ = c.closedir(remote_dir);
+
+    while (true) {
+        const entry = c.readdir(remote_dir);
+        if (entry == null) break;
+        const name = std.mem.span(@as([*:0]const u8, @ptrCast(&entry.*.d_name)));
+        if (!is_syncable_file(name)) continue;
+
+        if (stat_path(name) == null) {
+            const source_path = try join_path(allocator, target_dir, name);
+            try copy_file_path(allocator, source_path, name);
+            const name_z = try allocator.dupeZ(u8, name);
+            gui_index_file(name_z.ptr);
+        }
+    }
+}
+
 // FFI: Trigger manual backup sync
 pub export fn zig_sync_now() callconv(.c) void {
     gui_trigger_autosave();
@@ -852,17 +1072,8 @@ fn sync_now_worker(allocator: std.mem.Allocator) void {
 
     sync_now_impl(arena.allocator()) catch |err| {
         std.debug.print("Sync failed: {}\n", .{err});
-        switch (err) {
-            error.AuthenticationExpired => {
-                gui_update_sync_status(0, "Auth Expired (Reconnect)");
-            },
-            error.ConnectionRefused, error.UnknownHostName, error.ConnectionReset, error.NetworkUnreachable, error.HostLacksNetworkAddresses => {
-                gui_update_sync_status(1, "Offline");
-            },
-            else => {
-                gui_update_sync_status(1, "Sync Failed");
-            }
-        }
+        var msg_buf: [128]u8 = undefined;
+        gui_update_sync_status(sync_error_connection_state(err), sync_error_message_z(err, &msg_buf));
         return;
     };
     
@@ -1141,7 +1352,106 @@ pub export fn zig_sync_disconnect() callconv(.c) void {
     gui_update_sync_status(0, "Disconnected");
 }
 
-// --- DROPBOX FFI & SYNC ---
+// --- CRYPTOGRAPHIC ENCRYPTION HELPERS ---
+
+fn charToDigit(char: u8) !u8 {
+    return switch (char) {
+        '0'...'9' => char - '0',
+        'a'...'f' => char - 'a' + 10,
+        'A'...'F' => char - 'A' + 10,
+        else => error.InvalidHexChar,
+    };
+}
+
+fn bytesToHexAlloc(allocator: std.mem.Allocator, bytes: []const u8) ![]u8 {
+    const hex_chars = "0123456789abcdef";
+    const out = try allocator.alloc(u8, bytes.len * 2);
+    for (bytes, 0..) |b, i| {
+        out[i * 2] = hex_chars[b >> 4];
+        out[i * 2 + 1] = hex_chars[b & 0x0f];
+    }
+    return out;
+}
+
+fn hexToBytesAlloc(allocator: std.mem.Allocator, hex: []const u8) ![]u8 {
+    if (hex.len % 2 != 0) return error.InvalidHexLength;
+    const out = try allocator.alloc(u8, hex.len / 2);
+    errdefer allocator.free(out);
+    var i: usize = 0;
+    while (i < hex.len) : (i += 2) {
+        const h1 = try charToDigit(hex[i]);
+        const h2 = try charToDigit(hex[i+1]);
+        out[i / 2] = (h1 << 4) | h2;
+    }
+    return out;
+}
+
+fn deriveKey(key: *[32]u8) !void {
+    const fd = c.open("/etc/machine-id", c.O_RDONLY);
+    if (fd < 0) return error.OpenMachineIdFailed;
+    defer _ = c.close(fd);
+    
+    var buf: [128]u8 = undefined;
+    const n = c.read(fd, &buf, buf.len);
+    if (n < 0) return error.ReadMachineIdFailed;
+    
+    const id = std.mem.trim(u8, buf[0..@intCast(n)], " \r\n");
+    std.crypto.hash.sha2.Sha256.hash(id, key, .{});
+}
+
+fn encryptToken(allocator: std.mem.Allocator, raw_token: []const u8) ![]u8 {
+    var key: [32]u8 = undefined;
+    try deriveKey(&key);
+    
+    var nonce: [12]u8 = undefined;
+    const fd = c.open("/dev/urandom", c.O_RDONLY);
+    if (fd < 0) return error.OpenUrandomFailed;
+    defer _ = c.close(fd);
+    const n = c.read(fd, &nonce, nonce.len);
+    if (n < @as(isize, @intCast(nonce.len))) return error.ReadUrandomFailed;
+    
+    const cipher = std.crypto.aead.chacha_poly.ChaCha20Poly1305;
+    
+    const ct_len = raw_token.len;
+    const raw_len = 12 + ct_len + 16; // nonce + ciphertext + tag
+    
+    const raw_buf = try allocator.alloc(u8, raw_len);
+    defer allocator.free(raw_buf);
+    
+    @memcpy(raw_buf[0..12], &nonce);
+    
+    var tag: [16]u8 = undefined;
+    cipher.encrypt(raw_buf[12..12+ct_len], &tag, raw_token, "", nonce, key);
+    @memcpy(raw_buf[12+ct_len..], &tag);
+    
+    return try bytesToHexAlloc(allocator, raw_buf);
+}
+
+fn decryptToken(allocator: std.mem.Allocator, hex_token: []const u8) ![]u8 {
+    var key: [32]u8 = undefined;
+    try deriveKey(&key);
+    
+    const raw_buf = try hexToBytesAlloc(allocator, hex_token);
+    defer allocator.free(raw_buf);
+    
+    if (raw_buf.len < 28) return error.InvalidEncryptedTokenLength;
+    
+    var nonce: [12]u8 = undefined;
+    @memcpy(&nonce, raw_buf[0..12]);
+    
+    var tag: [16]u8 = undefined;
+    const ct_len = raw_buf.len - 12 - 16;
+    @memcpy(&tag, raw_buf[12+ct_len..]);
+    
+    const cipher = std.crypto.aead.chacha_poly.ChaCha20Poly1305;
+    
+    const pt_buf = try allocator.alloc(u8, ct_len);
+    errdefer allocator.free(pt_buf);
+    
+    try cipher.decrypt(pt_buf, raw_buf[12..12+ct_len], tag, "", nonce, key);
+    
+    return pt_buf;
+}
 
 pub export fn zig_save_dropbox_credentials(client_id_ptr: [*:0]const u8, client_secret_ptr: [*:0]const u8) callconv(.c) void {
     var db: ?*c.sqlite3 = null;
@@ -1152,11 +1462,26 @@ pub export fn zig_save_dropbox_credentials(client_id_ptr: [*:0]const u8, client_
     defer _ = c.sqlite3_close(db);
     _ = c.sqlite3_busy_timeout(db, 5000);
 
+    const allocator = std.heap.page_allocator;
+    const client_id = std.mem.span(client_id_ptr);
+    const client_secret = std.mem.span(client_secret_ptr);
+
+    const encrypted = if (client_secret.len == 0)
+        allocator.dupe(u8, "") catch return
+    else
+        encryptToken(allocator, client_secret) catch return;
+    defer allocator.free(encrypted);
+
     const sql = "INSERT OR REPLACE INTO dropbox_sync_tokens (id, client_id, client_secret) VALUES (1, ?, ?);";
     var stmt: ?*c.sqlite3_stmt = null;
     if (c.sqlite3_prepare_v2(db, sql.ptr, -1, &stmt, null) == c.SQLITE_OK) {
-        _ = c.sqlite3_bind_text(stmt, 1, client_id_ptr, -1, null);
-        _ = c.sqlite3_bind_text(stmt, 2, client_secret_ptr, -1, null);
+        const encrypted_z = allocator.dupeZ(u8, encrypted) catch return;
+        defer allocator.free(encrypted_z);
+        const client_id_z = allocator.dupeZ(u8, client_id) catch return;
+        defer allocator.free(client_id_z);
+
+        _ = c.sqlite3_bind_text(stmt, 1, client_id_z.ptr, -1, null);
+        _ = c.sqlite3_bind_text(stmt, 2, encrypted_z.ptr, -1, null);
         _ = c.sqlite3_step(stmt);
         _ = c.sqlite3_finalize(stmt);
     }
@@ -1193,11 +1518,25 @@ fn get_dropbox_credentials(allocator: std.mem.Allocator) !DropboxCredentials {
 
         if (c_id == null or c_sec == null) return error.CredentialsNotFound;
 
+        const encrypted_sec = std.mem.span(c_sec);
+        const decrypted_sec = if (encrypted_sec.len == 0)
+            try allocator.dupe(u8, "")
+        else
+            try decryptToken(allocator, encrypted_sec);
+        errdefer allocator.free(decrypted_sec);
+
+        const decrypted_access = if (acc_tok != null and std.mem.span(acc_tok).len > 0)
+            decryptToken(allocator, std.mem.span(acc_tok)) catch null
+        else null;
+        const decrypted_refresh = if (ref_tok != null and std.mem.span(ref_tok).len > 0)
+            decryptToken(allocator, std.mem.span(ref_tok)) catch null
+        else null;
+
         return DropboxCredentials{
             .client_id = try allocator.dupe(u8, std.mem.span(c_id)),
-            .client_secret = try allocator.dupe(u8, std.mem.span(c_sec)),
-            .access_token = if (acc_tok != null) try allocator.dupe(u8, std.mem.span(acc_tok)) else null,
-            .refresh_token = if (ref_tok != null) try allocator.dupe(u8, std.mem.span(ref_tok)) else null,
+            .client_secret = decrypted_sec,
+            .access_token = decrypted_access,
+            .refresh_token = decrypted_refresh,
             .expiry_time = exp_time,
         };
     }
@@ -1207,23 +1546,23 @@ fn get_dropbox_credentials(allocator: std.mem.Allocator) !DropboxCredentials {
 
 fn free_dropbox_credentials(creds: *DropboxCredentials, allocator: std.mem.Allocator) void {
     allocator.free(creds.client_id);
+    @memset(@constCast(creds.client_secret), 0);
     allocator.free(creds.client_secret);
-    if (creds.access_token) |t| allocator.free(t);
-    if (creds.refresh_token) |t| allocator.free(t);
+    if (creds.access_token) |t| {
+        @memset(@constCast(t), 0);
+        allocator.free(t);
+    }
+    if (creds.refresh_token) |t| {
+        @memset(@constCast(t), 0);
+        allocator.free(t);
+    }
 }
 
 pub export fn zig_dropbox_connect() callconv(.c) void {
     const allocator = std.heap.page_allocator;
-    var creds = get_dropbox_credentials(allocator) catch blk: {
-        var db: ?*c.sqlite3 = null;
-        if (c.sqlite3_open(DB_PATH, &db) == c.SQLITE_OK) {
-            _ = c.sqlite3_busy_timeout(db, 5000);
-            _ = c.sqlite3_exec(db, "INSERT OR IGNORE INTO dropbox_sync_tokens (id, client_id, client_secret) VALUES (1, 'dropbox-app-key', 'dropbox-app-secret');", null, null, null);
-            _ = c.sqlite3_close(db);
-        } else {
-            if (db != null) _ = c.sqlite3_close(db);
-        }
-        break :blk get_dropbox_credentials(allocator) catch return;
+    var creds = get_dropbox_credentials(allocator) catch {
+        gui_update_dropbox_status(0, "Configure Dropbox app key");
+        return;
     };
     defer free_dropbox_credentials(&creds, allocator);
 
@@ -1285,7 +1624,8 @@ fn exchange_dropbox_token_worker(allocator: std.mem.Allocator, code: []const u8,
 
     exchange_dropbox_token_impl(allocator, code, client_id, client_secret) catch |err| {
         std.debug.print("Dropbox Token exchange failed: {}\n", .{err});
-        gui_update_dropbox_status(0, "Authentication Failed");
+        var msg_buf: [128]u8 = undefined;
+        gui_update_dropbox_status(sync_error_connection_state(err), sync_error_message_z(err, &msg_buf));
         return;
     };
 
@@ -1305,10 +1645,16 @@ fn exchange_dropbox_token_impl(allocator: std.mem.Allocator, code: []const u8, c
     });
     defer req.deinit();
 
-    const body = try std.fmt.allocPrint(allocator, 
-        "code={s}&client_id={s}&client_secret={s}&redirect_uri=http://localhost:5173&grant_type=authorization_code",
-       .{code, client_id, client_secret}
-    );
+    const body = if (client_secret.len > 0)
+        try std.fmt.allocPrint(allocator,
+            "code={s}&client_id={s}&client_secret={s}&redirect_uri=http://localhost:5173&grant_type=authorization_code",
+            .{ code, client_id, client_secret },
+        )
+    else
+        try std.fmt.allocPrint(allocator,
+            "code={s}&client_id={s}&redirect_uri=http://localhost:5173&grant_type=authorization_code",
+            .{ code, client_id },
+        );
     defer allocator.free(body);
 
     try req.sendBodyComplete(body);
@@ -1350,13 +1696,22 @@ fn exchange_dropbox_token_impl(allocator: std.mem.Allocator, code: []const u8, c
     const sql = "UPDATE dropbox_sync_tokens SET access_token = ?, refresh_token = ?, expiry_time = ? WHERE id = 1;";
     var stmt: ?*c.sqlite3_stmt = null;
     if (c.sqlite3_prepare_v2(db, sql.ptr, -1, &stmt, null) == c.SQLITE_OK) {
-        const access_token_z = try allocator.dupeZ(u8, parsed.value.access_token);
+        const enc_access = try encryptToken(allocator, parsed.value.access_token);
+        defer allocator.free(enc_access);
+        const access_token_z = try allocator.dupeZ(u8, enc_access);
         defer allocator.free(access_token_z);
-        const refresh_token_z = try allocator.dupeZ(u8, parsed.value.refresh_token orelse "");
-        defer allocator.free(refresh_token_z);
+
+        const enc_refresh = if (parsed.value.refresh_token) |rt| try encryptToken(allocator, rt) else null;
+        defer if (enc_refresh) |er| allocator.free(er);
+        const refresh_token_z = if (enc_refresh) |er| try allocator.dupeZ(u8, er) else null;
+        defer if (refresh_token_z) |erz| allocator.free(erz);
 
         _ = c.sqlite3_bind_text(stmt, 1, access_token_z.ptr, -1, null);
-        _ = c.sqlite3_bind_text(stmt, 2, refresh_token_z.ptr, -1, null);
+        if (refresh_token_z) |erz| {
+            _ = c.sqlite3_bind_text(stmt, 2, erz.ptr, -1, null);
+        } else {
+            _ = c.sqlite3_bind_text(stmt, 2, "", -1, null);
+        }
         _ = c.sqlite3_bind_int64(stmt, 3, expiry);
         _ = c.sqlite3_step(stmt);
         _ = c.sqlite3_finalize(stmt);
@@ -1382,10 +1737,16 @@ fn refresh_dropbox_token_if_needed(allocator: std.mem.Allocator, creds: *Dropbox
     });
     defer req.deinit();
 
-    const body = try std.fmt.allocPrint(allocator, 
-        "refresh_token={s}&client_id={s}&client_secret={s}&grant_type=refresh_token",
-        .{creds.refresh_token.?, creds.client_id, creds.client_secret}
-    );
+    const body = if (creds.client_secret.len > 0)
+        try std.fmt.allocPrint(allocator,
+            "refresh_token={s}&client_id={s}&client_secret={s}&grant_type=refresh_token",
+            .{ creds.refresh_token.?, creds.client_id, creds.client_secret },
+        )
+    else
+        try std.fmt.allocPrint(allocator,
+            "refresh_token={s}&client_id={s}&grant_type=refresh_token",
+            .{ creds.refresh_token.?, creds.client_id },
+        );
     defer allocator.free(body);
 
     try req.sendBodyComplete(body);
@@ -1427,7 +1788,9 @@ fn refresh_dropbox_token_if_needed(allocator: std.mem.Allocator, creds: *Dropbox
     const sql = "UPDATE dropbox_sync_tokens SET access_token = ?, expiry_time = ? WHERE id = 1;";
     var stmt: ?*c.sqlite3_stmt = null;
     if (c.sqlite3_prepare_v2(db, sql.ptr, -1, &stmt, null) == c.SQLITE_OK) {
-        const access_token_z = try allocator.dupeZ(u8, parsed.value.access_token);
+        const enc_access = try encryptToken(allocator, parsed.value.access_token);
+        defer allocator.free(enc_access);
+        const access_token_z = try allocator.dupeZ(u8, enc_access);
         defer allocator.free(access_token_z);
 
         _ = c.sqlite3_bind_text(stmt, 1, access_token_z.ptr, -1, null);
@@ -1481,44 +1844,47 @@ pub export fn zig_dropbox_now() callconv(.c) void {
 fn dropbox_sync_worker() void {
     const allocator = std.heap.page_allocator;
     var creds = get_dropbox_credentials(allocator) catch {
-        gui_update_dropbox_status(1, "Auth Error");
+        gui_update_dropbox_status(0, "Error: missing credentials.");
         return;
     };
     defer free_dropbox_credentials(&creds, allocator);
 
     const token = refresh_dropbox_token_if_needed(allocator, &creds) catch {
-        gui_update_dropbox_status(1, "Refresh Error");
+        gui_update_dropbox_status(0, "Error: token refresh failed.");
         return;
     };
-    defer allocator.free(token);
+    defer {
+        @memset(@constCast(token), 0);
+        allocator.free(token);
+    }
 
     var child = std.process.spawn(main.global_io, .{
         .argv = &[_][]const u8{ "/home/.config/lawh/dropbox_sync.sh", token, "." },
     }) catch {
-        gui_update_dropbox_status(1, "Sync Failed");
+        gui_update_dropbox_status(1, "Error: Dropbox sync start failed.");
         return;
     };
 
     const term = child.wait(main.global_io) catch {
-        gui_update_dropbox_status(1, "Sync Failed");
+        gui_update_dropbox_status(1, "Error: Dropbox sync wait failed.");
         return;
     };
+
+    @memset(@constCast(token), 0);
 
     switch (term) {
         .exited => |code| {
             if (code == 0) {
                 gui_update_dropbox_status(1, "Synced ✓");
             } else {
-                gui_update_dropbox_status(1, "Sync Failed");
+                gui_update_dropbox_status(1, "Error: Dropbox sync failed.");
             }
         },
         else => {
-            gui_update_dropbox_status(1, "Sync Failed");
+            gui_update_dropbox_status(1, "Error: Dropbox sync failed.");
         },
     }
 }
-
-// --- GITHUB FFI & SYNC ---
 
 fn get_github_credentials(allocator: std.mem.Allocator) !struct { token: []const u8, repo: []const u8 } {
     var db: ?*c.sqlite3 = null;
@@ -1540,8 +1906,12 @@ fn get_github_credentials(allocator: std.mem.Allocator) !struct { token: []const
 
         if (tok == null or rep == null) return error.CredentialsNotFound;
 
+        const encrypted = std.mem.span(tok);
+        const decrypted = try decryptToken(allocator, encrypted);
+        errdefer allocator.free(decrypted);
+
         return .{
-            .token = try allocator.dupe(u8, std.mem.span(tok)),
+            .token = decrypted,
             .repo = try allocator.dupe(u8, std.mem.span(rep)),
         };
     }
@@ -1558,11 +1928,23 @@ pub export fn zig_save_github_credentials(token_ptr: [*:0]const u8, repo_ptr: [*
     defer _ = c.sqlite3_close(db);
     _ = c.sqlite3_busy_timeout(db, 5000);
 
+    const allocator = std.heap.page_allocator;
+    const token = std.mem.span(token_ptr);
+    const repo = std.mem.span(repo_ptr);
+
+    const encrypted = encryptToken(allocator, token) catch return;
+    defer allocator.free(encrypted);
+
     const sql = "INSERT OR REPLACE INTO github_sync_tokens (id, personal_token, repo_name) VALUES (1, ?, ?);";
     var stmt: ?*c.sqlite3_stmt = null;
     if (c.sqlite3_prepare_v2(db, sql.ptr, -1, &stmt, null) == c.SQLITE_OK) {
-        _ = c.sqlite3_bind_text(stmt, 1, token_ptr, -1, null);
-        _ = c.sqlite3_bind_text(stmt, 2, repo_ptr, -1, null);
+        const encrypted_z = allocator.dupeZ(u8, encrypted) catch return;
+        defer allocator.free(encrypted_z);
+        const repo_z = allocator.dupeZ(u8, repo) catch return;
+        defer allocator.free(repo_z);
+
+        _ = c.sqlite3_bind_text(stmt, 1, encrypted_z.ptr, -1, null);
+        _ = c.sqlite3_bind_text(stmt, 2, repo_z.ptr, -1, null);
         _ = c.sqlite3_step(stmt);
         _ = c.sqlite3_finalize(stmt);
     }
@@ -1578,7 +1960,7 @@ pub export fn zig_github_connect() callconv(.c) void {
     gui_update_github_status(1, "Connected");
     
     // Automatically trigger sync now to create the repo and push initial files
-    zig_github_now();
+    // zig_github_now();
 }
 
 pub export fn zig_github_check_status() callconv(.c) c_int {
@@ -1590,7 +1972,7 @@ pub export fn zig_github_check_status() callconv(.c) c_int {
     defer _ = c.sqlite3_close(db);
     _ = c.sqlite3_busy_timeout(db, 5000);
 
-    const sql = "SELECT access_token FROM github_sync_tokens WHERE id = 1;";
+    const sql = "SELECT personal_token FROM github_sync_tokens WHERE id = 1;";
     var stmt: ?*c.sqlite3_stmt = null;
     if (c.sqlite3_prepare_v2(db, sql.ptr, -1, &stmt, null) == c.SQLITE_OK) {
         defer _ = c.sqlite3_finalize(stmt);
@@ -1607,7 +1989,7 @@ pub export fn zig_github_disconnect() callconv(.c) void {
     if (c.sqlite3_open(DB_PATH, &db) == c.SQLITE_OK) {
         defer _ = c.sqlite3_close(db);
         _ = c.sqlite3_busy_timeout(db, 5000);
-        _ = c.sqlite3_exec(db, "UPDATE github_sync_tokens SET access_token = NULL WHERE id = 1;", null, null, null);
+        _ = c.sqlite3_exec(db, "UPDATE github_sync_tokens SET personal_token = NULL WHERE id = 1;", null, null, null);
     }
     gui_update_github_status(0, "Disconnected");
 }
@@ -1623,34 +2005,75 @@ pub export fn zig_github_now() callconv(.c) void {
 fn github_sync_worker() void {
     const allocator = std.heap.page_allocator;
     const creds = get_github_credentials(allocator) catch {
-        gui_update_github_status(1, "Auth Error");
+        gui_update_github_status(0, "Error: missing credentials.");
         return;
     };
-    defer allocator.free(creds.token);
-    defer allocator.free(creds.repo);
+    defer {
+        @memset(@constCast(creds.token), 0);
+        allocator.free(creds.token);
+        allocator.free(creds.repo);
+    }
 
     var child = std.process.spawn(main.global_io, .{
         .argv = &[_][]const u8{ "/home/.config/lawh/github_sync.sh", creds.token, creds.repo, "." },
     }) catch {
-        gui_update_github_status(1, "Sync Failed");
+        gui_update_github_status(1, "Error: GitHub sync start failed.");
         return;
     };
 
     const term = child.wait(main.global_io) catch {
-        gui_update_github_status(1, "Sync Failed");
+        gui_update_github_status(1, "Error: GitHub sync wait failed.");
         return;
     };
+
+    @memset(@constCast(creds.token), 0);
 
     switch (term) {
         .exited => |code| {
             if (code == 0) {
                 gui_update_github_status(1, "Synced ✓");
             } else {
-                gui_update_github_status(1, "Sync Failed");
+                gui_update_github_status(1, "Error: GitHub sync failed.");
             }
         },
         else => {
-            gui_update_github_status(1, "Sync Failed");
+            gui_update_github_status(1, "Error: GitHub sync failed.");
         },
     }
+}
+
+pub export fn zig_get_github_credentials_decrypted(token_buf: [*]u8, token_buf_max: usize, repo_buf: [*]u8, repo_buf_max: usize) callconv(.c) c_int {
+    const allocator = std.heap.page_allocator;
+    const creds = get_github_credentials(allocator) catch return 0;
+    defer {
+        @memset(@constCast(creds.token), 0);
+        allocator.free(creds.token);
+        allocator.free(creds.repo);
+    }
+
+    if (creds.token.len >= token_buf_max or creds.repo.len >= repo_buf_max) return 0;
+
+    @memcpy(token_buf[0..creds.token.len], creds.token);
+    token_buf[creds.token.len] = 0;
+
+    @memcpy(repo_buf[0..creds.repo.len], creds.repo);
+    repo_buf[creds.repo.len] = 0;
+
+    return 1;
+}
+
+pub export fn zig_get_dropbox_credentials_decrypted(client_id_buf: [*]u8, client_id_max: usize, client_secret_buf: [*]u8, client_secret_max: usize) callconv(.c) c_int {
+    const allocator = std.heap.page_allocator;
+    var creds = get_dropbox_credentials(allocator) catch return 0;
+    defer free_dropbox_credentials(&creds, allocator);
+
+    if (creds.client_id.len >= client_id_max or creds.client_secret.len >= client_secret_max) return 0;
+
+    @memcpy(client_id_buf[0..creds.client_id.len], creds.client_id);
+    client_id_buf[creds.client_id.len] = 0;
+
+    @memcpy(client_secret_buf[0..creds.client_secret.len], creds.client_secret);
+    client_secret_buf[creds.client_secret.len] = 0;
+
+    return 1;
 }

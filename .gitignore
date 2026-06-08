@@ -1,23 +1,5 @@
-# Zig build directories
-zig-out/
 .zig-cache/
-
-# Compiled executables
-/find_mutex
-/test_import
-
-# Databases / session state
-/*.db
-/*.db-journal
-
-# Editor/OS temporary files
-.DS_Store
-*~
-*.swp
-
-# Excluded design, documents, and requirements
-/design/
-*.pdf
-/req_*.txt
-/scratch_http_test.zig
-
+zig-out/
+*.db
+*.png
+*.jpg

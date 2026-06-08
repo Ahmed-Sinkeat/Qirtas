@@ -1,39 +1,33 @@
 /* ============================================================
- *  Qirtas — Ink Theme (Scroll & Ink Contrast)
+ *  Qirtas — Modern Ink Theme
  *  theme-qirtas-light.css
- *  
- *  Inspired by logo.png (Parchment scroll & Calligraphy ink contrast).
  * ============================================================ */
 
-@import url('theme-things.css'); /* Import the base structure */
-
 :root {
-  /* Font Family - Serif font pairing for the paper/scroll calligraphy feel */
-  --font-family: 'Lora', 'PT Serif', 'Georgia', 'Times New Roman', serif;
+  --ui-font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  --editor-font-family: 'Inter', 'Noto Sans Arabic', 'Segoe UI', sans-serif;
 
-  /* --- Global Colors --- */
-  --bg-window: #ffffff; /* Scroll Center White */
-  --bg-sidebar: #f4f3f0; /* Soft Watercolor Parchment Edge */
-  --bg-card: #fbfbf9; /* Very light paper card background */
-  --bg-hover: #eae8e4; /* Soft watercolor wash hover state */
-  --bg-active: #dfddd9; /* Deeper wash tone for active states */
-  --border: #e2e0db; /* Subtle warm grey paper border */
-  --border-focus: #000000; /* Sharp black ink border for focus */
-  --accent: #000000; /* Deep Ink Black accent */
-  --accent-light: #333333; /* Minor ink accent */
+  --bg-window: #f6f7f9;
+  --bg-sidebar: #ffffff;
+  --bg-card: #ffffff;
+  --bg-hover: #eef2f6;
+  --bg-active: #e7edf5;
+  --border: #d9e0e8;
+  --border-focus: #1f6feb;
+  --accent: #1f6feb;
+  --accent-light: #0f4f9e;
 
-  /* --- Text Colors --- */
-  --text-primary: #000000; /* Solid Ink Black */
-  --text-muted: #444444; /* Charcoal Ink for body/subtext */
-  --text-dim: #777777; /* Faded Ink for metadata and hints */
-  --cyan: #222222; /* Secondary ink accent */
+  --text-primary: #18202a;
+  --text-muted: #5d6875;
+  --text-dim: #7c8794;
+  --cyan: #0e7490;
 
-  /* --- Icons & Status --- */
-  --folder-icon: #000000; /* Ink Black folders */
-  --file-icon: #444444; /* Charcoal files */
-  --md-icon: #111111; /* Sharp markdown badge */
+  --folder-icon: #d97706;
+  --file-icon: #64748b;
+  --md-icon: #1f6feb;
 
-  --status-saved: #000000; /* Solid ink (Saved) */
-  --status-saving: #555555; /* Faded ink (Saving) */
-  --status-failed: #b30000; /* Correction ink red (Failed) */
+  --status-saved: #16a34a;
+  --status-saving: #0e7490;
+  --status-failed: #dc2626;
+  --dirty-dot-color: #000000;
 }

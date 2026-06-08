@@ -45,6 +45,10 @@ pub fn build(b: *std.Build) void {
         .file = b.path("src/gui.c"),
         .flags = &.{},
     });
+    exe.root_module.addCSourceFile(.{
+        .file = b.path("src/gui_sync.c"),
+        .flags = &.{},
+    });
     exe.root_module.link_libc = true;
 
     // Install the executable to the output directory
