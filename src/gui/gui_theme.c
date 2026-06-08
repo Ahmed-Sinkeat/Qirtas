@@ -5,7 +5,7 @@
 
 static char custom_theme_path[1024] = "";
 static const char *CSS_FALLBACK_MINIMAL =
-    "* { font-family: 'JetBrains Mono', 'Fira Mono', 'DejaVu Sans Mono', monospace; }\n"
+    "* { font-family: 'Inter', 'Lora', 'Merriweather', 'Cairo', 'system-ui', sans-serif; }\n"
     ".sidebar   { min-width: 120px; padding: 16px 12px; }\n"
     ".workspace { padding: 0; }\n"
     "textview   { padding: 24px; }\n"
@@ -80,22 +80,93 @@ void on_font_size_changed(GtkSpinButton *spin, gpointer user_data) {
     update_editor_font(gui);
 }
 
+static void on_custom_font_dialog_response(GObject *source_object, GAsyncResult *res, gpointer user_data) {
+    GtkFontDialog *dialog = GTK_FONT_DIALOG(source_object);
+    GError *error = NULL;
+    PangoFontFamily *family = gtk_font_dialog_choose_family_finish(dialog, res, &error);
+    AppGui *gui = (AppGui *)user_data;
+    GtkDropDown *dropdown = g_object_get_data(G_OBJECT(dialog), "en-font-dropdown");
+
+    if (family) {
+        const char *font_name = pango_font_family_get_name(family);
+        if (font_name && dropdown) {
+            GListModel *model = gtk_drop_down_get_model(dropdown);
+            if (model && GTK_IS_STRING_LIST(model)) {
+                GtkStringList *string_list = GTK_STRING_LIST(model);
+                guint n_items = g_list_model_get_n_items(model);
+                int found_idx = -1;
+                for (guint i = 0; i < n_items; i++) {
+                    const char *item_text = gtk_string_list_get_string(string_list, i);
+                    if (item_text && strcmp(item_text, font_name) == 0) {
+                        found_idx = i;
+                        break;
+                    }
+                }
+                
+                if (found_idx != -1) {
+                    gtk_drop_down_set_selected(dropdown, found_idx);
+                } else {
+                    if (n_items > 0) {
+                        gtk_string_list_remove(string_list, n_items - 1);
+                        gtk_string_list_append(string_list, font_name);
+                        gtk_string_list_append(string_list, "Add Custom Font...");
+                        gtk_drop_down_set_selected(dropdown, n_items - 1);
+                    }
+                }
+            }
+        }
+        g_object_unref(family);
+    } else {
+        if (error) {
+            g_printerr("[font] Font dialog error: %s\n", error->message);
+            g_error_free(error);
+        }
+        if (dropdown) {
+            GListModel *model = gtk_drop_down_get_model(dropdown);
+            if (model && GTK_IS_STRING_LIST(model)) {
+                GtkStringList *string_list = GTK_STRING_LIST(model);
+                guint n_items = g_list_model_get_n_items(model);
+                int prev_idx = 0;
+                for (guint i = 0; i < n_items; i++) {
+                    const char *item_text = gtk_string_list_get_string(string_list, i);
+                    if (item_text && strcmp(item_text, gui->current_en_font) == 0) {
+                        prev_idx = i;
+                        break;
+                    }
+                }
+                g_signal_handlers_block_by_func(dropdown, G_CALLBACK(on_en_font_changed), gui);
+                gtk_drop_down_set_selected(dropdown, prev_idx);
+                g_signal_handlers_unblock_by_func(dropdown, G_CALLBACK(on_en_font_changed), gui);
+            }
+        }
+    }
+}
+
 void on_en_font_changed(GObject *gobject, GParamSpec *pspec, gpointer user_data) {
     (void)pspec;
     AppGui *gui = (AppGui *)user_data;
     if (!gui) return;
     GtkDropDown *dropdown = GTK_DROP_DOWN(gobject);
     guint selected = gtk_drop_down_get_selected(dropdown);
-    static const char *const en_fonts[] = {
-        "JetBrains Mono",
-        "Inter",
-        "Roboto",
-        "Fira Code",
-        "Source Code Pro",
-    };
-    if (selected < G_N_ELEMENTS(en_fonts)) {
-        g_strlcpy(gui->current_en_font, en_fonts[selected], sizeof(gui->current_en_font));
-        update_editor_font(gui);
+
+    GListModel *model = gtk_drop_down_get_model(dropdown);
+    if (!model || !GTK_IS_STRING_LIST(model)) return;
+    GtkStringList *string_list = GTK_STRING_LIST(model);
+    const char *selected_text = gtk_string_list_get_string(string_list, selected);
+
+    if (selected_text) {
+        if (strcmp(selected_text, "Add Custom Font...") == 0) {
+            GtkFontDialog *dialog = gtk_font_dialog_new();
+            gtk_font_dialog_set_modal(dialog, TRUE);
+            g_object_set_data(G_OBJECT(dialog), "en-font-dropdown", dropdown);
+            
+            GtkWindow *parent_win = gui->settings_window ? GTK_WINDOW(gui->settings_window) : GTK_WINDOW(gui->window);
+            gtk_font_dialog_choose_family(dialog, parent_win, NULL, NULL, on_custom_font_dialog_response, gui);
+            g_object_unref(dialog);
+        } else {
+            g_strlcpy(gui->current_en_font, selected_text, sizeof(gui->current_en_font));
+            update_editor_font(gui);
+        }
     }
 }
 

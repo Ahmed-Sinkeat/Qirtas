@@ -232,7 +232,7 @@ void zig_local_sync_now(void);
  * This fallback keeps the app functional (readable, usable) but unstyled.
  * ──────────────────────────────────────────────────────────────────────── */
 static const char *CSS_FALLBACK_MINIMAL =
-    "* { font-family: 'JetBrains Mono', 'Fira Mono', 'DejaVu Sans Mono', monospace; }\n"
+    "* { font-family: 'Inter', 'Lora', 'Merriweather', 'Cairo', 'system-ui', sans-serif; }\n"
     ".sidebar   { min-width: 120px; padding: 16px 12px; }\n"
     ".workspace { padding: 0; }\n"
     "textview   { padding: 24px; }\n"
@@ -2962,6 +2962,9 @@ static void activate(GtkApplication *app, gpointer user_data) {
 
     AppGui *gui = g_new0(AppGui, 1);
     gui->window       = window;
+    g_strlcpy(gui->current_en_font, "Inter", sizeof(gui->current_en_font));
+    g_strlcpy(gui->current_ar_font, "Amiri", sizeof(gui->current_ar_font));
+    gui->current_font_size = 16.0;
     gui->search_visible = FALSE;
     gui->font_provider  = NULL;
     gui->css_provider   = NULL;
@@ -3650,16 +3653,19 @@ static void activate(GtkApplication *app, gpointer user_data) {
     gtk_widget_set_hexpand(en_font_lbl, TRUE);
     gtk_widget_set_halign(en_font_lbl, GTK_ALIGN_START);
     const char *en_fonts[] = {
-        "JetBrains Mono",
         "Inter",
+        "Lora",
+        "Merriweather",
+        "JetBrains Mono",
         "Roboto",
         "Fira Code",
         "Source Code Pro",
+        "Add Custom Font...",
         NULL
     };
     GtkWidget *en_font_dropdown = gtk_drop_down_new_from_strings(en_fonts);
     int en_idx = 0;
-    for (int i = 0; i < 5; i++) {
+    for (int i = 0; i < 7; i++) {
         if (strcmp(gui->current_en_font, en_fonts[i]) == 0) {
             en_idx = i;
             break;
@@ -3716,7 +3722,7 @@ static void activate(GtkApplication *app, gpointer user_data) {
     gtk_widget_set_hexpand(sb_pos_lbl, TRUE);
     gtk_widget_set_halign(sb_pos_lbl, GTK_ALIGN_START);
     gui->sb_pos_dropdown = gtk_drop_down_new_from_strings(status_bar_positions);
-    gtk_drop_down_set_selected(GTK_DROP_DOWN(gui->sb_pos_dropdown), 0); // Default Bottom
+    gtk_drop_down_set_selected(GTK_DROP_DOWN(gui->sb_pos_dropdown), 1); // Default Top
     g_signal_connect(gui->sb_pos_dropdown, "notify::selected", G_CALLBACK(on_status_bar_pos_changed), gui);
     gtk_box_append(GTK_BOX(sb_pos_row), sb_pos_lbl);
     gtk_box_append(GTK_BOX(sb_pos_row), gui->sb_pos_dropdown);
@@ -4086,8 +4092,13 @@ static void activate(GtkApplication *app, gpointer user_data) {
     g_signal_connect(gui->btn_sync_icon_bottom, "clicked",
                      G_CALLBACK(on_sync_now_clicked), gui);
 
+    GtkWidget *tab_bar = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
+    gtk_widget_add_css_class(tab_bar, "tab-bar");
+    gtk_widget_set_valign(tab_bar, GTK_ALIGN_CENTER);
+    gui->tab_bar_box = tab_bar;
+
     gtk_box_append(GTK_BOX(bottom_bar), gui->btn_sidebar_toggle);
-    gtk_box_append(GTK_BOX(bottom_bar), gui->path_label);
+    gtk_box_append(GTK_BOX(bottom_bar), tab_bar);
     gtk_box_append(GTK_BOX(bottom_bar), bottom_spacer);
     gtk_box_append(GTK_BOX(bottom_bar), gui->btn_search);
     gtk_box_append(GTK_BOX(bottom_bar), gui->btn_status_actions);
@@ -4095,14 +4106,8 @@ static void activate(GtkApplication *app, gpointer user_data) {
     gtk_box_append(GTK_BOX(bottom_bar), gui->lbl_chars);
     gtk_box_append(GTK_BOX(bottom_bar), gui->btn_sync_icon_bottom);
 
-
-    GtkWidget *tab_bar = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
-    gtk_widget_add_css_class(tab_bar, "tab-bar");
-    gui->tab_bar_box = tab_bar;
-
     gui->bottom_bar_widget = bottom_bar;
     gtk_box_append(GTK_BOX(main_vertical_box), sidebar_editor_box);
-    gtk_box_append(GTK_BOX(main_vertical_box), tab_bar);
     gtk_box_append(GTK_BOX(main_vertical_box), bottom_bar);
 
     reorder_main_layout(gui);
@@ -4831,28 +4836,26 @@ static void refresh_explorer_idle_cb(void *user_data) {
 }
 
 static void reorder_main_layout(AppGui *gui) {
-    if (!gui || !gui->main_vertical_box || !gui->bottom_bar_widget || !gui->sidebar_editor_box || !gui->tab_bar_box) return;
+    if (!gui || !gui->main_vertical_box || !gui->bottom_bar_widget || !gui->sidebar_editor_box) return;
 
-    gboolean status_bar_is_top = FALSE;
+    gboolean status_bar_is_top = TRUE; // Default to Top
     if (gui->enable_focus_mode) {
         status_bar_is_top = TRUE;
     } else if (gui->sb_pos_dropdown) {
         guint selected = gtk_drop_down_get_selected(GTK_DROP_DOWN(gui->sb_pos_dropdown));
-        if (selected == 1) {
-            status_bar_is_top = TRUE;
+        if (selected == 0) {
+            status_bar_is_top = FALSE;
         }
     }
 
     if (status_bar_is_top) {
-        // Status Bar (Top) -> Tab Bar -> Editor
+        // Status Bar (Top) -> Editor
         gtk_box_reorder_child_after(GTK_BOX(gui->main_vertical_box), gui->bottom_bar_widget, NULL);
-        gtk_box_reorder_child_after(GTK_BOX(gui->main_vertical_box), gui->tab_bar_box, gui->bottom_bar_widget);
-        gtk_box_reorder_child_after(GTK_BOX(gui->main_vertical_box), gui->sidebar_editor_box, gui->tab_bar_box);
+        gtk_box_reorder_child_after(GTK_BOX(gui->main_vertical_box), gui->sidebar_editor_box, gui->bottom_bar_widget);
     } else {
-        // Editor -> Tab Bar -> Status Bar (Bottom)
+        // Editor -> Status Bar (Bottom)
         gtk_box_reorder_child_after(GTK_BOX(gui->main_vertical_box), gui->sidebar_editor_box, NULL);
-        gtk_box_reorder_child_after(GTK_BOX(gui->main_vertical_box), gui->tab_bar_box, gui->sidebar_editor_box);
-        gtk_box_reorder_child_after(GTK_BOX(gui->main_vertical_box), gui->bottom_bar_widget, gui->tab_bar_box);
+        gtk_box_reorder_child_after(GTK_BOX(gui->main_vertical_box), gui->bottom_bar_widget, gui->sidebar_editor_box);
     }
 }
 

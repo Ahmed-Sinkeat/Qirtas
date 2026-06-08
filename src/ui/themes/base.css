@@ -6,7 +6,7 @@
 /* ── Global ── */
 :root {
   --ui-font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
-  --editor-font-family: var(--font-family, 'JetBrains Mono', 'Fira Mono', 'DejaVu Sans Mono', monospace);
+  --editor-font-family: var(--font-family, 'Inter', 'Lora', 'Merriweather', 'Cairo', 'system-ui', sans-serif);
   --dirty-dot-color: #ffffff;
 }
 
@@ -613,11 +613,10 @@ separator {
 
 /* ── Tabs System ── */
 .tab-bar {
-  background-color: var(--bg-sidebar);
-  padding: 5px 14px;
-  min-height: 32px;
-  border-bottom: 1px solid var(--border);
-  border-top: 1px solid var(--border);
+  background-color: transparent;
+  padding: 0;
+  min-height: 0;
+  border: none;
 }
 
 .tab-item {

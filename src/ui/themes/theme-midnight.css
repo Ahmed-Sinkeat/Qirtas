@@ -5,7 +5,7 @@
 
 
 :root {
-  --font-family: 'JetBrains Mono', 'Fira Mono', 'DejaVu Sans Mono', monospace;
+  --font-family: 'Inter', 'Lora', 'Merriweather', 'Cairo', 'system-ui', sans-serif;
   --bg-window: #000000;
   --bg-sidebar: #080808;
   --bg-card: #111111;
