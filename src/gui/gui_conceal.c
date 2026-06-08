@@ -248,10 +248,22 @@ void update_conceal_markdown_all(GtkTextBuffer *buf) {
     if (!conceal_tag) {
         conceal_tag = gtk_text_buffer_create_tag(buf, "conceal", "invisible", TRUE, NULL);
     }
+    GtkTextTag *h1_tag = gtk_text_tag_table_lookup(table, "heading1");
+    if (!h1_tag) h1_tag = gtk_text_buffer_create_tag(buf, "heading1", "scale", 2.0, NULL);
+    GtkTextTag *h2_tag = gtk_text_tag_table_lookup(table, "heading2");
+    if (!h2_tag) h2_tag = gtk_text_buffer_create_tag(buf, "heading2", "scale", 1.6, NULL);
+    GtkTextTag *h3_tag = gtk_text_tag_table_lookup(table, "heading3");
+    if (!h3_tag) h3_tag = gtk_text_buffer_create_tag(buf, "heading3", "scale", 1.3, NULL);
+    GtkTextTag *h4_tag = gtk_text_tag_table_lookup(table, "heading4");
+    if (!h4_tag) h4_tag = gtk_text_buffer_create_tag(buf, "heading4", "scale", 1.1, NULL);
 
     GtkTextIter start, end;
     gtk_text_buffer_get_bounds(buf, &start, &end);
     gtk_text_buffer_remove_tag(buf, conceal_tag, &start, &end);
+    gtk_text_buffer_remove_tag(buf, h1_tag, &start, &end);
+    gtk_text_buffer_remove_tag(buf, h2_tag, &start, &end);
+    gtk_text_buffer_remove_tag(buf, h3_tag, &start, &end);
+    gtk_text_buffer_remove_tag(buf, h4_tag, &start, &end);
 
     gchar *text = gtk_text_buffer_get_text(buf, &start, &end, TRUE);
     if (!text || strlen(text) == 0) {
@@ -270,6 +282,36 @@ void update_conceal_markdown_all(GtkTextBuffer *buf) {
     apply_regex_conceal(buf, text, "(?<!\\*)\\*([^\\n\\*]+?)\\*(?!\\*)", cursor_char, 1, conceal_tag);
 
     g_free(text);
+
+    /* Heading size tags pass */
+    int line_count = gtk_text_buffer_get_line_count(buf);
+    for (int i = 0; i < line_count; i++) {
+        GtkTextIter line_start, line_end;
+        gtk_text_buffer_get_iter_at_line(buf, &line_start, i);
+        line_end = line_start;
+        gtk_text_iter_forward_to_line_end(&line_end);
+        
+        gchar *line_text = gtk_text_buffer_get_text(buf, &line_start, &line_end, TRUE);
+        if (line_text) {
+            int h_level = 0;
+            while (line_text[h_level] == '#') {
+                h_level++;
+            }
+            if (h_level > 0 && (line_text[h_level] == ' ' || line_text[h_level] == '\0')) {
+                if (h_level == 1) {
+                    gtk_text_buffer_apply_tag(buf, h1_tag, &line_start, &line_end);
+                } else if (h_level == 2) {
+                    gtk_text_buffer_apply_tag(buf, h2_tag, &line_start, &line_end);
+                } else if (h_level == 3) {
+                    gtk_text_buffer_apply_tag(buf, h3_tag, &line_start, &line_end);
+                } else if (h_level >= 4) {
+                    gtk_text_buffer_apply_tag(buf, h4_tag, &line_start, &line_end);
+                }
+            }
+            g_free(line_text);
+        }
+    }
+
     if (global_gui) global_gui->in_conceal_update = FALSE;
 }
 
