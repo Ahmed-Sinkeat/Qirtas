@@ -1,0 +1,367 @@
+#include <gtk/gtk.h>
+#include <gtksourceview/gtksource.h>
+#include <string.h>
+#include "gui_internal.h"
+
+extern void gui_tabs_refresh(AppGui *gui);
+
+static int get_line_height(GtkWidget *text_view) {
+    PangoContext *ctx = gtk_widget_get_pango_context(text_view);
+    PangoFontMetrics *metrics = pango_context_get_metrics(ctx, NULL, NULL);
+    int pango_height = (pango_font_metrics_get_ascent(metrics) + pango_font_metrics_get_descent(metrics)) / PANGO_SCALE;
+    pango_font_metrics_unref(metrics);
+
+    PangoLayout *layout = gtk_widget_create_pango_layout(text_view, "Ag");
+    pango_layout_set_single_paragraph_mode(layout, TRUE);
+    pango_layout_set_width(layout, -1);
+    pango_layout_set_ellipsize(layout, PANGO_ELLIPSIZE_NONE);
+    pango_layout_set_wrap(layout, PANGO_WRAP_WORD_CHAR);
+    int width = 0;
+    pango_layout_get_pixel_size(layout, &width, NULL);
+    g_object_unref(layout);
+
+    int above = gtk_text_view_get_pixels_above_lines(GTK_TEXT_VIEW(text_view));
+    int below = gtk_text_view_get_pixels_below_lines(GTK_TEXT_VIEW(text_view));
+    return pango_height + above + below;
+}
+
+gboolean idle_scroll_to_cursor(gpointer user_data) {
+    ScrollToCursorData *d = (ScrollToCursorData *)user_data;
+    AppGui *gui = d->gui;
+    gint offset = d->offset;
+    g_free(d);
+
+    if (!gui || !gui->source_view || !gui->vadjustment || !gui->virtual_layout_box)
+        return G_SOURCE_REMOVE;
+    if (gui->primary_button_down && !gui->mouse_dragging)
+        return G_SOURCE_REMOVE;
+    if (!gtk_widget_get_realized(gui->source_view))
+        return G_SOURCE_REMOVE;
+
+    GtkTextBuffer *buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(gui->source_view));
+    GtkTextIter iter;
+    gint char_count = gtk_text_buffer_get_char_count(buf);
+    if (offset < 0) offset = 0;
+    if (offset > char_count) offset = char_count;
+    gtk_text_buffer_get_iter_at_offset(buf, &iter, offset);
+
+    GdkRectangle rect;
+    gtk_text_view_get_iter_location(GTK_TEXT_VIEW(gui->source_view), &iter, &rect);
+
+    int win_x = 0, win_y = 0;
+    gtk_text_view_buffer_to_window_coords(GTK_TEXT_VIEW(gui->source_view),
+                                          GTK_TEXT_WINDOW_WIDGET,
+                                          rect.x, rect.y,
+                                          &win_x, &win_y);
+
+    graphene_point_t p, out_p;
+    p.x = (float)win_x;
+    p.y = (float)win_y;
+    if (gtk_widget_compute_point(gui->source_view,
+                                 gui->virtual_layout_box,
+                                 &p, &out_p)) {
+        double dest_y    = out_p.y;
+        double value     = gtk_adjustment_get_value(gui->vadjustment);
+        double page_size = gtk_adjustment_get_page_size(gui->vadjustment);
+        double cursor_y  = dest_y;
+        double cursor_h  = (double)rect.height;
+
+        int line_h = get_line_height(gui->source_view);
+        if (line_h <= 0) line_h = 24;
+
+        double top_cushion    = 3.0 * line_h;
+        double bottom_cushion = 5.0 * line_h;
+
+        if (top_cushion + bottom_cushion > page_size) {
+            top_cushion    = page_size / 4.0;
+            bottom_cushion = page_size / 4.0;
+        }
+
+        double target_value = value;
+        if (cursor_y < value + top_cushion) {
+            target_value = cursor_y - top_cushion;
+        } else if (cursor_y + cursor_h > value + page_size - bottom_cushion) {
+            target_value = cursor_y + cursor_h - page_size + bottom_cushion;
+        }
+
+        double lower = gtk_adjustment_get_lower(gui->vadjustment);
+        double upper = gtk_adjustment_get_upper(gui->vadjustment);
+        if (target_value < lower) target_value = lower;
+        if (target_value > upper - page_size) target_value = upper - page_size;
+
+        if (target_value != value) {
+            gtk_adjustment_set_value(gui->vadjustment, target_value);
+        }
+    }
+    return G_SOURCE_REMOVE;
+}
+
+static gboolean detect_rtl(const gchar *text) {
+    if (!text) return FALSE;
+    for (const gchar *p = text; *p; p = g_utf8_next_char(p)) {
+        gunichar c = g_utf8_get_char(p);
+        if ((c >= 0x0590 && c <= 0x08FF) || (c >= 0xFB1D && c <= 0xFEFC)) {
+            return TRUE;
+        }
+    }
+    return FALSE;
+}
+
+static void update_paragraph_direction(GtkTextBuffer *buf, GtkTextIter *iter) {
+    GtkTextTagTable *table = gtk_text_buffer_get_tag_table(buf);
+    GtkTextTag *rtl_tag = gtk_text_tag_table_lookup(table, "rtl-tag");
+    if (!rtl_tag) {
+        rtl_tag = gtk_text_buffer_create_tag(buf, "rtl-tag", "direction", GTK_TEXT_DIR_RTL, NULL);
+    }
+    GtkTextTag *ltr_tag = gtk_text_tag_table_lookup(table, "ltr-tag");
+    if (!ltr_tag) {
+        ltr_tag = gtk_text_buffer_create_tag(buf, "ltr-tag", "direction", GTK_TEXT_DIR_LTR, NULL);
+    }
+
+    gint line_num = gtk_text_iter_get_line(iter);
+    GtkTextIter start;
+    gtk_text_buffer_get_iter_at_line(buf, &start, line_num);
+    GtkTextIter end = start;
+    if (!gtk_text_iter_ends_line(&end)) {
+        gtk_text_iter_forward_to_line_end(&end);
+    }
+    gchar *text = gtk_text_iter_get_text(&start, &end);
+    if (text) {
+        if (detect_rtl(text)) {
+            gtk_text_buffer_remove_tag(buf, ltr_tag, &start, &end);
+            gtk_text_buffer_apply_tag(buf, rtl_tag, &start, &end);
+        } else {
+            gtk_text_buffer_remove_tag(buf, rtl_tag, &start, &end);
+            gtk_text_buffer_apply_tag(buf, ltr_tag, &start, &end);
+        }
+        g_free(text);
+    }
+}
+
+static void apply_regex_conceal(GtkTextBuffer *buf, const gchar *text, const gchar *pattern, gint cursor_char, gint delim_len, GtkTextTag *conceal_tag) {
+    static GRegex *regex_bold = NULL;
+    static GRegex *regex_highlight = NULL;
+    static GRegex *regex_italic = NULL;
+    GRegex *regex = NULL;
+
+    if (strcmp(pattern, "\\*\\*([^\\n]*?[^\\n\\*][^\\n]*?)\\*\\*") == 0) {
+        if (!regex_bold) regex_bold = g_regex_new(pattern, G_REGEX_DEFAULT, 0, NULL);
+        regex = regex_bold;
+    } else if (strcmp(pattern, "==([^\\n]*?[^\\n=][^\\n]*?)==") == 0) {
+        if (!regex_highlight) regex_highlight = g_regex_new(pattern, G_REGEX_DEFAULT, 0, NULL);
+        regex = regex_highlight;
+    } else if (strcmp(pattern, "(?<!\\*)\\*([^\\n\\*]+?)\\*(?!\\*)") == 0) {
+        if (!regex_italic) regex_italic = g_regex_new(pattern, G_REGEX_DEFAULT, 0, NULL);
+        regex = regex_italic;
+    } else {
+        regex = g_regex_new(pattern, G_REGEX_DEFAULT, 0, NULL);
+    }
+    if (!regex) return;
+
+    GError *error = NULL;
+    GMatchInfo *match_info = NULL;
+    gboolean has_match = g_regex_match(regex, text, 0, &match_info);
+    while (has_match) {
+        gint start_byte = 0;
+        gint end_byte = 0;
+        if (g_match_info_fetch_pos(match_info, 0, &start_byte, &end_byte)) {
+            gint start_char = g_utf8_pointer_to_offset(text, text + start_byte);
+            gint end_char = g_utf8_pointer_to_offset(text, text + end_byte);
+            gboolean cursor_inside = (cursor_char >= start_char && cursor_char <= end_char);
+            if (!cursor_inside) {
+                GtkTextIter start_iter, end_iter;
+                gtk_text_buffer_get_iter_at_offset(buf, &start_iter, start_char);
+                gtk_text_buffer_get_iter_at_offset(buf, &end_iter, start_char + delim_len);
+                gtk_text_buffer_apply_tag(buf, conceal_tag, &start_iter, &end_iter);
+
+                gtk_text_buffer_get_iter_at_offset(buf, &start_iter, end_char - delim_len);
+                gtk_text_buffer_get_iter_at_offset(buf, &end_iter, end_char);
+                gtk_text_buffer_apply_tag(buf, conceal_tag, &start_iter, &end_iter);
+            }
+        }
+        has_match = g_match_info_next(match_info, &error);
+    }
+    g_match_info_free(match_info);
+    if (regex != regex_bold && regex != regex_highlight && regex != regex_italic) {
+        g_regex_unref(regex);
+    }
+}
+
+static void apply_regex_conceal_local(GtkTextBuffer *buf, const gchar *text, gint range_start_offset, const gchar *pattern, gint cursor_char, gint delim_len, GtkTextTag *conceal_tag) {
+    static GRegex *regex_bold = NULL;
+    static GRegex *regex_highlight = NULL;
+    static GRegex *regex_italic = NULL;
+    GRegex *regex = NULL;
+
+    if (strcmp(pattern, "\\*\\*([^\\n]*?[^\\n\\*][^\\n]*?)\\*\\*") == 0) {
+        if (!regex_bold) regex_bold = g_regex_new(pattern, G_REGEX_DEFAULT, 0, NULL);
+        regex = regex_bold;
+    } else if (strcmp(pattern, "==([^\\n]*?[^\\n=][^\\n]*?)==") == 0) {
+        if (!regex_highlight) regex_highlight = g_regex_new(pattern, G_REGEX_DEFAULT, 0, NULL);
+        regex = regex_highlight;
+    } else if (strcmp(pattern, "(?<!\\*)\\*([^\\n\\*]+?)\\*(?!\\*)") == 0) {
+        if (!regex_italic) regex_italic = g_regex_new(pattern, G_REGEX_DEFAULT, 0, NULL);
+        regex = regex_italic;
+    } else {
+        regex = g_regex_new(pattern, G_REGEX_DEFAULT, 0, NULL);
+    }
+    if (!regex) return;
+
+    GError *error = NULL;
+    GMatchInfo *match_info = NULL;
+    gboolean has_match = g_regex_match(regex, text, 0, &match_info);
+    while (has_match) {
+        gint start_byte = 0;
+        gint end_byte = 0;
+        if (g_match_info_fetch_pos(match_info, 0, &start_byte, &end_byte)) {
+            gint start_char_local = g_utf8_pointer_to_offset(text, text + start_byte);
+            gint end_char_local = g_utf8_pointer_to_offset(text, text + end_byte);
+
+            gint start_char = range_start_offset + start_char_local;
+            gint end_char = range_start_offset + end_char_local;
+            gboolean cursor_inside = (cursor_char >= start_char && cursor_char <= end_char);
+            if (!cursor_inside) {
+                GtkTextIter start_iter, end_iter;
+                gtk_text_buffer_get_iter_at_offset(buf, &start_iter, start_char);
+                gtk_text_buffer_get_iter_at_offset(buf, &end_iter, start_char + delim_len);
+                gtk_text_buffer_apply_tag(buf, conceal_tag, &start_iter, &end_iter);
+
+                gtk_text_buffer_get_iter_at_offset(buf, &start_iter, end_char - delim_len);
+                gtk_text_buffer_get_iter_at_offset(buf, &end_iter, end_char);
+                gtk_text_buffer_apply_tag(buf, conceal_tag, &start_iter, &end_iter);
+            }
+        }
+        has_match = g_match_info_next(match_info, &error);
+    }
+    g_match_info_free(match_info);
+    if (regex != regex_bold && regex != regex_highlight && regex != regex_italic) {
+        g_regex_unref(regex);
+    }
+}
+
+void update_conceal_markdown_all(GtkTextBuffer *buf) {
+    if (global_gui && global_gui->in_conceal_update) return;
+    if (global_gui) global_gui->in_conceal_update = TRUE;
+
+    GtkTextTagTable *table = gtk_text_buffer_get_tag_table(buf);
+    GtkTextTag *conceal_tag = gtk_text_tag_table_lookup(table, "conceal");
+    if (!conceal_tag) {
+        conceal_tag = gtk_text_buffer_create_tag(buf, "conceal", "invisible", TRUE, NULL);
+    }
+
+    GtkTextIter start, end;
+    gtk_text_buffer_get_bounds(buf, &start, &end);
+    gtk_text_buffer_remove_tag(buf, conceal_tag, &start, &end);
+
+    gchar *text = gtk_text_buffer_get_text(buf, &start, &end, TRUE);
+    if (!text || strlen(text) == 0) {
+        g_free(text);
+        if (global_gui) global_gui->in_conceal_update = FALSE;
+        return;
+    }
+
+    GtkTextMark *insert_mark = gtk_text_buffer_get_insert(buf);
+    GtkTextIter cursor_iter;
+    gtk_text_buffer_get_iter_at_mark(buf, &cursor_iter, insert_mark);
+    gint cursor_char = gtk_text_iter_get_offset(&cursor_iter);
+
+    apply_regex_conceal(buf, text, "\\*\\*([^\\n]*?[^\\n\\*][^\\n]*?)\\*\\*", cursor_char, 2, conceal_tag);
+    apply_regex_conceal(buf, text, "==([^\\n]*?[^\\n=][^\\n]*?)==", cursor_char, 2, conceal_tag);
+    apply_regex_conceal(buf, text, "(?<!\\*)\\*([^\\n\\*]+?)\\*(?!\\*)", cursor_char, 1, conceal_tag);
+
+    g_free(text);
+    if (global_gui) global_gui->in_conceal_update = FALSE;
+}
+
+void update_conceal_markdown(GtkTextBuffer *buf) {
+    if (global_gui && global_gui->in_conceal_update) return;
+    if (global_gui) global_gui->in_conceal_update = TRUE;
+
+    GtkTextMark *insert_mark = gtk_text_buffer_get_insert(buf);
+    GtkTextIter cursor_iter;
+    gtk_text_buffer_get_iter_at_mark(buf, &cursor_iter, insert_mark);
+
+    int cursor_line = gtk_text_iter_get_line(&cursor_iter);
+    int total_lines = gtk_text_buffer_get_line_count(buf);
+
+    int start_line = cursor_line - 1;
+    if (start_line < 0) start_line = 0;
+    int end_line = cursor_line + 1;
+    if (end_line >= total_lines) end_line = total_lines - 1;
+
+    GtkTextIter start, end;
+    gtk_text_buffer_get_iter_at_line(buf, &start, start_line);
+    gtk_text_buffer_get_iter_at_line(buf, &end, end_line);
+    gtk_text_iter_forward_to_line_end(&end);
+
+    gchar *text = gtk_text_buffer_get_text(buf, &start, &end, TRUE);
+    if (!text || strlen(text) == 0) {
+        g_free(text);
+        if (global_gui) global_gui->in_conceal_update = FALSE;
+        return;
+    }
+
+    if (!strchr(text, '*') && !strchr(text, '=')) {
+        g_free(text);
+        if (global_gui) global_gui->in_conceal_update = FALSE;
+        return;
+    }
+
+    GtkTextTagTable *table = gtk_text_buffer_get_tag_table(buf);
+    GtkTextTag *conceal_tag = gtk_text_tag_table_lookup(table, "conceal");
+    if (!conceal_tag) {
+        conceal_tag = gtk_text_buffer_create_tag(buf, "conceal", "invisible", TRUE, NULL);
+    }
+
+    gtk_text_buffer_get_iter_at_line(buf, &start, start_line);
+    gtk_text_buffer_get_iter_at_line(buf, &end, end_line);
+    gtk_text_iter_forward_to_line_end(&end);
+    gtk_text_buffer_remove_tag(buf, conceal_tag, &start, &end);
+
+    gint range_start_offset = gtk_text_iter_get_offset(&start);
+    gint cursor_char = gtk_text_iter_get_offset(&cursor_iter);
+
+    apply_regex_conceal_local(buf, text, range_start_offset, "\\*\\*([^\\n]*?[^\\n\\*][^\\n]*?)\\*\\*", cursor_char, 2, conceal_tag);
+    apply_regex_conceal_local(buf, text, range_start_offset, "==([^\\n]*?[^\\n=][^\\n]*?)==", cursor_char, 2, conceal_tag);
+    apply_regex_conceal_local(buf, text, range_start_offset, "(?<!\\*)\\*([^\\n\\*]+?)\\*(?!\\*)", cursor_char, 1, conceal_tag);
+
+    g_free(text);
+    if (global_gui) global_gui->in_conceal_update = FALSE;
+}
+
+void on_buffer_modified_changed(GtkTextBuffer *buf, gpointer user_data) {
+    AppGui *gui = (AppGui *)user_data;
+    if (gui && gui->active_tab_index != -1 && gui->active_tab_index < gui->num_tabs) {
+        gboolean is_modified = gtk_text_buffer_get_modified(buf);
+        gui->tab_modified[gui->active_tab_index] = is_modified;
+        gui_tabs_refresh(gui);
+    }
+}
+
+void on_mark_set(GtkTextBuffer *buf, GtkTextIter *location, GtkTextMark *mark, gpointer user_data) {
+    AppGui *gui = (AppGui *)user_data;
+    if (gui->in_scroll_update) return;
+    if (!gui->vadjustment || !gui->source_view || !gui->virtual_layout_box) return;
+
+    GtkTextMark *insert_mark = gtk_text_buffer_get_insert(buf);
+    if (mark == insert_mark) {
+        gint scroll_offset = gtk_text_iter_get_offset(location);
+        
+        /* Defer tag updates to idle so Pango layout is stable and doesn't get stale byte-index cache. */
+        g_idle_add_once((GSourceOnceFunc)update_conceal_markdown, buf);
+
+        if (!gtk_widget_get_realized(gui->source_view)) return;
+        if (gui->primary_button_down && !gui->mouse_dragging) return;
+
+        ScrollToCursorData *d = g_new(ScrollToCursorData, 1);
+        d->gui = gui;
+        d->offset = scroll_offset;
+        g_idle_add(idle_scroll_to_cursor, d);
+    }
+}
+
+void on_cursor_position_changed(GObject *object, GParamSpec *pspec, gpointer user_data) {
+    (void)object;
+    (void)pspec;
+    (void)user_data;
+}

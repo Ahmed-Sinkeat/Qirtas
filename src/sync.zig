@@ -1399,7 +1399,7 @@ fn deriveKey(key: *[32]u8) !void {
     std.crypto.hash.sha2.Sha256.hash(id, key, .{});
 }
 
-fn encryptToken(allocator: std.mem.Allocator, raw_token: []const u8) ![]u8 {
+pub fn encryptToken(allocator: std.mem.Allocator, raw_token: []const u8) ![]u8 {
     var key: [32]u8 = undefined;
     try deriveKey(&key);
     
@@ -1427,7 +1427,7 @@ fn encryptToken(allocator: std.mem.Allocator, raw_token: []const u8) ![]u8 {
     return try bytesToHexAlloc(allocator, raw_buf);
 }
 
-fn decryptToken(allocator: std.mem.Allocator, hex_token: []const u8) ![]u8 {
+pub fn decryptToken(allocator: std.mem.Allocator, hex_token: []const u8) ![]u8 {
     var key: [32]u8 = undefined;
     try deriveKey(&key);
     

@@ -1,0 +1,61 @@
+#pragma once
+
+#include <gtk/gtk.h>
+#include <gtksourceview/gtksource.h>
+#include <adwaita.h>
+
+typedef void (*GuiIdleCallback)(void *user_data);
+
+/* Zig -> C FFI */
+char *gui_get_text(void);
+void gui_free_text(char *text);
+void gui_set_text(const char *text, int len);
+void gui_set_title(const char *title);
+void gui_set_sync_status(const char *status);
+void gui_show_editor(void);
+void gui_show_recovery_dialog(void);
+void gui_get_cursor_position(int *line, int *col);
+void gui_set_cursor_position(int line, int col);
+void gui_refresh_explorer(void);
+void gui_set_virtual_scroll_mode(int enabled, int total_lines);
+void gui_update_sync_status(int connected, const char *status_text);
+void gui_update_dropbox_status(int connected, const char *status_text);
+void gui_update_github_status(int connected, const char *status_text);
+void gui_update_local_sync_status(int connected, const char *status_text);
+
+/* C -> Zig FFI */
+extern void zig_on_gui_ready(void);
+extern int zig_has_active_master_key(void);
+extern void zig_open_file(const char *filename);
+extern void zig_open_vault(const char *dir_path);
+extern void zig_search_workspace(const char *query);
+extern const char *zig_get_search_snippet(const char *filepath);
+extern int zig_get_search_rank(const char *filepath);
+extern void zig_set_cursor_trail(int enabled);
+extern int zig_get_cursor_trail(void);
+extern void zig_open_wiki_link(const char *note_name);
+extern void zig_create_new_file(const char *filename);
+extern void zig_on_shutdown(void);
+extern void zig_force_save(void);
+extern void zig_save_sync_credentials(const char *client_id, const char *client_secret);
+extern void zig_sync_connect(void);
+extern void zig_sync_submit_code(const char *code);
+extern void zig_sync_now(void);
+extern int zig_sync_check_status(void);
+extern void zig_sync_disconnect(void);
+extern void zig_save_dropbox_credentials(const char *client_id, const char *client_secret);
+extern void zig_dropbox_connect(void);
+extern void zig_dropbox_submit_code(const char *code);
+extern void zig_dropbox_now(void);
+extern int zig_dropbox_check_status(void);
+extern void zig_dropbox_disconnect(void);
+extern void zig_save_github_credentials(const char *token, const char *repo);
+extern int zig_get_github_credentials_decrypted(char *token_buf, int token_buf_max, char *repo_buf, int repo_buf_max);
+extern int zig_get_dropbox_credentials_decrypted(char *client_id_buf, int client_id_max, char *client_secret_buf, int client_secret_max);
+extern void zig_github_connect(void);
+extern void zig_github_now(void);
+extern int zig_github_check_status(void);
+extern void zig_github_disconnect(void);
+extern void zig_local_sync_now(void);
+extern void zig_set_editor_border(int enabled);
+extern int zig_get_editor_border(void);

@@ -36,6 +36,7 @@ extern fn gui_init_virtual_document(total_lines: c_int, start_line: c_int, end_l
 extern fn gui_trigger_autosave() void;
 extern fn gui_get_active_page_bounds(start_line: *c_int, end_line: *c_int, total_lines: *c_int) void;
 extern fn gui_update_total_virtual_lines(total_lines: c_int) void;
+extern fn gui_set_virtual_scroll_mode(enabled: c_int, total_lines: c_int) void;
 extern fn gui_tabs_save_active_to_cache() void;
 extern fn gui_tabs_restore_active_from_cache() void;
 
@@ -49,6 +50,7 @@ var active_file_path_len: usize = 0;
 // Active file mapping variables
 var active_mmap_ptr: ?[*]const u8 = null;
 var active_mmap_size: usize = 0;
+var active_file_is_encrypted: bool = true;
 var line_offsets: std.ArrayList(usize) = .empty;
 
 // Global reference to the IO instance
@@ -63,11 +65,120 @@ var directory_wd = std.atomic.Value(c_int).init(-1);
 var initial_cursor_line: c_int = 1;
 var initial_cursor_col: c_int = 0;
 
+pub var active_master_key: ?[32]u8 = null;
+
+pub export fn zig_has_active_master_key() callconv(.c) c_int {
+    return if (active_master_key != null) 1 else 0;
+}
+
+const SYSTEM_KEYS_SCHEMA_SQL = "CREATE TABLE IF NOT EXISTS system_keys (id INTEGER PRIMARY KEY CHECK (id = 1), encrypted_master_key_machine TEXT NOT NULL, encrypted_master_key_passphrase TEXT, passphrase_salt TEXT);";
+
+fn ensureSystemKeysSchema(db: *c.sqlite3) void {
+    _ = c.sqlite3_exec(db, SYSTEM_KEYS_SCHEMA_SQL, null, null, null);
+}
+
+fn fillRandomBytes(buf: []u8) !void {
+    var i: usize = 0;
+    while (i < buf.len) {
+        const rc = std.os.linux.getrandom(buf[i..].ptr, buf.len - i, 0);
+        switch (std.posix.errno(rc)) {
+            .SUCCESS => i += @intCast(rc),
+            .INTR => continue,
+            else => return error.RandomFailed,
+        }
+    }
+}
+
+pub fn encryptWithMasterKey(allocator: std.mem.Allocator, key: [32]u8, plaintext: []const u8) ![]u8 {
+    var nonce: [12]u8 = undefined;
+    try fillRandomBytes(&nonce);
+
+    const cipher = std.crypto.aead.chacha_poly.ChaCha20Poly1305;
+    const out_len = 12 + plaintext.len + 16;
+    const raw_buf = try allocator.alloc(u8, out_len);
+    errdefer allocator.free(raw_buf);
+
+    @memcpy(raw_buf[0..12], &nonce);
+    var tag: [16]u8 = undefined;
+    cipher.encrypt(raw_buf[12 .. 12 + plaintext.len], &tag, plaintext, "", nonce, key);
+    @memcpy(raw_buf[12 + plaintext.len ..], &tag);
+    return raw_buf;
+}
+
+pub fn decryptWithMasterKey(allocator: std.mem.Allocator, key: [32]u8, blob: []const u8) ![]u8 {
+    if (blob.len < 28) return error.InvalidFileFormat;
+
+    var nonce: [12]u8 = undefined;
+    @memcpy(&nonce, blob[0..12]);
+
+    const ct_len = blob.len - 12 - 16;
+    var tag: [16]u8 = undefined;
+    @memcpy(&tag, blob[12 + ct_len ..]);
+
+    const pt_buf = try allocator.alloc(u8, ct_len);
+    errdefer allocator.free(pt_buf);
+
+    const cipher = std.crypto.aead.chacha_poly.ChaCha20Poly1305;
+    try cipher.decrypt(pt_buf, blob[12 .. 12 + ct_len], tag, "", nonce, key);
+    return pt_buf;
+}
+
+fn initMasterKey() void {
+    var db: ?*c.sqlite3 = null;
+    if (c.sqlite3_open(DB_PATH, &db) != c.SQLITE_OK) {
+        if (db != null) _ = c.sqlite3_close(db);
+        return;
+    }
+    defer _ = c.sqlite3_close(db);
+    _ = c.sqlite3_busy_timeout(db, 5000);
+
+    ensureSystemKeysSchema(db.?);
+
+    const query_sql = "SELECT encrypted_master_key_machine FROM system_keys WHERE id = 1;";
+    var stmt: ?*c.sqlite3_stmt = null;
+    if (c.sqlite3_prepare_v2(db, query_sql.ptr, -1, &stmt, null) == c.SQLITE_OK) {
+        defer _ = c.sqlite3_finalize(stmt);
+        if (c.sqlite3_step(stmt) == c.SQLITE_ROW) {
+            const encrypted_text = c.sqlite3_column_text(stmt, 0);
+            if (encrypted_text != null) {
+                const hex_span = std.mem.span(encrypted_text);
+                const decrypted = sync.decryptToken(std.heap.page_allocator, hex_span) catch null;
+                if (decrypted) |d| {
+                    if (d.len == 32) {
+                        var key: [32]u8 = undefined;
+                        @memcpy(&key, d);
+                        active_master_key = key;
+                    }
+                    std.heap.page_allocator.free(d);
+                }
+            }
+        } else {
+            var new_key: [32]u8 = undefined;
+            fillRandomBytes(&new_key) catch return;
+            const encrypted_hex = sync.encryptToken(std.heap.page_allocator, &new_key) catch return;
+            defer std.heap.page_allocator.free(encrypted_hex);
+
+            const insert_sql = "INSERT INTO system_keys (id, encrypted_master_key_machine) VALUES (1, ?);";
+            var ins_stmt: ?*c.sqlite3_stmt = null;
+            if (c.sqlite3_prepare_v2(db, insert_sql.ptr, -1, &ins_stmt, null) == c.SQLITE_OK) {
+                defer _ = c.sqlite3_finalize(ins_stmt);
+                const hex_z = std.heap.page_allocator.dupeZ(u8, encrypted_hex) catch return;
+                defer std.heap.page_allocator.free(hex_z);
+                _ = c.sqlite3_bind_text(ins_stmt, 1, hex_z.ptr, -1, null);
+                _ = c.sqlite3_step(ins_stmt);
+            }
+            active_master_key = new_key;
+        }
+    }
+}
+
 pub fn main(init: std.process.Init) !void {
     // Ensure the config directory exists
     _ = c.mkdir("/home", 0o755);
     _ = c.mkdir("/home/.config", 0o755);
     _ = c.mkdir("/home/.config/lawh", 0o755);
+
+    initMasterKey();
 
     global_io = init.io;
     line_offsets = .empty;
@@ -87,7 +198,7 @@ pub fn main(init: std.process.Init) !void {
             // Ensure table and column exist
             _ = c.sqlite3_exec(db, "CREATE TABLE IF NOT EXISTS session_state (id INTEGER PRIMARY KEY CHECK (id = 1), active_file TEXT, cursor_line INTEGER, cursor_col INTEGER, vault_path TEXT);", null, null, null);
             _ = c.sqlite3_exec(db, "ALTER TABLE session_state ADD COLUMN vault_path TEXT;", null, null, null);
-            _ = c.sqlite3_exec(db, "CREATE TABLE IF NOT EXISTS system_keys (id INTEGER PRIMARY KEY CHECK (id = 1), encrypted_master_key_machine TEXT NOT NULL, encrypted_master_key_passphrase TEXT, passphrase_salt TEXT);", null, null, null);
+            ensureSystemKeysSchema(db.?);
 
             var stmt: ?*c.sqlite3_stmt = null;
             const query_sql = "SELECT vault_path FROM session_state WHERE id = 1;";
@@ -189,6 +300,11 @@ pub export fn zig_on_gui_ready() callconv(.c) void {
         }
     }
 
+    if (active_master_key == null) {
+        gui_set_sync_status("Recovery required");
+        return;
+    }
+
     // Run initial scan and index all files in background/boot-time via C FTS5 engine
     gui_index_all_files();
 
@@ -268,8 +384,8 @@ pub export fn zig_open_file(filename_ptr: [*:0]const u8) callconv(.c) void {
         @memcpy(active_file_path[0..filename.len], filename);
         active_file_path_len = filename.len;
 
+        gui_set_virtual_scroll_mode(0, 1);
         gui_set_text("", 0);
-        gui_init_virtual_document(1, 0, 1);
         gui_set_title("Untitled - Qirtas");
         gui_set_sync_status("Not Synced");
         gui_show_editor();
@@ -691,20 +807,36 @@ fn load_file_mmap(filename: [*:0]const u8, size: *usize) ![*]const u8 {
     if (c.fstat(fd, &st) < 0) return error.StatFileFailed;
 
     const file_size = @as(usize, @intCast(st.st_size));
-    size.* = file_size;
     if (file_size == 0) {
+        size.* = 0;
+        active_file_is_encrypted = false;
         return "";
     }
 
     const ptr = c.mmap(null, file_size, c.PROT_READ, c.MAP_SHARED, fd, 0);
     if (ptr == c.MAP_FAILED) return error.MmapFailed;
+    defer _ = c.munmap(ptr, file_size);
 
-    return @ptrCast(ptr);
+    const mmap_slice: [*]const u8 = @ptrCast(ptr);
+    const mmap_content = mmap_slice[0..file_size];
+    if (active_master_key) |key| {
+        const pt_buf = decryptWithMasterKey(std.heap.page_allocator, key, mmap_content) catch null;
+        if (pt_buf) |buf| {
+            active_file_is_encrypted = true;
+            size.* = buf.len;
+            return buf.ptr;
+        }
+    }
+
+    const plain_buf = try std.heap.page_allocator.dupe(u8, mmap_content);
+    active_file_is_encrypted = false;
+    size.* = plain_buf.len;
+    return plain_buf.ptr;
 }
 
 fn unload_file_mmap(ptr: [*]const u8, size: usize) void {
     if (size == 0) return;
-    _ = c.munmap(@constCast(@ptrCast(ptr)), size);
+    std.heap.page_allocator.free(ptr[0..size]);
 }
 
 fn populate_line_offsets(content: []const u8) !void {
@@ -757,19 +889,33 @@ fn load_file_and_update_gui(filename: []const u8) !void {
     if (!file_exists) {
         var f = try Io.Dir.cwd().createFile(global_io, filename, .{});
         defer f.close(global_io);
-        try f.writeStreamingAll(global_io, "# New Notebook Document\n\n- Start writing here...\n");
+        
+        if (active_master_key) |key| {
+            active_file_is_encrypted = true;
+            const pt = "# New Notebook Document\n\n- Start writing here...\n";
+            const enc_blob = encryptWithMasterKey(std.heap.page_allocator, key, pt) catch return;
+            defer std.heap.page_allocator.free(enc_blob);
+            try f.writeStreamingAll(global_io, enc_blob);
+        } else {
+            active_file_is_encrypted = false;
+        }
     }
 
     try remap_active_file();
 
     const total_lines = @as(c_int, @intCast(line_offsets.items.len));
-    const end_line = if (total_lines > 100) @as(c_int, 100) else total_lines;
+    const enabled = if (total_lines >= 2000) @as(c_int, 1) else @as(c_int, 0);
+    gui_set_virtual_scroll_mode(enabled, total_lines);
+
+    const end_line = if (enabled == 1) (if (total_lines > 100) @as(c_int, 100) else total_lines) else total_lines;
     
     var page_len: c_int = 0;
     const page_text_ptr = zig_get_text_for_line_range(0, end_line, &page_len);
     
     gui_set_text(page_text_ptr.?, page_len);
-    gui_init_virtual_document(total_lines, 0, end_line);
+    if (enabled == 1) {
+        gui_init_virtual_document(total_lines, 0, end_line);
+    }
     
     // Update path headers dynamically
     var title_buf: [300]u8 = undefined;
@@ -820,12 +966,16 @@ pub export fn zig_get_text_for_line_range(start_line: c_int, end_line: c_int, ou
 }
 
 pub export fn zig_save_active_page(start_line: c_int, end_line: c_int, text: [*:0]const u8) callconv(.c) c_int {
+    if (start_line < 0 or end_line < 0) return 1;
+    if (active_file_is_encrypted and active_master_key == null) return 1;
+
     const gpa = std.heap.page_allocator;
     const start_idx = @as(usize, @intCast(start_line));
     const end_idx = @as(usize, @intCast(end_line));
-    
-    if (start_idx > line_offsets.items.len) return 1;
-    
+
+    if (line_offsets.items.len == 0) return 1;
+    if (start_idx >= line_offsets.items.len) return 1;
+
     const start_offset = line_offsets.items[start_idx];
     const end_offset = if (end_idx >= line_offsets.items.len) 
         active_mmap_size
@@ -852,8 +1002,15 @@ pub export fn zig_save_active_page(start_line: c_int, end_line: c_int, text: [*:
     const path = active_file_path[0..active_file_path_len];
     var file = Io.Dir.cwd().createFile(global_io, path, .{}) catch return 1;
     defer file.close(global_io);
-    
-    file.writeStreamingAll(global_io, new_content) catch return 1;
+
+    if (active_file_is_encrypted) {
+        const key = active_master_key.?;
+        const enc_blob = encryptWithMasterKey(gpa, key, new_content) catch return 1;
+        defer gpa.free(enc_blob);
+        file.writeStreamingAll(global_io, enc_blob) catch return 1;
+    } else {
+        file.writeStreamingAll(global_io, new_content) catch return 1;
+    }
     
     remap_active_file() catch return 1;
     
@@ -1107,4 +1264,85 @@ pub export fn zig_get_search_rank(filepath_ptr: [*:0]const u8) callconv(.c) c_in
 
 pub fn alert_file_updated() void {
     gui_run_on_main_thread(&reload_file_callback, null);
+}
+
+test "file encryption/decryption" {
+    var key: [32]u8 = undefined;
+    try fillRandomBytes(&key);
+
+    var nonce: [12]u8 = undefined;
+    try fillRandomBytes(&nonce);
+
+    const pt = "hello world";
+    const cipher = std.crypto.aead.chacha_poly.ChaCha20Poly1305;
+
+    var ct: [11]u8 = undefined;
+    var tag: [16]u8 = undefined;
+    cipher.encrypt(&ct, &tag, pt, "", nonce, key);
+
+    var pt_out: [11]u8 = undefined;
+    try cipher.decrypt(&pt_out, &ct, tag, "", nonce, key);
+    try std.testing.expect(std.mem.eql(u8, pt, &pt_out));
+}
+
+test "system_keys schema is created with expected columns" {
+    var db: ?*c.sqlite3 = null;
+    try std.testing.expectEqual(c.SQLITE_OK, c.sqlite3_open(":memory:", &db));
+    defer {
+        if (db != null) _ = c.sqlite3_close(db.?);
+    }
+
+    ensureSystemKeysSchema(db.?);
+
+    const sql = "PRAGMA table_info(system_keys);";
+    var stmt: ?*c.sqlite3_stmt = null;
+    try std.testing.expectEqual(c.SQLITE_OK, c.sqlite3_prepare_v2(db.?, sql.ptr, -1, &stmt, null));
+    defer _ = c.sqlite3_finalize(stmt);
+
+    var saw_machine_key = false;
+    var saw_machine_notnull = false;
+    var saw_passphrase_key = false;
+    var saw_salt_key = false;
+
+    while (c.sqlite3_step(stmt) == c.SQLITE_ROW) {
+        const name_c = c.sqlite3_column_text(stmt, 1);
+        const type_c = c.sqlite3_column_text(stmt, 2);
+        const notnull = c.sqlite3_column_int(stmt, 3);
+
+        if (name_c == null or type_c == null) continue;
+        const name = std.mem.span(name_c);
+        const col_type = std.mem.span(type_c);
+
+        if (std.mem.eql(u8, name, "encrypted_master_key_machine")) {
+            saw_machine_key = std.mem.eql(u8, col_type, "TEXT");
+            saw_machine_notnull = notnull == 1;
+        } else if (std.mem.eql(u8, name, "encrypted_master_key_passphrase")) {
+            saw_passphrase_key = std.mem.eql(u8, col_type, "TEXT");
+        } else if (std.mem.eql(u8, name, "passphrase_salt")) {
+            saw_salt_key = std.mem.eql(u8, col_type, "TEXT");
+        }
+    }
+
+    try std.testing.expect(saw_machine_key);
+    try std.testing.expect(saw_machine_notnull);
+    try std.testing.expect(saw_passphrase_key);
+    try std.testing.expect(saw_salt_key);
+}
+
+test "master key file blob round-trip" {
+    const key: [32]u8 = .{
+        0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
+        0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
+        0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17,
+        0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f,
+    };
+
+    const plaintext = "phase three master key test";
+    const blob = try encryptWithMasterKey(std.testing.allocator, key, plaintext);
+    defer std.testing.allocator.free(blob);
+
+    const decrypted = try decryptWithMasterKey(std.testing.allocator, key, blob);
+    defer std.testing.allocator.free(decrypted);
+
+    try std.testing.expectEqualStrings(plaintext, decrypted);
 }
