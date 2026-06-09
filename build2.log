@@ -1,0 +1,22 @@
+install
++- install qirtas
+   +- compile exe qirtas Debug native 3 errors
+/home/sinkeat/projects/Qirtas/src/gui.c:4567:5: error: extraneous closing brace ('}')
+    }
+    ^
+/home/sinkeat/projects/Qirtas/src/gui.c:4569:5: error: expected identifier or '('
+    return G_SOURCE_CONTINUE;
+    ^
+/home/sinkeat/projects/Qirtas/src/gui.c:4570:1: error: extraneous closing brace ('}')
+}
+^
+error: 3 compilation errors
+failed command: /usr/bin/zig build-exe -I/usr/include/gtk-4.0 -I/usr/include/pango-1.0 -I/usr/include/fribidi -I/usr/include/harfbuzz -I/usr/include/gdk-pixbuf-2.0 -I/usr/include/glycin-2 -I/usr/include/cairo -I/usr/include/freetype2 -I/usr/include/libpng16 -I/usr/include/pixman-1 -I/usr/include/graphene-1.0 -I/usr/lib/graphene-1.0/include -I/usr/include/glib-2.0 -I/usr/lib/glib-2.0/include -I/usr/include/libmount -I/usr/include/blkid -I/usr/include/sysprof-6 -lgtk-4 -lpangocairo-1.0 -lpango-1.0 -lharfbuzz -lgdk_pixbuf-2.0 -lcairo-gobject -lcairo -lvulkan -lgraphene-1.0 -lgio-2.0 -lgobject-2.0 -lglib-2.0 -I/usr/include/gtksourceview-5 -I/usr/include/gtk-4.0 -I/usr/include/pango-1.0 -I/usr/include/gdk-pixbuf-2.0 -I/usr/include/glycin-2 -I/usr/include/cairo -I/usr/include/graphene-1.0 -I/usr/lib/graphene-1.0/include -I/usr/include/libxml2 -I/usr/include/libmount -I/usr/include/blkid -I/usr/include/fribidi -I/usr/include/pixman-1 -I/usr/include/harfbuzz -I/usr/include/glib-2.0 -I/usr/lib/glib-2.0/include -I/usr/include/sysprof-6 -I/usr/include/freetype2 -I/usr/include/libpng16 -lgtksourceview-5 -lgtk-4 -lpangocairo-1.0 -lgdk_pixbuf-2.0 -lcairo-gobject -lvulkan -lgraphene-1.0 -lpango-1.0 -lgio-2.0 -lcairo -lharfbuzz -lgobject-2.0 -lglib-2.0 -I/usr/include/libadwaita-1 -I/usr/include/gtk-4.0 -I/usr/include/pango-1.0 -I/usr/include/harfbuzz -I/usr/include/gdk-pixbuf-2.0 -I/usr/include/glycin-2 -I/usr/include/cairo -I/usr/include/freetype2 -I/usr/include/libpng16 -I/usr/include/pixman-1 -I/usr/include/graphene-1.0 -I/usr/lib/graphene-1.0/include -I/usr/include/fribidi -I/usr/include/appstream -I/usr/include/libmount -I/usr/include/blkid -I/usr/include/glib-2.0 -I/usr/lib/glib-2.0/include -I/usr/include/sysprof-6 -ladwaita-1 -lgtk-4 -lpangocairo-1.0 -lpango-1.0 -lharfbuzz -lgdk_pixbuf-2.0 -lcairo-gobject -lcairo -lvulkan -lgraphene-1.0 -lgio-2.0 -lgobject-2.0 -lglib-2.0 -lsqlite3 /home/sinkeat/projects/Qirtas/src/gui.c /home/sinkeat/projects/Qirtas/src/gui/gui_sync.c /home/sinkeat/projects/Qirtas/src/gui/gui_theme.c /home/sinkeat/projects/Qirtas/src/gui/gui_cursor.c /home/sinkeat/projects/Qirtas/src/gui/gui_hr.c /home/sinkeat/projects/Qirtas/src/gui/gui_search.c /home/sinkeat/projects/Qirtas/src/gui/gui_conceal.c /home/sinkeat/projects/Qirtas/src/gui/gui_wiki.c /home/sinkeat/projects/Qirtas/src/gui/gui_popover.c /home/sinkeat/projects/Qirtas/src/gui/gui_explorer.c /home/sinkeat/projects/Qirtas/src/gui/gui_tabs.c /home/sinkeat/projects/Qirtas/src/gui/gui_editor.c -ODebug -I /home/sinkeat/projects/Qirtas/src --dep qirtas -Mroot=/home/sinkeat/projects/Qirtas/src/main.zig -Mqirtas=/home/sinkeat/projects/Qirtas/src/root.zig -lc --cache-dir .zig-cache --global-cache-dir /home/sinkeat/.cache/zig --name qirtas --zig-lib-dir /usr/lib/zig/ --listen=-
+
+Build Summary: 0/3 steps succeeded (1 failed)
+install transitive failure
++- install qirtas transitive failure
+   +- compile exe qirtas Debug native 3 errors
+
+error: the following build command failed with exit code 1:
+.zig-cache/o/64413582ef5b0847bebc34c6f7abdfc3/build /usr/bin/zig /usr/lib/zig /home/sinkeat/projects/Qirtas .zig-cache /home/sinkeat/.cache/zig --seed 0xbac942af -Zfabb84ed736d75f0

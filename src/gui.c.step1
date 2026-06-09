@@ -4564,6 +4564,152 @@ void gui_set_cursor_position(int line, int col) {
     reset_cursor_trail(global_gui);
 }
 
+
+static void cleanup_measurement_state(AppGui *gui) {
+    if (gui->measure_idle_id) {
+        g_source_remove(gui->measure_idle_id);
+        gui->measure_idle_id = 0;
+    }
+    if (gui->line_heights) {
+        g_free(gui->line_heights);
+        gui->line_heights = NULL;
+        gui->line_heights_len = 0;
+    }
+    gui->measured_lines_count = 0;
+    gui->next_line_to_measure = 0;
+    gui->running_average_line_height = 0.0;
+}
+
+static void init_measure_view(AppGui *gui) {
+    if (gui->measure_view) return;
+    
+    gui->measure_view = gtk_source_view_new();
+    gtk_widget_set_visible(gui->measure_view, FALSE);
+    gtk_widget_add_css_class(gui->measure_view, "editor-source");
+    gtk_box_append(GTK_BOX(gui->virtual_layout_box), gui->measure_view);
+    
+    GtkSourceBuffer *main_buf = GTK_SOURCE_BUFFER(gtk_text_view_get_buffer(GTK_TEXT_VIEW(gui->source_view)));
+    GtkSourceBuffer *measure_buf = GTK_SOURCE_BUFFER(gtk_text_view_get_buffer(GTK_TEXT_VIEW(gui->measure_view)));
+    
+    GtkSourceLanguage *lang = gtk_source_buffer_get_language(main_buf);
+    if (lang) {
+        gtk_source_buffer_set_language(measure_buf, lang);
+    }
+    GtkSourceStyleScheme *scheme = gtk_source_buffer_get_style_scheme(main_buf);
+    if (scheme) {
+        gtk_source_buffer_set_style_scheme(measure_buf, scheme);
+    }
+}
+
+static void get_spacer_heights(AppGui *gui, int start_line, int end_line, int *out_top_h, int *out_bottom_h) {
+    int top_h = 0;
+    int bottom_h = 0;
+    
+    double avg = gui->running_average_line_height;
+    if (avg <= 0) avg = 24.0;
+    
+    if (gui->line_heights && gui->line_heights_len == gui->total_virtual_lines) {
+        for (int i = 0; i < start_line; i++) {
+            top_h += (gui->line_heights[i] > 0) ? gui->line_heights[i] : (int)avg;
+        }
+        for (int i = end_line; i < gui->total_virtual_lines; i++) {
+            bottom_h += (gui->line_heights[i] > 0) ? gui->line_heights[i] : (int)avg;
+        }
+    } else {
+        top_h = start_line * (int)avg;
+        bottom_h = (gui->total_virtual_lines - end_line) * (int)avg;
+    }
+    
+    if (top_h < 0) top_h = 0;
+    if (bottom_h < 0) bottom_h = 0;
+    
+    *out_top_h = top_h;
+    *out_bottom_h = bottom_h;
+}
+
+static int get_line_at_y(AppGui *gui, double y) {
+    if (y <= 0) return 0;
+    
+    double avg = gui->running_average_line_height;
+    if (avg <= 0) avg = 24.0;
+    
+    double current_y = 0;
+    if (gui->line_heights && gui->line_heights_len == gui->total_virtual_lines) {
+        for (int i = 0; i < gui->total_virtual_lines; i++) {
+            int h = (gui->line_heights[i] > 0) ? gui->line_heights[i] : (int)avg;
+            if (current_y + h > y) {
+                return i;
+            }
+            current_y += h;
+        }
+        return gui->total_virtual_lines - 1;
+    } else {
+        return (int)(y / avg);
+    }
+}
+
+static double get_y_for_line(AppGui *gui, int line) {
+    if (line <= 0) return 0.0;
+    
+    double avg = gui->running_average_line_height;
+    if (avg <= 0) avg = 24.0;
+    
+    double y = 0.0;
+    if (gui->line_heights && gui->line_heights_len == gui->total_virtual_lines) {
+        for (int i = 0; i < line && i < gui->total_virtual_lines; i++) {
+            y += (gui->line_heights[i] > 0) ? gui->line_heights[i] : (int)avg;
+        }
+    } else {
+        y = line * avg;
+    }
+    return y;
+}
+
+static gboolean measure_lines_idle_callback(gpointer user_data) {
+    AppGui *gui = (AppGui *)user_data;
+    if (!gui->line_heights || gui->line_heights_len != gui->total_virtual_lines) {
+        gui->measure_idle_id = 0;
+        return G_SOURCE_REMOVE;
+    }
+    
+    int start = gui->next_line_to_measure;
+    int end = start + 50;
+    if (end > gui->total_virtual_lines) {
+        end = gui->total_virtual_lines;
+    }
+    
+    GtkTextBuffer *measure_buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(gui->measure_view));
+    double running_sum = gui->running_average_line_height * gui->measured_lines_count;
+    
+    for (int i = start; i < end; i++) {
+        GtkTextIter iter;
+        gtk_text_buffer_get_iter_at_line(measure_buf, &iter, i);
+        int y = 0, height = 0;
+        gtk_text_view_get_line_yrange(GTK_TEXT_VIEW(gui->measure_view), &iter, &y, &height);
+        if (height <= 0) {
+            height = get_line_height(gui->source_view);
+            if (height <= 0) height = 24;
+        }
+        gui->line_heights[i] = height;
+        running_sum += height;
+        gui->measured_lines_count++;
+    }
+    
+    gui->running_average_line_height = running_sum / gui->measured_lines_count;
+    gui->next_line_to_measure = end;
+    
+    int top_h = 0, bottom_h = 0;
+    get_spacer_heights(gui, gui->active_page_start_line, gui->active_page_end_line, &top_h, &bottom_h);
+    set_spacers_with_compensation(gui, top_h, bottom_h);
+    
+    if (end >= gui->total_virtual_lines) {
+        gui->measure_idle_id = 0;
+        return G_SOURCE_REMOVE;
+    }
+    
+    return G_SOURCE_CONTINUE;
+}
+
 void gui_set_virtual_scroll_mode(int enabled, int total_lines) {
     if (!global_gui) return;
     
@@ -4610,12 +4756,45 @@ void gui_init_virtual_document(int total_lines, int start_line, int end_line) {
     global_gui->active_page_start_line = start_line;
     global_gui->active_page_end_line = end_line;
     
-    global_gui->estimated_line_height =
-    get_line_height(global_gui->source_view);
-
-    if (global_gui->estimated_line_height <= 0)
-    global_gui->estimated_line_height = 24;
-   
+    global_gui->line_heights = g_new0(int, total_lines);
+    global_gui->line_heights_len = total_lines;
+    
+    init_measure_view(global_gui);
+    
+    int full_len = 0;
+    extern const char *zig_get_text_for_line_range(int start_line, int end_line, int *out_len);
+    const char *full_text = zig_get_text_for_line_range(0, total_lines, &full_len);
+    if (full_text && full_len > 0) {
+        GtkTextBuffer *measure_buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(global_gui->measure_view));
+        gtk_text_buffer_set_text(measure_buf, full_text, full_len);
+    }
+    
+    int lines_to_measure_sync = (total_lines > 50) ? 50 : total_lines;
+    double running_sum = 0;
+    int measured_sync_count = 0;
+    
+    if (full_text && full_len > 0) {
+        GtkTextBuffer *measure_buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(global_gui->measure_view));
+        for (int i = 0; i < lines_to_measure_sync; i++) {
+            GtkTextIter iter;
+            gtk_text_buffer_get_iter_at_line(measure_buf, &iter, i);
+            int y = 0, height = 0;
+            gtk_text_view_get_line_yrange(GTK_TEXT_VIEW(global_gui->measure_view), &iter, &y, &height);
+            if (height <= 0) {
+                height = get_line_height(global_gui->source_view);
+                if (height <= 0) height = 24;
+            }
+            global_gui->line_heights[i] = height;
+            running_sum += height;
+            measured_sync_count++;
+        }
+    }
+    
+    global_gui->measured_lines_count = measured_sync_count;
+    global_gui->running_average_line_height = (measured_sync_count > 0) ? (running_sum / measured_sync_count) : 24.0;
+    global_gui->estimated_line_height = (int)global_gui->running_average_line_height;
+    global_gui->next_line_to_measure = lines_to_measure_sync;
+    
     int top_h = 0, bottom_h = 0;
     get_spacer_heights(global_gui, start_line, end_line, &top_h, &bottom_h);
     set_spacers_with_compensation(global_gui, top_h, bottom_h);
@@ -4626,6 +4805,10 @@ void gui_init_virtual_document(int total_lines, int start_line, int end_line) {
         global_gui->in_scroll_update = FALSE;
     }
     
+    if (global_gui->next_line_to_measure < total_lines) {
+    global_gui->measure_idle_id =
+        g_idle_add(measure_lines_idle_callback, global_gui);
+    }
 }
 
 int gui_get_absolute_cursor_line(void) {

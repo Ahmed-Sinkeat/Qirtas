@@ -1,0 +1,71 @@
+install
++- install qirtas
+   +- compile exe qirtas Debug native 20 errors
+/home/sinkeat/projects/Qirtas/src/gui.c:4569:14: error: no member named 'measure_idle_id' in 'AppGui'
+    if (gui->measure_idle_id) {
+        ~~~~~^
+/home/sinkeat/projects/Qirtas/src/gui.c:4570:30: error: no member named 'measure_idle_id' in 'AppGui'
+        g_source_remove(gui->measure_idle_id);
+                        ~~~~~^
+/home/sinkeat/projects/Qirtas/src/gui.c:4571:14: error: no member named 'measure_idle_id' in 'AppGui'
+        gui->measure_idle_id = 0;
+        ~~~~~^
+/home/sinkeat/projects/Qirtas/src/gui.c:4573:14: error: no member named 'line_heights' in 'AppGui'
+    if (gui->line_heights) {
+        ~~~~~^
+/home/sinkeat/projects/Qirtas/src/gui.c:4574:21: error: no member named 'line_heights' in 'AppGui'
+        g_free(gui->line_heights);
+               ~~~~~^
+/home/sinkeat/projects/Qirtas/src/gui.c:4574:21: error: no member named 'line_heights' in 'AppGui'
+        g_free(gui->line_heights);
+               ~~~~~^
+/home/sinkeat/projects/Qirtas/src/gui.c:4574:21: error: no member named 'line_heights' in 'AppGui'
+        g_free(gui->line_heights);
+               ~~~~~^
+/home/sinkeat/projects/Qirtas/src/gui.c:4574:21: error: no member named 'line_heights' in 'AppGui'
+        g_free(gui->line_heights);
+               ~~~~~^
+/home/sinkeat/projects/Qirtas/src/gui.c:4575:14: error: no member named 'line_heights' in 'AppGui'
+        gui->line_heights = NULL;
+        ~~~~~^
+/home/sinkeat/projects/Qirtas/src/gui.c:4576:14: error: no member named 'line_heights_len' in 'AppGui'
+        gui->line_heights_len = 0;
+        ~~~~~^
+/home/sinkeat/projects/Qirtas/src/gui.c:4578:10: error: no member named 'measured_lines_count' in 'AppGui'
+    gui->measured_lines_count = 0;
+    ~~~~~^
+/home/sinkeat/projects/Qirtas/src/gui.c:4579:10: error: no member named 'next_line_to_measure' in 'AppGui'
+    gui->next_line_to_measure = 0;
+    ~~~~~^
+/home/sinkeat/projects/Qirtas/src/gui.c:4580:10: error: no member named 'running_average_line_height' in 'AppGui'
+    gui->running_average_line_height = 0.0;
+    ~~~~~^
+/home/sinkeat/projects/Qirtas/src/gui.c:4584:14: error: no member named 'measure_view' in 'AppGui'
+    if (gui->measure_view) return;
+        ~~~~~^
+/home/sinkeat/projects/Qirtas/src/gui.c:4586:10: error: no member named 'measure_view' in 'AppGui'
+    gui->measure_view = gtk_source_view_new();
+    ~~~~~^
+/home/sinkeat/projects/Qirtas/src/gui.c:4587:33: error: no member named 'measure_view' in 'AppGui'
+    gtk_widget_set_visible(gui->measure_view, FALSE);
+                           ~~~~~^
+/home/sinkeat/projects/Qirtas/src/gui.c:4588:35: error: no member named 'measure_view' in 'AppGui'
+    gtk_widget_add_css_class(gui->measure_view, "editor-source");
+                             ~~~~~^
+/home/sinkeat/projects/Qirtas/src/gui.c:4589:59: error: no member named 'measure_view' in 'AppGui'
+    gtk_box_append(GTK_BOX(gui->virtual_layout_box), gui->measure_view);
+                                                     ~~~~~^
+/home/sinkeat/projects/Qirtas/src/gui.c:4592:98: error: no member named 'measure_view' in 'AppGui'
+    GtkSourceBuffer *measure_buf = GTK_SOURCE_BUFFER(gtk_text_view_get_buffer(GTK_TEXT_VIEW(gui->measure_view)));
+                                                                                            ~~~~~^
+:1:1: error: too many errors emitted, stopping now
+error: 20 compilation errors
+failed command: /usr/bin/zig build-exe -I/usr/include/gtk-4.0 -I/usr/include/pango-1.0 -I/usr/include/fribidi -I/usr/include/harfbuzz -I/usr/include/gdk-pixbuf-2.0 -I/usr/include/glycin-2 -I/usr/include/cairo -I/usr/include/freetype2 -I/usr/include/libpng16 -I/usr/include/pixman-1 -I/usr/include/graphene-1.0 -I/usr/lib/graphene-1.0/include -I/usr/include/glib-2.0 -I/usr/lib/glib-2.0/include -I/usr/include/libmount -I/usr/include/blkid -I/usr/include/sysprof-6 -lgtk-4 -lpangocairo-1.0 -lpango-1.0 -lharfbuzz -lgdk_pixbuf-2.0 -lcairo-gobject -lcairo -lvulkan -lgraphene-1.0 -lgio-2.0 -lgobject-2.0 -lglib-2.0 -I/usr/include/gtksourceview-5 -I/usr/include/gtk-4.0 -I/usr/include/pango-1.0 -I/usr/include/gdk-pixbuf-2.0 -I/usr/include/glycin-2 -I/usr/include/cairo -I/usr/include/graphene-1.0 -I/usr/lib/graphene-1.0/include -I/usr/include/libxml2 -I/usr/include/libmount -I/usr/include/blkid -I/usr/include/fribidi -I/usr/include/pixman-1 -I/usr/include/harfbuzz -I/usr/include/glib-2.0 -I/usr/lib/glib-2.0/include -I/usr/include/sysprof-6 -I/usr/include/freetype2 -I/usr/include/libpng16 -lgtksourceview-5 -lgtk-4 -lpangocairo-1.0 -lgdk_pixbuf-2.0 -lcairo-gobject -lvulkan -lgraphene-1.0 -lpango-1.0 -lgio-2.0 -lcairo -lharfbuzz -lgobject-2.0 -lglib-2.0 -I/usr/include/libadwaita-1 -I/usr/include/gtk-4.0 -I/usr/include/pango-1.0 -I/usr/include/harfbuzz -I/usr/include/gdk-pixbuf-2.0 -I/usr/include/glycin-2 -I/usr/include/cairo -I/usr/include/freetype2 -I/usr/include/libpng16 -I/usr/include/pixman-1 -I/usr/include/graphene-1.0 -I/usr/lib/graphene-1.0/include -I/usr/include/fribidi -I/usr/include/appstream -I/usr/include/libmount -I/usr/include/blkid -I/usr/include/glib-2.0 -I/usr/lib/glib-2.0/include -I/usr/include/sysprof-6 -ladwaita-1 -lgtk-4 -lpangocairo-1.0 -lpango-1.0 -lharfbuzz -lgdk_pixbuf-2.0 -lcairo-gobject -lcairo -lvulkan -lgraphene-1.0 -lgio-2.0 -lgobject-2.0 -lglib-2.0 -lsqlite3 /home/sinkeat/projects/Qirtas/src/gui.c /home/sinkeat/projects/Qirtas/src/gui/gui_sync.c /home/sinkeat/projects/Qirtas/src/gui/gui_theme.c /home/sinkeat/projects/Qirtas/src/gui/gui_cursor.c /home/sinkeat/projects/Qirtas/src/gui/gui_hr.c /home/sinkeat/projects/Qirtas/src/gui/gui_search.c /home/sinkeat/projects/Qirtas/src/gui/gui_conceal.c /home/sinkeat/projects/Qirtas/src/gui/gui_wiki.c /home/sinkeat/projects/Qirtas/src/gui/gui_popover.c /home/sinkeat/projects/Qirtas/src/gui/gui_explorer.c /home/sinkeat/projects/Qirtas/src/gui/gui_tabs.c /home/sinkeat/projects/Qirtas/src/gui/gui_editor.c -ODebug -I /home/sinkeat/projects/Qirtas/src --dep qirtas -Mroot=/home/sinkeat/projects/Qirtas/src/main.zig -Mqirtas=/home/sinkeat/projects/Qirtas/src/root.zig -lc --cache-dir .zig-cache --global-cache-dir /home/sinkeat/.cache/zig --name qirtas --zig-lib-dir /usr/lib/zig/ --listen=-
+
+Build Summary: 0/3 steps succeeded (1 failed)
+install transitive failure
++- install qirtas transitive failure
+   +- compile exe qirtas Debug native 20 errors
+
+error: the following build command failed with exit code 1:
+.zig-cache/o/64413582ef5b0847bebc34c6f7abdfc3/build /usr/bin/zig /usr/lib/zig /home/sinkeat/projects/Qirtas .zig-cache /home/sinkeat/.cache/zig --seed 0x8229b5c4 -Z06d31393113b1b92

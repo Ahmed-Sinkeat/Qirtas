@@ -952,10 +952,20 @@ pub export fn zig_get_text_for_line_range(start_line: c_int, end_line: c_int, ou
     
     const start_offset = line_offsets.items[start_idx];
     const end_offset = if (end_idx >= line_offsets.items.len) 
+
         active_mmap_size
     else 
         line_offsets.items[end_idx];
-        
+    std.debug.print(
+    "GET_RANGE start={} end={} start_off={} end_off={}\n",
+    .{
+        start_line,
+        end_line,
+        start_offset,
+        end_offset,
+    },
+);        
+
     if (active_mmap_ptr) |ptr| {
         const slice = ptr[start_offset..end_offset];
         out_len.* = @as(c_int, @intCast(slice.len));
@@ -966,6 +976,11 @@ pub export fn zig_get_text_for_line_range(start_line: c_int, end_line: c_int, ou
 }
 
 pub export fn zig_save_active_page(start_line: c_int, end_line: c_int, text: [*:0]const u8) callconv(.c) c_int {
+    
+    std.debug.print(
+    "SAVE_PAGE start={} end={} text_len={}\n",
+    .{ start_line, end_line, std.mem.len(text) }
+ ); 
     if (start_line < 0 or end_line < 0) return 1;
     if (active_file_is_encrypted and active_master_key == null) return 1;
 
@@ -1012,6 +1027,12 @@ pub export fn zig_save_active_page(start_line: c_int, end_line: c_int, text: [*:
         file.writeStreamingAll(global_io, new_content) catch return 1;
     }
     
+    
+    std.debug.print(
+        "SAVE_PAGE start={} end={} new_text_len={} new_size={}\n",
+        .{ start_idx, end_idx, new_text_slice.len, new_size }
+    );
+
     remap_active_file() catch return 1;
     
     const path_z = gpa.dupeZ(u8, path) catch return 1;
@@ -1078,6 +1099,10 @@ fn refresh_explorer_callback(user_data: ?*anyopaque) callconv(.c) void {
 // GUI-Thread callback: reloads file only if content has changed (prevents self-reload loops)
 fn reload_file_callback(user_data: ?*anyopaque) callconv(.c) void {
     _ = user_data;
+
+    std.debug.print("RELOAD_BLOCKED_TEST\n", .{});
+
+    if (true) return;
 
     const local_path = active_file_path[0..active_file_path_len];
     const gpa = std.heap.page_allocator;

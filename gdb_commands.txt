@@ -1,0 +1,3 @@
+set global_gui[0].active_page_start_line = 2000
+set global_gui[0].active_page_end_line = 2100
+call on_scroll_changed(global_gui[0].vadjustment, global_gui)

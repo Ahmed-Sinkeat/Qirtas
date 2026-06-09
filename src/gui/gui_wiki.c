@@ -13,7 +13,80 @@ static gboolean editor_get_iter_at_widget_point(AppGui *gui, gdouble x, gdouble 
     return gtk_text_view_get_iter_at_position(GTK_TEXT_VIEW(gui->source_view), iter, &trailing, bx, by);
 }
 
-void apply_wiki_link_tags(GtkTextBuffer *buf) {
+static gboolean wiki_local_queued = FALSE;
+static gboolean wiki_global_queued = FALSE;
+
+static void apply_wiki_link_tags_local_impl(GtkTextBuffer *buf) {
+    if (global_gui && global_gui->in_conceal_update) return;
+
+    GtkTextMark *insert_mark = gtk_text_buffer_get_insert(buf);
+    GtkTextIter cursor_iter;
+    gtk_text_buffer_get_iter_at_mark(buf, &cursor_iter, insert_mark);
+
+    int cursor_line = gtk_text_iter_get_line(&cursor_iter);
+    int total_lines = gtk_text_buffer_get_line_count(buf);
+
+    int start_line = cursor_line - 1;
+    if (start_line < 0) start_line = 0;
+    int end_line = cursor_line + 1;
+    if (end_line >= total_lines) end_line = total_lines - 1;
+
+    GtkTextIter start, end;
+    gtk_text_buffer_get_iter_at_line(buf, &start, start_line);
+    gtk_text_buffer_get_iter_at_line(buf, &end, end_line);
+    gtk_text_iter_forward_to_line_end(&end);
+
+    GtkTextTag *tag = gtk_text_tag_table_lookup(gtk_text_buffer_get_tag_table(buf), "wiki-link");
+    if (!tag) {
+        tag = gtk_text_buffer_create_tag(buf, "wiki-link",
+                                         "underline", PANGO_UNDERLINE_SINGLE,
+                                         "foreground", "#ff79c6",
+                                         NULL);
+    }
+
+    // Remove tags locally first
+    gtk_text_buffer_remove_tag(buf, tag, &start, &end);
+
+    // Re-fetch fresh GtkTextIter values from the buffer after tag modification
+    gtk_text_buffer_get_iter_at_line(buf, &start, start_line);
+    gtk_text_buffer_get_iter_at_line(buf, &end, end_line);
+    gtk_text_iter_forward_to_line_end(&end);
+
+    GtkTextIter iter = start;
+    while (TRUE) {
+        GtkTextIter match_start, match_end;
+        if (!gtk_text_iter_forward_search(&iter, "[[", GTK_TEXT_SEARCH_VISIBLE_ONLY, &match_start, &match_end, &end)) {
+            break;
+        }
+
+        GtkTextIter close_start, close_end;
+        if (!gtk_text_iter_forward_search(&match_end, "]]", GTK_TEXT_SEARCH_VISIBLE_ONLY, &close_start, &close_end, &end)) {
+            break;
+        }
+
+        int end_offset = gtk_text_iter_get_offset(&end);
+        int close_end_offset = gtk_text_iter_get_offset(&close_end);
+
+        gtk_text_buffer_apply_tag(buf, tag, &match_start, &close_end);
+
+        // Reacquire fresh GtkTextIter values from the buffer after tag modification
+        gtk_text_buffer_get_iter_at_offset(buf, &iter, close_end_offset);
+        gtk_text_buffer_get_iter_at_offset(buf, &end, end_offset);
+    }
+}
+
+static void idle_wiki_local_cb(GtkTextBuffer *buf) {
+    wiki_local_queued = FALSE;
+    apply_wiki_link_tags_local_impl(buf);
+}
+
+void apply_wiki_link_tags_local(GtkTextBuffer *buf) {
+    if (wiki_local_queued) return;
+    wiki_local_queued = TRUE;
+    g_idle_add_once((GSourceOnceFunc)idle_wiki_local_cb, buf);
+}
+
+static void apply_wiki_link_tags_impl(GtkTextBuffer *buf) {
     GtkTextIter start, end;
     gtk_text_buffer_get_bounds(buf, &start, &end);
 
@@ -43,6 +116,17 @@ void apply_wiki_link_tags(GtkTextBuffer *buf) {
         gtk_text_buffer_apply_tag(buf, tag, &match_start, &close_end);
         iter = close_end;
     }
+}
+
+static void idle_wiki_global_cb(GtkTextBuffer *buf) {
+    wiki_global_queued = FALSE;
+    apply_wiki_link_tags_impl(buf);
+}
+
+void apply_wiki_link_tags(GtkTextBuffer *buf) {
+    if (wiki_global_queued) return;
+    wiki_global_queued = TRUE;
+    g_idle_add_once((GSourceOnceFunc)idle_wiki_global_cb, buf);
 }
 
 void on_editor_left_click(GtkGestureClick *gesture, gint n_press, gdouble x, gdouble y, gpointer user_data) {

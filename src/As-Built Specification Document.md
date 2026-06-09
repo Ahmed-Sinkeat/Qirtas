@@ -147,7 +147,7 @@ High-performance communication between the backend and frontend is achieved via 
 ### 5.3 Memory Safety Guidelines
 Strings are passed using standard `const char*` C pointers. Zig reads these pointers, converts them to slices, and immediately zeroes any volatile stack memory after processing to keep the memory footprint optimized and secure.
 
----
+
 
 ## 6. Theme & Customization System
 
@@ -164,7 +164,7 @@ Tabs monitor edits using the buffer's `"modified-changed"` signal:
 - In dark themes, the variable defaults to `#ffffff` (white circle). In light themes (Sepia, Modern Ink, Typewriter Light), it is overridden to `#000000` (black circle).
 - Saving the file resets the buffer's modified state, automatically hiding the dot.
 
----
+
 
 ## 7. Data Persistence & Security
 

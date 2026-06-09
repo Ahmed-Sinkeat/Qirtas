@@ -221,13 +221,31 @@ static void apply_regex_conceal_local(GtkTextBuffer *buf, const gchar *text, gin
             gint end_char = range_start_offset + end_char_local;
             gboolean cursor_inside = (cursor_char >= start_char && cursor_char <= end_char);
             if (!cursor_inside) {
+                gint total_chars = gtk_text_buffer_get_char_count(buf);
+
+                gint c_start1 = start_char;
+                if (c_start1 < 0) c_start1 = 0;
+                if (c_start1 > total_chars) c_start1 = total_chars;
+
+                gint c_end1 = start_char + delim_len;
+                if (c_end1 < 0) c_end1 = 0;
+                if (c_end1 > total_chars) c_end1 = total_chars;
+
+                gint c_start2 = end_char - delim_len;
+                if (c_start2 < 0) c_start2 = 0;
+                if (c_start2 > total_chars) c_start2 = total_chars;
+
+                gint c_end2 = end_char;
+                if (c_end2 < 0) c_end2 = 0;
+                if (c_end2 > total_chars) c_end2 = total_chars;
+
                 GtkTextIter start_iter, end_iter;
-                gtk_text_buffer_get_iter_at_offset(buf, &start_iter, start_char);
-                gtk_text_buffer_get_iter_at_offset(buf, &end_iter, start_char + delim_len);
+                gtk_text_buffer_get_iter_at_offset(buf, &start_iter, c_start1);
+                gtk_text_buffer_get_iter_at_offset(buf, &end_iter, c_end1);
                 gtk_text_buffer_apply_tag(buf, conceal_tag, &start_iter, &end_iter);
 
-                gtk_text_buffer_get_iter_at_offset(buf, &start_iter, end_char - delim_len);
-                gtk_text_buffer_get_iter_at_offset(buf, &end_iter, end_char);
+                gtk_text_buffer_get_iter_at_offset(buf, &start_iter, c_start2);
+                gtk_text_buffer_get_iter_at_offset(buf, &end_iter, c_end2);
                 gtk_text_buffer_apply_tag(buf, conceal_tag, &start_iter, &end_iter);
             }
         }
@@ -239,7 +257,10 @@ static void apply_regex_conceal_local(GtkTextBuffer *buf, const gchar *text, gin
     }
 }
 
-void update_conceal_markdown_all(GtkTextBuffer *buf) {
+static gboolean local_conceal_queued = FALSE;
+static gboolean global_conceal_queued = FALSE;
+
+static void update_conceal_markdown_all_impl(GtkTextBuffer *buf) {
     if (global_gui && global_gui->in_conceal_update) return;
     if (global_gui) global_gui->in_conceal_update = TRUE;
 
@@ -329,7 +350,18 @@ void update_conceal_markdown_all(GtkTextBuffer *buf) {
     if (global_gui) global_gui->in_conceal_update = FALSE;
 }
 
-void update_conceal_markdown(GtkTextBuffer *buf) {
+static void idle_global_conceal_cb(GtkTextBuffer *buf) {
+    global_conceal_queued = FALSE;
+    update_conceal_markdown_all_impl(buf);
+}
+
+void update_conceal_markdown_all(GtkTextBuffer *buf) {
+    if (global_conceal_queued) return;
+    global_conceal_queued = TRUE;
+    g_idle_add_once((GSourceOnceFunc)idle_global_conceal_cb, buf);
+}
+
+static void update_conceal_markdown_impl(GtkTextBuffer *buf) {
     if (global_gui && global_gui->in_conceal_update) return;
     if (global_gui) global_gui->in_conceal_update = TRUE;
 
@@ -357,32 +389,108 @@ void update_conceal_markdown(GtkTextBuffer *buf) {
         return;
     }
 
-    if (!strchr(text, '*') && !strchr(text, '=')) {
-        g_free(text);
-        if (global_gui) global_gui->in_conceal_update = FALSE;
-        return;
-    }
-
     GtkTextTagTable *table = gtk_text_buffer_get_tag_table(buf);
     GtkTextTag *conceal_tag = gtk_text_tag_table_lookup(table, "conceal");
     if (!conceal_tag) {
         conceal_tag = gtk_text_buffer_create_tag(buf, "conceal", "invisible", TRUE, NULL);
     }
+    GtkTextTag *h1_tag = gtk_text_tag_table_lookup(table, "heading1");
+    if (!h1_tag) h1_tag = gtk_text_buffer_create_tag(buf, "heading1", "scale", 2.0, NULL);
+    GtkTextTag *h2_tag = gtk_text_tag_table_lookup(table, "heading2");
+    if (!h2_tag) h2_tag = gtk_text_buffer_create_tag(buf, "heading2", "scale", 1.6, NULL);
+    GtkTextTag *h3_tag = gtk_text_tag_table_lookup(table, "heading3");
+    if (!h3_tag) h3_tag = gtk_text_buffer_create_tag(buf, "heading3", "scale", 1.3, NULL);
+    GtkTextTag *h4_tag = gtk_text_tag_table_lookup(table, "heading4");
+    if (!h4_tag) h4_tag = gtk_text_buffer_create_tag(buf, "heading4", "scale", 1.1, NULL);
 
+    // Re-fetch start/end iterators defensively to ensure they are fully stable
     gtk_text_buffer_get_iter_at_line(buf, &start, start_line);
     gtk_text_buffer_get_iter_at_line(buf, &end, end_line);
     gtk_text_iter_forward_to_line_end(&end);
+
+    // Remove tags in the local range first
     gtk_text_buffer_remove_tag(buf, conceal_tag, &start, &end);
+    gtk_text_buffer_remove_tag(buf, h1_tag, &start, &end);
+    gtk_text_buffer_remove_tag(buf, h2_tag, &start, &end);
+    gtk_text_buffer_remove_tag(buf, h3_tag, &start, &end);
+    gtk_text_buffer_remove_tag(buf, h4_tag, &start, &end);
+
+    // Skip regexes if no markdown characters exist in the local 3-line range
+    if (!strchr(text, '*') && !strchr(text, '=') && !strchr(text, '#') &&
+        !strchr(text, '[') && !strchr(text, ']') && !strchr(text, '(') &&
+        !strchr(text, ')') && !strchr(text, '!')) {
+        g_free(text);
+        if (global_gui) global_gui->in_conceal_update = FALSE;
+        return;
+    }
 
     gint range_start_offset = gtk_text_iter_get_offset(&start);
-    gint cursor_char = gtk_text_iter_get_offset(&cursor_iter);
+    
+    GtkTextIter current_cursor;
+    gtk_text_buffer_get_iter_at_mark(buf, &current_cursor, insert_mark);
+    gint cursor_char = gtk_text_iter_get_offset(&current_cursor);
 
+    // Formatting matches
     apply_regex_conceal_local(buf, text, range_start_offset, "\\*\\*([^\\n]*?[^\\n\\*][^\\n]*?)\\*\\*", cursor_char, 2, conceal_tag);
     apply_regex_conceal_local(buf, text, range_start_offset, "==([^\\n]*?[^\\n=][^\\n]*?)==", cursor_char, 2, conceal_tag);
     apply_regex_conceal_local(buf, text, range_start_offset, "(?<!\\*)\\*([^\\n\\*]+?)\\*(?!\\*)", cursor_char, 1, conceal_tag);
 
+    /* Heading markers: match and conceal the # characters and the trailing space */
+    apply_regex_conceal_local(buf, text, range_start_offset, "(?m)^#[ \\t]", cursor_char, 2, conceal_tag);
+    apply_regex_conceal_local(buf, text, range_start_offset, "(?m)^##[ \\t]", cursor_char, 3, conceal_tag);
+    apply_regex_conceal_local(buf, text, range_start_offset, "(?m)^###[ \\t]", cursor_char, 4, conceal_tag);
+    apply_regex_conceal_local(buf, text, range_start_offset, "(?m)^####[ \\t]", cursor_char, 5, conceal_tag);
+    apply_regex_conceal_local(buf, text, range_start_offset, "(?m)^#####[ \\t]", cursor_char, 6, conceal_tag);
+    apply_regex_conceal_local(buf, text, range_start_offset, "(?m)^######[ \\t]", cursor_char, 7, conceal_tag);
+
+    /* Inline links: match and conceal opening [ and closing ](url) */
+    apply_regex_conceal_local(buf, text, range_start_offset, "\\[([^\\]]+)\\]\\([^)]*\\)", cursor_char, 1, conceal_tag);
+
+    /* Images: match and conceal entire match */
+    apply_regex_conceal_local(buf, text, range_start_offset, "!\\[[^\\]]*\\]\\([^)]*\\)", cursor_char, 2, conceal_tag);
+
     g_free(text);
+
+    /* Heading size tags pass locally */
+    for (int i = start_line; i <= end_line; i++) {
+        GtkTextIter line_start, line_end;
+        gtk_text_buffer_get_iter_at_line(buf, &line_start, i);
+        line_end = line_start;
+        gtk_text_iter_forward_to_line_end(&line_end);
+        
+        gchar *line_text = gtk_text_buffer_get_text(buf, &line_start, &line_end, TRUE);
+        if (line_text) {
+            int h_level = 0;
+            while (line_text[h_level] == '#') {
+                h_level++;
+            }
+            if (h_level > 0 && (line_text[h_level] == ' ' || line_text[h_level] == '\0')) {
+                if (h_level == 1) {
+                    gtk_text_buffer_apply_tag(buf, h1_tag, &line_start, &line_end);
+                } else if (h_level == 2) {
+                    gtk_text_buffer_apply_tag(buf, h2_tag, &line_start, &line_end);
+                } else if (h_level == 3) {
+                    gtk_text_buffer_apply_tag(buf, h3_tag, &line_start, &line_end);
+                } else if (h_level >= 4) {
+                    gtk_text_buffer_apply_tag(buf, h4_tag, &line_start, &line_end);
+                }
+            }
+            g_free(line_text);
+        }
+    }
+
     if (global_gui) global_gui->in_conceal_update = FALSE;
+}
+
+static void idle_local_conceal_cb(GtkTextBuffer *buf) {
+    local_conceal_queued = FALSE;
+    update_conceal_markdown_impl(buf);
+}
+
+void update_conceal_markdown(GtkTextBuffer *buf) {
+    if (local_conceal_queued) return;
+    local_conceal_queued = TRUE;
+    g_idle_add_once((GSourceOnceFunc)idle_local_conceal_cb, buf);
 }
 
 void on_buffer_modified_changed(GtkTextBuffer *buf, gpointer user_data) {
@@ -404,7 +512,7 @@ void on_mark_set(GtkTextBuffer *buf, GtkTextIter *location, GtkTextMark *mark, g
         gint scroll_offset = gtk_text_iter_get_offset(location);
         
         /* Defer tag updates to idle so Pango layout is stable and doesn't get stale byte-index cache. */
-        g_idle_add_once((GSourceOnceFunc)update_conceal_markdown, buf);
+        update_conceal_markdown(buf);
 
         if (!gtk_widget_get_realized(gui->source_view)) return;
         if (gui->primary_button_down && !gui->mouse_dragging) return;

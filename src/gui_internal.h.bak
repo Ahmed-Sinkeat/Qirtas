@@ -148,11 +148,14 @@ typedef struct {
     gboolean   enable_focus_mode;
     gboolean   virtual_scroll_enabled;
     GtkWidget *wrap_chk;
-    /* Viewport state */
-    int viewport_start_line;
-    int viewport_end_line;
-    int document_total_lines;
-    int line_height;
+    GtkWidget *measure_view;
+    int       *line_heights;
+    int        line_heights_len;
+    guint      measure_idle_id;
+    double     running_average_line_height;
+    int        measured_lines_count;
+    int        next_line_to_measure;
+
     /* Vault system */
     GtkWidget *vault_path_lbl_val;
 
