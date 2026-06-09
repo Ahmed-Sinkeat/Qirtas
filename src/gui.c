@@ -2811,6 +2811,50 @@ static int get_line_height(GtkWidget *text_view) {
 }
 
 static void set_spacers_with_compensation(AppGui *gui, int new_top_h, int new_bottom_h);
+static void load_viewport_page(
+    AppGui *gui,
+    int new_start
+) {
+    if (!gui) return;
+
+    int new_end = new_start + 100;
+
+    if (new_end > gui->total_virtual_lines) {
+        new_end = gui->total_virtual_lines;
+        new_start = new_end - 100;
+        if (new_start < 0)
+            new_start = 0;
+    }
+
+    extern const char *zig_get_text_for_line_range(
+        int start_line,
+        int end_line,
+        int *out_len
+    );
+
+    int new_len = 0;
+
+    const char *new_text =
+        zig_get_text_for_line_range(
+            new_start,
+            new_end,
+            &new_len
+        );
+
+    GtkTextBuffer *buf =
+        gtk_text_view_get_buffer(
+            GTK_TEXT_VIEW(gui->source_view)
+        );
+
+    gtk_text_buffer_set_text(
+        buf,
+        new_text ? new_text : "",
+        new_len
+    );
+
+    gui->active_page_start_line = new_start;
+    gui->active_page_end_line = new_end;
+}
 
 static void on_scroll_changed(GtkAdjustment *adj, gpointer user_data) {
     AppGui *gui = (AppGui *)user_data;
@@ -4562,6 +4606,41 @@ void gui_set_cursor_position(int line, int col) {
     }
     gtk_text_buffer_select_range(buf, &iter, &iter);
     reset_cursor_trail(global_gui);
+}
+
+static void cleanup_measurement_state(AppGui *gui)
+{
+    (void)gui;
+}
+
+static void get_spacer_heights(
+    AppGui *gui,
+    int start_line,
+    int end_line,
+    int *out_top_h,
+    int *out_bottom_h)
+{
+    int h = gui->line_height > 0 ? gui->line_height : 24;
+
+    *out_top_h = start_line * h;
+
+    *out_bottom_h =
+        (gui->total_virtual_lines - end_line) * h;
+
+    if (*out_bottom_h < 0)
+        *out_bottom_h = 0;
+}
+
+static int get_line_at_y(AppGui *gui, double y)
+{
+    int h = gui->line_height > 0 ? gui->line_height : 24;
+    return (int)(y / h);
+}
+
+static double get_y_for_line(AppGui *gui, int line)
+{
+    int h = gui->line_height > 0 ? gui->line_height : 24;
+    return (double)(line * h);
 }
 
 void gui_set_virtual_scroll_mode(int enabled, int total_lines) {
