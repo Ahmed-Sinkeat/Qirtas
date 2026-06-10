@@ -10,6 +10,34 @@
 #include <unistd.h>
 #include <libgen.h>
 #include <limits.h>
+#include "gui_internal.h"
+#include "gui_shared.h"
+
+/* Forward declarations — static functions defined later in this file */
+static void reorder_main_layout(AppGui *gui);
+static int get_line_at_y(AppGui *gui, double y);
+static void on_settings_btn_clicked(GtkButton *btn, gpointer user_data);
+static void on_scroll_changed(GtkAdjustment *adj, gpointer user_data);
+
+/* Forward declarations — gui_sync.c callbacks */
+void on_sync_connect_clicked(GtkButton *btn, gpointer user_data);
+void on_sync_now_clicked(GtkButton *btn, gpointer user_data);
+void on_dropbox_connect_clicked(GtkButton *btn, gpointer user_data);
+void on_dropbox_now_clicked(GtkButton *btn, gpointer user_data);
+void on_github_connect_clicked(GtkButton *btn, gpointer user_data);
+void on_github_now_clicked(GtkButton *btn, gpointer user_data);
+void on_local_sync_clicked(GtkButton *btn, gpointer user_data);
+
+/* File-scope variables */
+static int seconds_elapsed = 0;
+static void *global_add_popover_widgets = NULL;
+AppGui    *global_gui         = NULL;
+GtkWidget *global_window      = NULL;
+GtkWidget *global_source_view = NULL;
+GtkWidget *global_sync_label  = NULL;
+GtkWidget *global_path_label  = NULL;
+GtkWidget *global_time_label  = NULL;
+
 /* ============================================================
  *  gui.c  —  Qirtas GTK4 UI Layer
  * ============================================================
@@ -38,144 +66,58 @@
  *  src/ui/qirtas_markdown.lang     →  GtkSourceView syntax definition
  *  src/ui/qirtas*.style-scheme.xml →  Editor colour schemes
  * ============================================================ */
+static void select_position_range(AppGui *gui, Position start, Position end) {
+    if (!gui || !gui->source_view) return;
+    GtkTextBuffer *buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(gui->source_view));
+    GtkTextIter start_iter, end_iter;
 
-#define DB_PATH "/home/.config/lawh/vault.db"
-#define GHOST_COUNT 40
+    int rel_start_line = start.line - gui->viewport_start_line;
+    int rel_end_line = end.line - gui->viewport_start_line;
+    if (rel_start_line < 0) rel_start_line = 0;
+    if (rel_end_line < 0) rel_end_line = 0;
 
-/* ============
- * DATA STRUCTURES
-  ============ */
+    gtk_text_buffer_get_iter_at_line(buf, &start_iter, rel_start_line);
+    gtk_text_buffer_get_iter_at_line(buf, &end_iter, rel_end_line);
 
-#include "gui_internal.h"
+    for (int i = 0; i < start.col; i++) {
+        if (gtk_text_iter_ends_line(&start_iter) || gtk_text_iter_is_end(&start_iter)) break;
+        gtk_text_iter_forward_char(&start_iter);
+    }
+    for (int i = 0; i < end.col; i++) {
+        if (gtk_text_iter_ends_line(&end_iter) || gtk_text_iter_is_end(&end_iter)) break;
+        gtk_text_iter_forward_char(&end_iter);
+    }
 
-/* ====
- * GLOBALS
-  ==== */
+    gtk_text_buffer_select_range(buf, &start_iter, &end_iter);
+}
 
-AppGui    *global_gui         = NULL;
-GtkWidget *global_window      = NULL;
-GtkWidget *global_source_view = NULL;
-GtkWidget *global_sync_label  = NULL;
-GtkWidget *global_path_label  = NULL;
-GtkWidget *global_time_label  = NULL;
+static Position iter_to_position(GtkTextIter *iter) {
+    Position pos = { 0, 0 };
+    if (!global_gui || !iter) return pos;
+    pos.line = global_gui->viewport_start_line + gtk_text_iter_get_line(iter);
+    pos.col = gtk_text_iter_get_line_offset(iter);
+    return pos;
+}
 
-static int seconds_elapsed = 0;
-static void *global_add_popover_widgets = NULL;
-
-extern void zig_on_gui_ready(void);
-extern void zig_open_file(const char *filename);
-extern void zig_open_vault(const char *dir_path);
-extern void zig_search_workspace(const char *query);
-extern const char *zig_get_search_snippet(const char *filepath);
-extern int zig_get_search_rank(const char *filepath);
-extern void zig_set_cursor_trail(int enabled);
-extern int zig_get_cursor_trail(void);
-extern void zig_set_layout_dividers(int enabled);
-extern int zig_get_layout_dividers(void);
-extern void zig_set_bottom_margin(int enabled);
-extern int zig_get_bottom_margin(void);
-extern void zig_set_editor_border(int enabled);
-extern int zig_get_editor_border(void);
-extern void zig_set_focus_mode(int enabled);
-extern int zig_get_focus_mode(void);
-
-/* ============
- * FORWARD DECLARATIONS
-  ============ */
-
-void gui_trigger_autosave(void);
-static void on_open_vault_clicked(GtkButton *btn, gpointer user_data);
-static void on_vault_dialog_response(GObject *source_object, GAsyncResult *res, gpointer user_data);
-static void on_trail_toggled(GtkCheckButton *chk, gpointer user_data);
-static void on_layout_dividers_toggled(GtkCheckButton *chk, gpointer user_data);
-static void on_bottom_margin_toggled(GtkCheckButton *chk, gpointer user_data);
-static void on_editor_border_toggled(GtkCheckButton *chk, gpointer user_data);
-static void apply_editor_border(AppGui *gui);
-static void on_focus_mode_toggled(GtkCheckButton *chk, gpointer user_data);
-void apply_focus_mode(AppGui *gui);
-static void on_trail_color_custom_toggled(GtkCheckButton *chk, gpointer user_data);
-static void on_trail_color_changed(GObject *object, GParamSpec *pspec, gpointer user_data);
-static void apply_layout_dividers(AppGui *gui);
-void load_trail_color_settings(AppGui *gui);
-void save_trail_color_settings(AppGui *gui);
-static void on_pointer_color_custom_toggled(GtkCheckButton *chk, gpointer user_data);
-static void on_pointer_color_changed(GObject *object, GParamSpec *pspec, gpointer user_data);
-void load_pointer_color_settings(AppGui *gui);
-void save_pointer_color_settings(AppGui *gui);
-
-static void reorder_main_layout(AppGui *gui);
-void gui_tabs_refresh(AppGui *gui);
-void gui_tabs_close(AppGui *gui, int index);
-void gui_tabs_add_or_select(AppGui *gui, const char *filepath);
-static void on_status_bar_save_file_clicked(GtkButton *btn, gpointer user_data);
-
-
-void populate_explorer(AppGui *gui);
-static void set_active_tab(AppGui *gui, GtkWidget *active_btn, const char *page);
-void toggle_search(AppGui *gui);
-void on_insert_text_before(GtkTextBuffer *buf, GtkTextIter *location, gchar *text, gint len, gpointer user_data);
-void on_insert_text_after(GtkTextBuffer *buf, GtkTextIter *location, gchar *text, gint len, gpointer user_data);
-void on_delete_range_after(GtkTextBuffer *buf, GtkTextIter *start, GtkTextIter *end, gpointer user_data);
-static gboolean editor_get_iter_at_widget_point(AppGui *gui, gdouble x, gdouble y, GtkTextIter *iter);
-static void apply_regex_conceal(GtkTextBuffer *buf, const gchar *text, const gchar *pattern, gint cursor_char, gint delim_len, GtkTextTag *conceal_tag);
-static void apply_regex_conceal_local(GtkTextBuffer *buf, const gchar *text, gint range_start_offset, const gchar *pattern, gint cursor_char, gint delim_len, GtkTextTag *conceal_tag);
-void on_buffer_changed(GtkTextBuffer *buf, gpointer user_data);
-static void on_buffer_modified_changed(GtkTextBuffer *buf, gpointer user_data);
-static void on_cursor_position_changed(GObject *object, GParamSpec *pspec, gpointer user_data);
-static void on_format_clicked(GtkButton *btn, gpointer user_data);
-static void on_para_clicked(GtkButton *btn, gpointer user_data);
-static gboolean on_editor_mouse_event(GtkEventControllerLegacy *controller, GdkEvent *event, gpointer user_data);
-gboolean keycode_matches_latin_keyval(guint keycode, guint target_keyval);
-static void show_keybindings_window(AppGui *gui);
-static void on_settings_btn_clicked(GtkButton *btn, gpointer user_data);
-static gboolean on_settings_window_close_request(GtkWindow *window, gpointer user_data);
-static void on_status_bar_pos_changed(GObject *gobject, GParamSpec *pspec, gpointer user_data);
-static void on_sidebar_side_changed(GObject *gobject, GParamSpec *pspec, gpointer user_data);
-static void on_export_pdf_clicked(GtkButton *btn, gpointer user_data);
-static void on_status_bar_new_file_clicked(GtkButton *btn, gpointer user_data);
-static void on_status_bar_open_file_clicked(GtkButton *btn, gpointer user_data);
-static void on_status_bar_export_pdf_clicked(GtkButton *btn, gpointer user_data);
-
-void qirtas_export_to_pdf(AppGui *gui);
-static char *replace_anchors_with_hrs(const char *src);
-static void on_save_as_dialog_response(GObject *source_object, GAsyncResult *res, gpointer user_data);
-void trigger_save_as(AppGui *gui);
-static int get_line_height(GtkWidget *text_view);
-static void cleanup_measurement_state(AppGui *gui);
-static void init_measure_view(AppGui *gui);
-static void get_spacer_heights(AppGui *gui, int start_line, int end_line, int *out_top_h, int *out_bottom_h);
-static int get_line_at_y(AppGui *gui, double y);
-static double get_y_for_line(AppGui *gui, int line);
-static gboolean measure_lines_idle_callback(gpointer user_data);
-
-/* Sync callbacks defined in gui_sync.c */
-void load_sync_credentials(AppGui *gui);
-void on_save_credentials_clicked(GtkButton *btn, gpointer user_data);
-void on_sync_connect_clicked(GtkButton *btn, gpointer user_data);
-void on_sync_submit_clicked(GtkButton *btn, gpointer user_data);
-void on_sync_now_clicked(GtkButton *btn, gpointer user_data);
-void on_dropbox_save_credentials_clicked(GtkButton *btn, gpointer user_data);
-void on_dropbox_connect_clicked(GtkButton *btn, gpointer user_data);
-void on_dropbox_submit_clicked(GtkButton *btn, gpointer user_data);
-void on_dropbox_now_clicked(GtkButton *btn, gpointer user_data);
-void on_github_save_credentials_clicked(GtkButton *btn, gpointer user_data);
-void on_github_connect_clicked(GtkButton *btn, gpointer user_data);
-void on_github_now_clicked(GtkButton *btn, gpointer user_data);
-void on_local_sync_clicked(GtkButton *btn, gpointer user_data);
-
-
-
-static gboolean parse_shortcut_string(const char *str, guint *out_keyval, GdkModifierType *out_state);
-static void init_app_shortcuts(void);
-gboolean match_app_shortcut(const char *action_id, guint keyval, guint keycode, GdkModifierType state);
-static gboolean on_settings_key_pressed(GtkEventControllerKey *ctrl, guint keyval, guint keycode, GdkModifierType state, gpointer user_data);
-static void on_edit_shortcut_clicked(GtkButton *btn, gpointer user_data);
+static Position advance_position(Position pos, const char *text) {
+    if (!text) return pos;
+    const char *p = text;
+    while (*p) {
+        gunichar c = g_utf8_get_char(p);
+        if (c == '\n') {
+            pos.line += 1;
+            pos.col = 0;
+        } else {
+            pos.col += 1;
+        }
+        p = g_utf8_next_char(p);
+    }
+    return pos;
+}
 
 
 
 /* FFI — Called from Zig */
-char *gui_get_text(void);
-void gui_free_text(char *text);
 void gui_set_text(const char *text, int len);
 void gui_set_title(const char *title);
 void gui_set_sync_status(const char *status);
@@ -189,6 +131,9 @@ void gui_update_sync_status(int connected, const char *status_text);
 void gui_update_dropbox_status(int connected, const char *status_text);
 void gui_update_github_status(int connected, const char *status_text);
 void gui_update_local_sync_status(int connected, const char *status_text);
+void gui_tabs_close(AppGui *gui, int index);
+void gui_tabs_add_or_select(AppGui *gui, const char *filepath);
+void load_sync_credentials(AppGui *gui);
 
 /* FFI — Implemented in Zig */
 void zig_open_wiki_link(const char *note_name);
@@ -217,6 +162,12 @@ void zig_github_now(void);
 int  zig_github_check_status(void);
 void zig_github_disconnect(void);
 void zig_local_sync_now(void);
+void zig_set_layout_dividers(int enabled);
+int zig_get_layout_dividers(void);
+void zig_set_bottom_margin(int enabled);
+int zig_get_bottom_margin(void);
+void zig_set_focus_mode(int enabled);
+int zig_get_focus_mode(void);
 
 /* ============================================================
  * CSS — Deep Slate Dark Theme
@@ -1160,9 +1111,68 @@ static char *replace_anchors_with_hrs(const char *src) {
 
 
 
+void gui_push_undo_snapshot(void) {
+    if (!global_gui || global_gui->loading_viewport) return;
+
+    int line = 0;
+    int col = 0;
+    gui_get_cursor_position(&line, &col);
+    zig_undo_push(line, col);
+}
+
+void gui_set_buffer_modified(gboolean modified) {
+    if (!global_source_view) return;
+    GtkTextBuffer *buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(global_source_view));
+    gtk_text_buffer_set_modified(buf, modified);
+}
+
+void gui_reload_viewport(void) {
+    if (!global_gui) return;
+    if (global_gui->loading_viewport) return;
+    request_viewport_position(global_gui, global_gui->viewport_start_line);
+}
+
+static int get_page_size(int total_lines) {
+    if (total_lines > 4000) return 250;
+    if (total_lines > 2000) return 300;
+    return 400;
+}
+
+void request_viewport_position(AppGui *gui, int abs_line) {
+    if (!gui) return;
+    if (gui->loading_viewport) {
+        gui->pending_line = abs_line;
+        return;
+    }
+
+    int page_size = get_page_size(gui->total_virtual_lines);
+    int margin = page_size / 5;
+    if (abs_line >= gui->viewport_start_line + margin &&
+        abs_line <  gui->viewport_end_line   - margin) {
+        return;
+    }
+
+    int new_start = MAX(0, abs_line - (page_size / 2));
+    int new_end   = MIN(gui->total_virtual_lines, new_start + page_size);
+    
+    if (new_end >= gui->total_virtual_lines) {
+        new_end = gui->total_virtual_lines;
+        new_start = MAX(0, new_end - 400);
+    }
+
+    if (new_start == gui->viewport_start_line &&
+        new_end   == gui->viewport_end_line) {
+        return;
+    }
+
+    load_viewport_page(gui, new_start);
+}
+
 void on_buffer_changed(GtkTextBuffer *buf, gpointer user_data) {
     AppGui *gui = (AppGui *)user_data;
+    if (gui && gui->loading_viewport) return;
     
+    zig_undo_commit();
     check_and_insert_hr(buf, gui);
     
     GtkTextIter start, end;
@@ -1205,6 +1215,7 @@ void on_buffer_changed(GtkTextBuffer *buf, gpointer user_data) {
 
 static void on_buffer_modified_changed(GtkTextBuffer *buf, gpointer user_data) {
     AppGui *gui = (AppGui *)user_data;
+    if (gui && gui->loading_viewport) return;
     if (gui && gui->active_tab_index != -1 && gui->active_tab_index < gui->num_tabs) {
         gboolean is_modified = gtk_text_buffer_get_modified(buf);
         gui->tab_modified[gui->active_tab_index] = is_modified;
@@ -1226,7 +1237,8 @@ static void on_cursor_position_changed(GObject *object, GParamSpec *pspec, gpoin
 }
 
 void on_insert_text_before(GtkTextBuffer *buf, GtkTextIter *location, gchar *text, gint len, gpointer user_data) {
-    (void)user_data;
+    AppGui *gui = (AppGui *)user_data;
+    if (gui && gui->loading_viewport) return;
     if (len != 1) return;
     
     char c = text[0];
@@ -1249,19 +1261,12 @@ void on_insert_text_before(GtkTextBuffer *buf, GtkTextIter *location, gchar *tex
             return;
         }
 
-        gint offset = gtk_text_iter_get_offset(location);
-        g_signal_handlers_block_by_func(buf, on_insert_text_before, user_data);
-        
         gchar both_chars[3] = { c, closing, 0 };
-        GtkTextIter target_iter;
-        gtk_text_buffer_get_iter_at_offset(buf, &target_iter, offset);
-        gtk_text_buffer_insert(buf, &target_iter, both_chars, 2);
-        
-        GtkTextIter cursor_iter;
-        gtk_text_buffer_get_iter_at_offset(buf, &cursor_iter, offset + 1);
-        gtk_text_buffer_place_cursor(buf, &cursor_iter);
-        
-        g_signal_handlers_unblock_by_func(buf, on_insert_text_before, user_data);
+        Position pos = iter_to_position(location);
+        zig_insert_text(pos, both_chars);
+        request_viewport_position(global_gui, global_gui->viewport_start_line);
+        gui_set_cursor_position(pos.line + 1, pos.col + 1);
+        zig_undo_commit();
         g_signal_stop_emission_by_name(buf, "insert-text");
     } else if (c == '"' || c == ']' || c == ')' || c == '}' || c == '*' || c == '_' || c == '`') {
         GtkTextIter next_iter = *location;
@@ -1344,12 +1349,19 @@ static void on_paste_plain_text_received(GObject *source_object, GAsyncResult *r
         AppGui *gui = (AppGui *)user_data;
         GtkTextBuffer *buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(gui->source_view));
         GtkTextIter start, end;
-        gtk_text_buffer_begin_user_action(buf);
-        if (gtk_text_buffer_get_selection_bounds(buf, &start, &end)) {
-            gtk_text_buffer_delete(buf, &start, &end);
+        if (!gtk_text_buffer_get_selection_bounds(buf, &start, &end)) {
+            gtk_text_buffer_get_iter_at_mark(buf, &start, gtk_text_buffer_get_insert(buf));
+            end = start;
         }
-        gtk_text_buffer_insert_at_cursor(buf, text, -1);
-        gtk_text_buffer_end_user_action(buf);
+
+        Position start_pos = iter_to_position(&start);
+        Position end_pos = iter_to_position(&end);
+        zig_replace_range(start_pos, end_pos, text);
+        request_viewport_position(gui, gui->viewport_start_line);
+
+        Position cursor_pos = advance_position(start_pos, text);
+        gui_set_cursor_position(cursor_pos.line + 1, cursor_pos.col);
+        zig_undo_commit();
         g_free(text);
     }
 }
@@ -1451,8 +1463,6 @@ void clear_selection_formatting(GtkTextBuffer *buf) {
         return;
     }
 
-    gtk_text_buffer_begin_user_action(buf);
-
     GtkTextTagTable *table = gtk_text_buffer_get_tag_table(buf);
     GtkTextTag *tag_left = gtk_text_tag_table_lookup(table, "align-left");
     GtkTextTag *tag_center = gtk_text_tag_table_lookup(table, "align-center");
@@ -1486,23 +1496,18 @@ void clear_selection_formatting(GtkTextBuffer *buf) {
             }
         }
 
-        gint start_offset = gtk_text_iter_get_offset(&start);
-        gtk_text_buffer_delete(buf, &start, &end);
+        Position start_pos = iter_to_position(&start);
+        Position end_pos = iter_to_position(&end);
+        zig_replace_range(start_pos, end_pos, cleaned->str);
+        request_viewport_position(global_gui, global_gui->viewport_start_line);
 
-        GtkTextIter insert_iter;
-        gtk_text_buffer_get_iter_at_offset(buf, &insert_iter, start_offset);
-        gtk_text_buffer_insert(buf, &insert_iter, cleaned->str, -1);
-
-        GtkTextIter select_start, select_end;
-        gtk_text_buffer_get_iter_at_offset(buf, &select_start, start_offset);
-        gtk_text_buffer_get_iter_at_offset(buf, &select_end, start_offset + cleaned->len);
-        gtk_text_buffer_select_range(buf, &select_start, &select_end);
+        Position select_end = advance_position(start_pos, cleaned->str);
+        select_position_range(global_gui, start_pos, select_end);
+        zig_undo_commit();
 
         g_string_free(cleaned, TRUE);
     }
     g_free(text);
-
-    gtk_text_buffer_end_user_action(buf);
 }
 
 static AppShortcut app_shortcuts[] = {
@@ -1942,39 +1947,32 @@ gboolean keypress_has_text_modifier(GdkModifierType state) {
 
 void insert_text_pair(GtkTextBuffer *buf, const char *open, const char *close) {
     GtkTextIter start, end;
-    gtk_text_buffer_begin_user_action(buf);
+    AppGui *gui = global_gui;
 
     if (gtk_text_buffer_get_selection_bounds(buf, &start, &end)) {
-        gint start_offset = gtk_text_iter_get_offset(&start);
         gchar *selected = gtk_text_buffer_get_text(buf, &start, &end, TRUE);
         gchar *wrapped = g_strconcat(open, selected, close, NULL);
-
-        gtk_text_buffer_delete(buf, &start, &end);
-        gtk_text_buffer_get_iter_at_offset(buf, &start, start_offset);
-        gtk_text_buffer_insert(buf, &start, wrapped, -1);
-
-        GtkTextIter sel_start, sel_end;
-        gtk_text_buffer_get_iter_at_offset(buf, &sel_start, start_offset + (gint)strlen(open));
-        gtk_text_buffer_get_iter_at_offset(buf, &sel_end,
-                                           start_offset + (gint)strlen(open) + (gint)g_utf8_strlen(selected, -1));
-        gtk_text_buffer_select_range(buf, &sel_start, &sel_end);
+        Position start_pos = iter_to_position(&start);
+        Position end_pos = iter_to_position(&end);
+        zig_replace_range(start_pos, end_pos, wrapped);
+        request_viewport_position(gui, gui->viewport_start_line);
+        select_position_range(gui, start_pos, advance_position(start_pos, wrapped));
+        zig_undo_commit();
 
         g_free(selected);
         g_free(wrapped);
     } else {
         GtkTextIter cursor;
         gtk_text_buffer_get_iter_at_mark(buf, &cursor, gtk_text_buffer_get_insert(buf));
-        gint cursor_offset = gtk_text_iter_get_offset(&cursor);
         gchar *pair = g_strconcat(open, close, NULL);
-
-        gtk_text_buffer_insert(buf, &cursor, pair, -1);
-        gtk_text_buffer_get_iter_at_offset(buf, &cursor, cursor_offset + (gint)strlen(open));
-        gtk_text_buffer_place_cursor(buf, &cursor);
-
+        Position cursor_pos = iter_to_position(&cursor);
+        zig_insert_text(cursor_pos, pair);
+        request_viewport_position(gui, gui->viewport_start_line);
+        Position after_open = advance_position(cursor_pos, open);
+        gui_set_cursor_position(after_open.line + 1, after_open.col);
+        zig_undo_commit();
         g_free(pair);
     }
-
-    gtk_text_buffer_end_user_action(buf);
 }
 
 gboolean maybe_skip_closing_pair(GtkTextBuffer *buf, const char *close) {
@@ -2011,9 +2009,12 @@ gboolean maybe_delete_empty_pair(GtkTextBuffer *buf) {
         strcmp(around, "``") == 0;
 
     if (is_pair) {
-        gtk_text_buffer_begin_user_action(buf);
-        gtk_text_buffer_delete(buf, &prev, &next);
-        gtk_text_buffer_end_user_action(buf);
+        Position start_pos = iter_to_position(&prev);
+        Position end_pos = iter_to_position(&next);
+        zig_delete_range(start_pos, end_pos);
+        request_viewport_position(global_gui, global_gui->viewport_start_line);
+        gui_set_cursor_position(start_pos.line + 1, start_pos.col);
+        zig_undo_commit();
     }
 
     g_free(around);
@@ -2021,89 +2022,119 @@ gboolean maybe_delete_empty_pair(GtkTextBuffer *buf) {
 }
 
 void toggle_comment_current_line(GtkTextBuffer *buf) {
+    (void)buf;
     GtkTextIter cursor_iter;
     gtk_text_buffer_get_iter_at_mark(buf, &cursor_iter, gtk_text_buffer_get_insert(buf));
-    gint line_num = gtk_text_iter_get_line(&cursor_iter);
-    gint col = gtk_text_iter_get_line_offset(&cursor_iter);
+    int abs_line = global_gui->viewport_start_line + gtk_text_iter_get_line(&cursor_iter);
+    int col = gtk_text_iter_get_line_offset(&cursor_iter);
 
-    gtk_text_buffer_begin_user_action(buf);
+    int len = 0;
+    extern const char *zig_get_text_for_line_range(int start_line, int end_line, int *out_len);
+    const char *line_text = zig_get_text_for_line_range(abs_line, abs_line + 1, &len);
+    if (!line_text) return;
 
-    GtkTextIter line_start, line_end;
-    gtk_text_buffer_get_iter_at_line(buf, &line_start, line_num);
-    line_end = line_start;
-    gtk_text_iter_forward_to_line_end(&line_end);
-
-    gchar *line_text = gtk_text_buffer_get_text(buf, &line_start, &line_end, FALSE);
+    char *line_dup = g_strndup(line_text, len);
 
     int ws = 0;
-    while (line_text[ws] == ' ' || line_text[ws] == '\t') ws++;
+    while (line_dup[ws] == ' ' || line_dup[ws] == '\t') ws++;
 
-    char *content = line_text + ws;
+    char *content = line_dup + ws;
     gboolean is_commented = FALSE;
+    size_t content_len = strlen(content);
+    while (content_len > 0 && (content[content_len - 1] == '\n' || content[content_len - 1] == '\r')) {
+        content[content_len - 1] = '\0';
+        content_len--;
+    }
+
     if (strncmp(content, "<!--", 4) == 0) {
-        size_t len = strlen(content);
-        if (len >= 7 && strcmp(content + len - 3, "-->") == 0) {
+        if (content_len >= 7 && strcmp(content + content_len - 3, "-->") == 0) {
             is_commented = TRUE;
         }
     }
 
-    gchar *new_text = NULL;
+    char *new_text = NULL;
     if (is_commented) {
-        size_t len = strlen(content);
-        gchar *inner = g_strndup(content + 4, len - 7);
+        char *inner = g_strndup(content + 4, content_len - 7);
         char *start_p = inner;
         if (start_p[0] == ' ') start_p++;
         size_t inner_len = strlen(start_p);
         if (inner_len > 0 && start_p[inner_len - 1] == ' ') {
             start_p[inner_len - 1] = '\0';
         }
-        gchar *indent = g_strndup(line_text, ws);
-        new_text = g_strconcat(indent, start_p, NULL);
+        char *indent = g_strndup(line_dup, ws);
+        new_text = g_strconcat(indent, start_p, "\n", NULL);
         g_free(inner);
         g_free(indent);
     } else {
-        gchar *indent = g_strndup(line_text, ws);
-        new_text = g_strconcat(indent, "<!-- ", content, " -->", NULL);
+        char *indent = g_strndup(line_dup, ws);
+        new_text = g_strconcat(indent, "<!-- ", content, " -->\n", NULL);
         g_free(indent);
     }
 
-    gint start_offset = gtk_text_iter_get_offset(&line_start);
-    gtk_text_buffer_delete(buf, &line_start, &line_end);
-
-    GtkTextIter insert_iter;
-    gtk_text_buffer_get_iter_at_offset(buf, &insert_iter, start_offset);
-    gtk_text_buffer_insert(buf, &insert_iter, new_text, -1);
-
-    GtkTextIter final_cursor;
-    gtk_text_buffer_get_iter_at_line(buf, &final_cursor, line_num);
-    for (int i = 0; i < col; i++) {
-        if (gtk_text_iter_ends_line(&final_cursor)) break;
-        gtk_text_iter_forward_char(&final_cursor);
-    }
-    gtk_text_buffer_place_cursor(buf, &final_cursor);
-
-    g_free(line_text);
+    Position start = { abs_line, 0 };
+    Position end = { abs_line + 1, 0 };
+    zig_replace_range(start, end, new_text);
+    g_free(line_dup);
     g_free(new_text);
 
-    gtk_text_buffer_end_user_action(buf);
+    // Reload viewport
+    request_viewport_position(global_gui, global_gui->viewport_start_line);
+
+    // Place cursor
+    gui_set_cursor_position(abs_line + 1, col);
+    zig_undo_commit();
 }
 
 void on_insert_text_after(GtkTextBuffer *buf, GtkTextIter *location, gchar *text, gint len, gpointer user_data) {
-    (void)location; (void)text; (void)len; (void)user_data;
+    AppGui *gui = (AppGui *)user_data;
+    if (gui && gui->loading_viewport) return;
+
+    int end_offset = gtk_text_iter_get_offset(location);
+    int char_len = g_utf8_strlen(text, len);
+    int start_offset = end_offset - char_len;
+    if (start_offset < 0) start_offset = 0;
+
+    GtkTextIter start_iter;
+    gtk_text_buffer_get_iter_at_offset(buf, &start_iter, start_offset);
+
+    int start_line = gui->viewport_start_line + gtk_text_iter_get_line(&start_iter);
+    int start_col = gtk_text_iter_get_line_offset(&start_iter);
+
+    Position pos = { start_line, start_col };
+    gchar *text_dup = g_strndup(text, len);
+    extern void zig_insert_text(Position pos, const char *text);
+    zig_insert_text(pos, text_dup);
+    g_free(text_dup);
+
     gui_set_sync_status("Not Synced");
-    /* Defer direction updates and wiki-link tag pass to idle.
-     * Modifying tags synchronously inside insert-text::after fires before Pango layout is stable,
-     * which can leave GTK with a stale byte-index cache causing fatal aborts. */
     g_idle_add_once((GSourceOnceFunc)update_all_paragraphs_direction, buf);
     
     extern void apply_wiki_link_tags_local(GtkTextBuffer *buf);
     apply_wiki_link_tags_local(buf);
 }
 
+void on_delete_range_before(GtkTextBuffer *buf, GtkTextIter *start, GtkTextIter *end, gpointer user_data) {
+    AppGui *gui = (AppGui *)user_data;
+    if (gui && gui->loading_viewport) return;
+
+    int start_line = gui->viewport_start_line + gtk_text_iter_get_line(start);
+    int start_col = gtk_text_iter_get_line_offset(start);
+
+    int end_line = gui->viewport_start_line + gtk_text_iter_get_line(end);
+    int end_col = gtk_text_iter_get_line_offset(end);
+
+    Position p_start = { start_line, start_col };
+    Position p_end = { end_line, end_col };
+
+    extern void zig_delete_range(Position start, Position end);
+    zig_delete_range(p_start, p_end);
+}
+
 void on_delete_range_after(GtkTextBuffer *buf, GtkTextIter *start, GtkTextIter *end, gpointer user_data) {
-    (void)start; (void)end; (void)user_data;
+    AppGui *gui = (AppGui *)user_data;
+    if (gui && gui->loading_viewport) return;
+    (void)start; (void)end;
     gui_set_sync_status("Not Synced");
-    /* Defer direction updates and wiki-link tag pass to idle. */
     g_idle_add_once((GSourceOnceFunc)update_all_paragraphs_direction, buf);
     extern void apply_wiki_link_tags_local(GtkTextBuffer *buf);
     apply_wiki_link_tags_local(buf);
@@ -2810,21 +2841,42 @@ static int get_line_height(GtkWidget *text_view) {
     return pango_height + above + below;
 }
 
+typedef struct { GtkAdjustment *vadj; gulong sig_id; } UnblockData;
+
+static gboolean unblock_scroll_idle(gpointer user_data) {
+    UnblockData *d = user_data;
+    g_signal_handler_unblock(d->vadj, d->sig_id);
+    g_free(d);
+    return G_SOURCE_REMOVE;
+}
+
 static void set_spacers_with_compensation(AppGui *gui, int new_top_h, int new_bottom_h);
-static void load_viewport_page(
+static void viewport_set_range(AppGui *gui, int start_line, int end_line);
+void load_viewport_page(
     AppGui *gui,
     int new_start
 ) {
-    if (!gui) return;
 
-    int new_end = new_start + 100;
+    if (!gui) return;
+    if (gui->loading_viewport) return;
+
+    gdouble saved_scroll = 0;
+    if (gui->vadjustment) {
+        g_signal_handler_block(gui->vadjustment, gui->scroll_signal_id);
+        g_object_freeze_notify(G_OBJECT(gui->vadjustment));
+        saved_scroll = gtk_adjustment_get_value(gui->vadjustment);
+    }
+    gui->loading_viewport = TRUE;
+
+    int page_size = get_page_size(gui->total_virtual_lines);
+    int new_end = new_start + page_size;
 
     if (new_end > gui->total_virtual_lines) {
         new_end = gui->total_virtual_lines;
-        new_start = new_end - 100;
-        if (new_start < 0)
-            new_start = 0;
+        new_start = MAX(0, new_end - page_size);
     }
+
+    gui->last_scroll_requested_line = -1;
 
     extern const char *zig_get_text_for_line_range(
         int start_line,
@@ -2845,122 +2897,98 @@ static void load_viewport_page(
         gtk_text_view_get_buffer(
             GTK_TEXT_VIEW(gui->source_view)
         );
+    g_print(
+    	"LOAD_VIEWPORT start=%d end=%d\n",
+    	new_start,
+    	new_end
+	);
 
-    gtk_text_buffer_set_text(
-        buf,
-        new_text ? new_text : "",
-        new_len
-    );
+    viewport_set_range(gui, new_start, new_end);
 
-    gui->active_page_start_line = new_start;
-    gui->active_page_end_line = new_end;
+    gtk_text_buffer_set_text(buf, new_text ? new_text : "", new_len);
+
+    parse_and_render_hrs(buf, gui);
+    update_all_paragraphs_direction(buf);
+    apply_wiki_link_tags(buf);
+
+    gui->loading_viewport = FALSE;
+
+    if (gui->vadjustment) {
+        gtk_adjustment_set_value(gui->vadjustment, saved_scroll);
+        g_object_thaw_notify(G_OBJECT(gui->vadjustment));
+
+        UnblockData *d = g_new(UnblockData, 1);
+        d->vadj   = gui->vadjustment;
+        d->sig_id = gui->scroll_signal_id;
+        g_idle_add(unblock_scroll_idle, d);
+    }
+
+    if (gui->pending_line >= 0) {
+        int line = gui->pending_line;
+        gui->pending_line = -1;
+        request_viewport_position(gui, line);
+    }
+}
+
+static int   last_loaded_start = -1;
+static guint scroll_timer_id   = 0;
+static int   queued_line       = -1;
+static gint64 last_load_time_ms  = 0;
+static int    last_load_direction = 0;
+
+static gboolean fire_scroll(gpointer user_data) {
+    AppGui *gui = user_data;
+    scroll_timer_id = 0;
+
+    if (queued_line >= 0) {
+        int line = queued_line;
+        queued_line = -1;
+        
+        int page_size = get_page_size(gui->total_virtual_lines);
+        int new_start = MAX(0, line - (page_size / 2));
+        int direction = (new_start > last_loaded_start) ? 1 : -1;
+
+        gint64 now = g_get_monotonic_time() / 1000;
+
+        // Suppress direction reversals within 200ms of last load
+        if (direction != last_load_direction &&
+            (now - last_load_time_ms) < 200) {
+            return G_SOURCE_REMOVE;
+        }
+        
+        if (new_start == last_loaded_start) return G_SOURCE_REMOVE;
+        
+        last_loaded_start   = new_start;
+        last_load_direction = direction;
+        last_load_time_ms   = now;
+        
+        request_viewport_position(gui, line);
+    }
+    return G_SOURCE_REMOVE;
 }
 
 static void on_scroll_changed(GtkAdjustment *adj, gpointer user_data) {
     AppGui *gui = (AppGui *)user_data;
     if (!gui->virtual_scroll_enabled) return;
-    if (gui->in_scroll_update) return;
+    if (gui->loading_viewport) return;
 
-    double value = gtk_adjustment_get_value(adj);
+    static gdouble last_value = -1.0;
+    gdouble value = gtk_adjustment_get_value(adj);
+
+    // Skip if negligible movement (layout reflow noise)
+    if (fabs(value - last_value) < 1.0) return;
+    last_value = value;
+
     double page_size = gtk_adjustment_get_page_size(adj);
+    int center_line = get_line_at_y(gui, value + page_size / 2.0);
+    if (center_line == gui->last_scroll_requested_line) return;
     
-    int line_h = get_line_height(gui->source_view);
-    if (line_h <= 0) line_h = 24;
-    
-    double max_scroll = gtk_adjustment_get_upper(adj) - page_size;
-    if (max_scroll < 0) max_scroll = 0;
-
-    if (value < 0.0) {
-        gui->in_scroll_update = TRUE;
-        gtk_adjustment_set_value(adj, 0.0);
-        value = 0.0;
-        gui->in_scroll_update = FALSE;
+    queued_line = center_line;
+    if (scroll_timer_id != 0) {
+        g_source_remove(scroll_timer_id);
     }
-    
-    int view_start_line = get_line_at_y(gui, value);
-    int view_end_line = get_line_at_y(gui, value + page_size);
-    
-    gboolean need_update = FALSE;
-    if (view_start_line < gui->active_page_start_line + 10 && gui->active_page_start_line > 0) {
-        need_update = TRUE;
-    } else if (view_end_line > gui->active_page_end_line - 10 && gui->active_page_end_line < gui->total_virtual_lines) {
-        need_update = TRUE;
-    }
-
-    g_print("SCROLL_CALLBACK: value=%f, view_start=%d, view_end=%d, active_start=%d, active_end=%d, total_lines=%d, need_update=%d\n",
-            value, view_start_line, view_end_line, gui->active_page_start_line, gui->active_page_end_line, gui->total_virtual_lines, need_update);
-    
-    if (need_update) {
-        gui->in_scroll_update = TRUE;
-        
-        GtkTextBuffer *buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(gui->source_view));
-        GtkTextIter start_iter, end_iter;
-        gtk_text_buffer_get_bounds(buf, &start_iter, &end_iter);
-        char *page_text = gtk_text_buffer_get_text(buf, &start_iter, &end_iter, TRUE);
-        
-        extern int zig_save_active_page(int start_line, int end_line, const char *text);
-        int status = 0;
-        g_free(page_text);
-        (void)status;
-        
-        int center_line = (view_start_line + view_end_line) / 2;
-        int new_start = center_line - 50;
-        if (new_start < 0) new_start = 0;
-        int new_end = new_start + 100;
-        if (new_end > gui->total_virtual_lines) {
-            new_end = gui->total_virtual_lines;
-            new_start = new_end - 100;
-            if (new_start < 0) new_start = 0;
-        }
-        
-        extern const char *zig_get_text_for_line_range(int start_line, int end_line, int *out_len);
-        int new_len = 0;
-        const char *new_text = zig_get_text_for_line_range(new_start, new_end, &new_len);
-        
-        extern void on_insert_text_before(GtkTextBuffer *buf, GtkTextIter *location, gchar *text, gint len, gpointer user_data);
-        extern void on_insert_text_after(GtkTextBuffer *buf, GtkTextIter *location, gchar *text, gint len, gpointer user_data);
-        extern void on_delete_range_after(GtkTextBuffer *buf, GtkTextIter *start, GtkTextIter *end, gpointer user_data);
-
-        /* Block ALL buffer signals that touch iterators before replacing content.
-         * gtk_text_buffer_set_text() fires delete-range then insert-text, which
-         * also moves the insert mark → fires mark-set → on_mark_set() →
-         * update_conceal_markdown() which uses iterators invalidated by set_text.
-         * Block on_buffer_changed and on_cursor_position_changed for the same reason. */
-        g_signal_handlers_block_by_func(buf, on_insert_text_before, gui);
-        g_signal_handlers_block_by_func(buf, on_insert_text_after, gui);
-        g_signal_handlers_block_by_func(buf, on_delete_range_after, gui);
-        g_signal_handlers_block_by_func(buf, on_mark_set, gui);
-        g_signal_handlers_block_by_func(buf, on_buffer_changed, gui);
-        g_signal_handlers_block_by_func(buf, on_cursor_position_changed, gui);
-        
-        gtk_text_buffer_set_text(buf, new_text ? new_text : "", new_len);
-        reset_cursor_trail(gui);
-        
-        g_signal_handlers_unblock_by_func(buf, on_insert_text_before, gui);
-        g_signal_handlers_unblock_by_func(buf, on_insert_text_after, gui);
-        g_signal_handlers_unblock_by_func(buf, on_delete_range_after, gui);
-        g_signal_handlers_unblock_by_func(buf, on_mark_set, gui);
-        g_signal_handlers_unblock_by_func(buf, on_buffer_changed, gui);
-        g_signal_handlers_unblock_by_func(buf, on_cursor_position_changed, gui);
-
-        /* Defer post-update work to idle so GTK finishes its own iterator
-         * bookkeeping (IM context, layout) before we touch the buffer again. */
-        g_idle_add_once((GSourceOnceFunc)update_all_paragraphs_direction, buf);
-        extern void apply_wiki_link_tags(GtkTextBuffer *buf);
-        g_idle_add_once((GSourceOnceFunc)apply_wiki_link_tags, buf);
-        g_idle_add_once((GSourceOnceFunc)update_conceal_markdown, buf);
-        
-        gui->active_page_start_line = new_start;
-        gui->active_page_end_line = new_end;
-        
-        int top_h = 0, bottom_h = 0;
-        get_spacer_heights(gui, new_start, new_end, &top_h, &bottom_h);
-        set_spacers_with_compensation(gui, top_h, bottom_h);
-        
-        gui->in_scroll_update = FALSE;
-    }
+    scroll_timer_id = g_timeout_add(60, fire_scroll, gui);
 }
-
 static void set_spacers_with_compensation(AppGui *gui, int new_top_h, int new_bottom_h) {
     if (!gui->vadjustment) {
         gtk_widget_set_size_request(gui->top_spacer, -1, new_top_h);
@@ -2974,40 +3002,18 @@ static void set_spacers_with_compensation(AppGui *gui, int new_top_h, int new_bo
     
     int delta = new_top_h - old_top_h;
     
-    g_signal_handlers_block_by_func(gui->vadjustment, G_CALLBACK(on_scroll_changed), gui);
+    g_signal_handler_block(gui->vadjustment, gui->scroll_signal_id);
     
     gtk_widget_set_size_request(gui->top_spacer, -1, new_top_h);
     gtk_widget_set_size_request(gui->bottom_spacer, -1, new_bottom_h);
     
     gtk_widget_queue_resize(gui->virtual_layout_box);
     
-    double old_val = gtk_adjustment_get_value(gui->vadjustment);
-    gtk_adjustment_set_value(gui->vadjustment, old_val + delta);
     
-    g_signal_handlers_unblock_by_func(gui->vadjustment, G_CALLBACK(on_scroll_changed), gui);
-}
-
-gboolean simulate_delete_cb(gpointer user_data) {
-    static int state = 0;
-    AppGui *gui = (AppGui *)user_data;
-    if (state == 0) {
-        g_print("SIMULATION: scrolling to line 1000...\n");
-        gui_set_cursor_position(1000, 0);
-        g_print("SIMULATION: scroll completed.\n");
-        state = 1;
-        return G_SOURCE_CONTINUE; // Run again in next timeout
-    } else if (state == 1) {
-        g_print("SIMULATION: selecting all and deleting...\n");
-        GtkTextBuffer *buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(gui->source_view));
-        GtkTextIter start, end;
-        gtk_text_buffer_get_bounds(buf, &start, &end);
-        gtk_text_buffer_select_range(buf, &start, &end);
-        gtk_text_buffer_delete(buf, &start, &end);
-        g_print("SIMULATION: delete completed.\n");
-        state = 2;
-        return G_SOURCE_REMOVE;
-    }
-    return G_SOURCE_REMOVE;
+    UnblockData *d = g_new(UnblockData, 1);
+    d->vadj   = gui->vadjustment;
+    d->sig_id = gui->scroll_signal_id;
+    g_idle_add(unblock_scroll_idle, d);
 }
 
 static void activate(GtkApplication *app, gpointer user_data) {
@@ -3027,6 +3033,8 @@ static void activate(GtkApplication *app, gpointer user_data) {
     gtk_window_set_decorated(GTK_WINDOW(window), FALSE);
 
     AppGui *gui = g_new0(AppGui, 1);
+    gui->last_scroll_requested_line = -1;
+    gui->pending_line = -1;
     gui->window       = window;
     g_strlcpy(gui->current_en_font, "Inter", sizeof(gui->current_en_font));
     g_strlcpy(gui->current_ar_font, "Amiri", sizeof(gui->current_ar_font));
@@ -3435,7 +3443,7 @@ static void activate(GtkApplication *app, gpointer user_data) {
 
     GtkAdjustment *vadj = gtk_scrolled_window_get_vadjustment(GTK_SCROLLED_WINDOW(scrolled));
     gui->vadjustment = vadj;
-    g_signal_connect(vadj, "value-changed", G_CALLBACK(on_scroll_changed), gui);
+    gui->scroll_signal_id = g_signal_connect(vadj, "value-changed", G_CALLBACK(on_scroll_changed), gui);
 
     /* Typography & Render spacing (line height equivalent) */
     gtk_text_view_set_left_margin(GTK_TEXT_VIEW(source_view), 64);
@@ -3461,6 +3469,7 @@ static void activate(GtkApplication *app, gpointer user_data) {
     /* Markdown syntax highlighting */
     GtkSourceBuffer *src_buf =
         GTK_SOURCE_BUFFER(gtk_text_view_get_buffer(GTK_TEXT_VIEW(source_view)));
+    gtk_text_buffer_set_enable_undo(GTK_TEXT_BUFFER(src_buf), FALSE);
     gtk_source_buffer_set_highlight_syntax(src_buf, TRUE);
     GtkSourceLanguageManager *lm = gtk_source_language_manager_get_default();
     /* Try absolute path first (works regardless of CWD), then relative fallback */
@@ -3517,6 +3526,7 @@ static void activate(GtkApplication *app, gpointer user_data) {
     /* Wire search and text buffer direction signals */
     g_signal_connect(src_buf, "insert-text", G_CALLBACK(on_insert_text_before), gui);
     g_signal_connect_after(src_buf, "insert-text", G_CALLBACK(on_insert_text_after), gui);
+    g_signal_connect(src_buf, "delete-range", G_CALLBACK(on_delete_range_before), gui);
     g_signal_connect_after(src_buf, "delete-range", G_CALLBACK(on_delete_range_after), gui);
     g_signal_connect(src_buf, "mark-set", G_CALLBACK(on_mark_set), gui);
     g_signal_connect(src_buf, "notify::cursor-position", G_CALLBACK(on_cursor_position_changed), gui);
@@ -4196,9 +4206,6 @@ static void activate(GtkApplication *app, gpointer user_data) {
     gtk_window_present(GTK_WINDOW(window));
     zig_on_gui_ready();
 
-    extern gboolean simulate_delete_cb(gpointer user_data);
-    g_timeout_add(1000, simulate_delete_cb, gui);
-
     load_sync_credentials(gui);
     int connected = zig_sync_check_status();
     gui_update_sync_status(connected, connected ? "Connected" : "Disconnected");
@@ -4460,22 +4467,15 @@ void gui_remove_file_from_index(const char *filename) {
  * FFI — CALLED FROM ZIG (signatures MUST stay identical)
  * ============================================================ */
 
-char *gui_get_text(void) {
-    if (!global_source_view) return NULL;
-    GtkTextBuffer *buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(global_source_view));
-    GtkTextIter start, end;
-    gtk_text_buffer_get_bounds(buf, &start, &end);
-    char *raw = gtk_text_buffer_get_text(buf, &start, &end, TRUE);
-    if (!raw) return NULL;
-    char *clean = replace_anchors_with_hrs(raw);
-    g_free(raw);
-    return clean;
-}
-
-void gui_free_text(char *text) { g_free(text); }
-
 void gui_set_text(const char *text, int len) {
     if (!global_source_view || !global_gui) return;
+    if (!text || len <= 0) return;
+    
+    // Also verify we're on the main thread
+    g_assert(g_main_context_is_owner(g_main_context_default()));
+    
+    global_gui->buffer_generation++;
+    
     GtkTextBuffer *buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(global_source_view));
     
     g_signal_handlers_block_by_func(buf, on_insert_text_before, global_gui);
@@ -4498,11 +4498,9 @@ void gui_set_text(const char *text, int len) {
     
     update_all_paragraphs_direction(buf);
     apply_wiki_link_tags(buf);
-
-    int top_h = 0, bottom_h = 0;
-    get_spacer_heights(global_gui, global_gui->active_page_start_line, global_gui->active_page_end_line, &top_h, &bottom_h);
-    set_spacers_with_compensation(global_gui, top_h, bottom_h);
 }
+
+
 
 void gui_get_cursor_position(int *line, int *col) {
     if (!global_source_view) {
@@ -4514,9 +4512,8 @@ void gui_get_cursor_position(int *line, int *col) {
     GtkTextIter iter;
     GtkTextMark *mark = gtk_text_buffer_get_insert(buf);
     gtk_text_buffer_get_iter_at_mark(buf, &iter, mark);
-    
     int rel_line = gtk_text_iter_get_line(&iter);
-    *line = (global_gui ? global_gui->active_page_start_line : 0) + rel_line + 1;
+    *line = (global_gui ? global_gui->viewport_start_line : 0) + rel_line + 1;
     *col = gtk_text_iter_get_line_offset(&iter);
 }
 
@@ -4527,68 +4524,15 @@ void gui_set_cursor_position(int line, int col) {
     if (target_abs_line < 0) target_abs_line = 0;
     
     // Check if within active page
-    if (target_abs_line < global_gui->active_page_start_line || target_abs_line >= global_gui->active_page_end_line) {
-        // Trigger page reload centered around target_abs_line
-        global_gui->in_scroll_update = TRUE;
-        
-        GtkTextBuffer *buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(global_source_view));
-        GtkTextIter start_iter, end_iter;
-        gtk_text_buffer_get_bounds(buf, &start_iter, &end_iter);
-        char *page_text = gtk_text_buffer_get_text(buf, &start_iter, &end_iter, TRUE);
-        extern int zig_save_active_page(int start_line, int end_line, const char *text);
-        int status = zig_save_active_page(global_gui->active_page_start_line, global_gui->active_page_end_line, page_text);
-        g_free(page_text);
-        (void)status;
-        
-        int new_start = target_abs_line - 50;
-        if (new_start < 0) new_start = 0;
-        int new_end = new_start + 100;
-        if (new_end > global_gui->total_virtual_lines) {
-            new_end = global_gui->total_virtual_lines;
-            new_start = new_end - 100;
-            if (new_start < 0) new_start = 0;
-        }
-        
-        extern const char *zig_get_text_for_line_range(int start_line, int end_line, int *out_len);
-        int new_len = 0;
-        const char *new_text = zig_get_text_for_line_range(new_start, new_end, &new_len);
-        
-        extern void on_insert_text_before(GtkTextBuffer *buf, GtkTextIter *location, gchar *text, gint len, gpointer user_data);
-        extern void on_insert_text_after(GtkTextBuffer *buf, GtkTextIter *location, gchar *text, gint len, gpointer user_data);
-        extern void on_delete_range_after(GtkTextBuffer *buf, GtkTextIter *start, GtkTextIter *end, gpointer user_data);
-        
-        g_signal_handlers_block_by_func(buf, on_insert_text_before, global_gui);
-        g_signal_handlers_block_by_func(buf, on_insert_text_after, global_gui);
-        g_signal_handlers_block_by_func(buf, on_delete_range_after, global_gui);
-        
-        gtk_text_buffer_set_text(buf, new_text ? new_text : "", new_len);
-        reset_cursor_trail(global_gui);
-        
-        g_signal_handlers_unblock_by_func(buf, on_insert_text_before, global_gui);
-        g_signal_handlers_unblock_by_func(buf, on_insert_text_after, global_gui);
-        g_signal_handlers_unblock_by_func(buf, on_delete_range_after, global_gui);
-        
-        update_all_paragraphs_direction(buf);
-        extern void apply_wiki_link_tags(GtkTextBuffer *buf);
-        apply_wiki_link_tags(buf);
-        
-        global_gui->active_page_start_line = new_start;
-        global_gui->active_page_end_line = new_end;
-        
-        int top_h = 0, bottom_h = 0;
-        get_spacer_heights(global_gui, new_start, new_end, &top_h, &bottom_h);
-        set_spacers_with_compensation(global_gui, top_h, bottom_h);
-        
-        if (global_gui->vadjustment) {
-            double target_y = get_y_for_line(global_gui, target_abs_line);
-            gtk_adjustment_set_value(global_gui->vadjustment, target_y);
-        }
-        global_gui->in_scroll_update = FALSE;
+  
+    if (target_abs_line < global_gui->viewport_start_line ||
+        target_abs_line >= global_gui->viewport_end_line) {
+        request_viewport_position(global_gui, target_abs_line);
     }
     
     GtkTextBuffer *buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(global_source_view));
     GtkTextIter iter;
-    int rel_line = target_abs_line - global_gui->active_page_start_line;
+    int rel_line = target_abs_line - global_gui->viewport_start_line;
     if (rel_line < 0) rel_line = 0;
     
     int total_lines = gtk_text_buffer_get_line_count(buf);
@@ -4598,12 +4542,13 @@ void gui_set_cursor_position(int line, int col) {
     if (rel_line < 0) rel_line = 0;
 
     gtk_text_buffer_get_iter_at_line(buf, &iter, rel_line);
-    for (int i = 0; i < col; i++) {
-        if (gtk_text_iter_ends_line(&iter) || gtk_text_iter_is_end(&iter)) {
-            break;
-        }
-        gtk_text_iter_forward_char(&iter);
-    }
+    int line_bytes = gtk_text_iter_get_bytes_in_line(&iter);
+    
+    int safe_col = col;
+    if (safe_col < 0) safe_col = 0;
+    if (safe_col > line_bytes) safe_col = line_bytes;
+
+    gtk_text_buffer_get_iter_at_line_offset(buf, &iter, rel_line, safe_col);
     gtk_text_buffer_select_range(buf, &iter, &iter);
     reset_cursor_trail(global_gui);
 }
@@ -4623,12 +4568,13 @@ static void get_spacer_heights(
     int h = gui->line_height > 0 ? gui->line_height : 24;
 
     *out_top_h = start_line * h;
+    if (*out_top_h < 1) *out_top_h = 1;
 
     *out_bottom_h =
         (gui->total_virtual_lines - end_line) * h;
 
-    if (*out_bottom_h < 0)
-        *out_bottom_h = 0;
+    if (*out_bottom_h < 1)
+        *out_bottom_h = 1;
 }
 
 static int get_line_at_y(AppGui *gui, double y)
@@ -4675,9 +4621,20 @@ void gui_set_virtual_scroll_mode(int enabled, int total_lines) {
         }
         
         global_gui->total_virtual_lines = total_lines;
-        global_gui->active_page_start_line = 0;
-        global_gui->active_page_end_line = total_lines;
+        viewport_set_range(global_gui, 0, total_lines);
     }
+}
+
+static void viewport_set_range(AppGui *gui, int start_line, int end_line)
+{
+    if (!gui) return;
+
+    gui->viewport_start_line = start_line;
+    gui->viewport_end_line = end_line;
+
+    int top_h = 0, bottom_h = 0;
+    get_spacer_heights(gui, start_line, end_line, &top_h, &bottom_h);
+    set_spacers_with_compensation(gui, top_h, bottom_h);
 }
 
 void gui_init_virtual_document(int total_lines, int start_line, int end_line) {
@@ -4686,18 +4643,16 @@ void gui_init_virtual_document(int total_lines, int start_line, int end_line) {
     cleanup_measurement_state(global_gui);
     
     global_gui->total_virtual_lines = total_lines;
-    global_gui->active_page_start_line = start_line;
-    global_gui->active_page_end_line = end_line;
+    viewport_set_range(global_gui, start_line, end_line);
     
-    global_gui->estimated_line_height =
+    global_gui->line_height =
     get_line_height(global_gui->source_view);
 
-    if (global_gui->estimated_line_height <= 0)
-    global_gui->estimated_line_height = 24;
+    if (global_gui->line_height <= 0)
+    global_gui->line_height = 24;
    
     int top_h = 0, bottom_h = 0;
     get_spacer_heights(global_gui, start_line, end_line, &top_h, &bottom_h);
-    set_spacers_with_compensation(global_gui, top_h, bottom_h);
     
     if (global_gui->vadjustment) {
         global_gui->in_scroll_update = TRUE;
@@ -4727,21 +4682,13 @@ void gui_trigger_autosave(void) {
     GtkTextBuffer *buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(global_source_view));
     gui_set_sync_status("Saving...");
     
-    GtkTextIter start_iter, end_iter;
-    gtk_text_buffer_get_bounds(buf, &start_iter, &end_iter);
-    char *page_text = gtk_text_buffer_get_text(buf, &start_iter, &end_iter, TRUE);
-    
-    extern int zig_save_active_page(int start_line, int end_line, const char *text);
-    int status = zig_save_active_page(global_gui->active_page_start_line, global_gui->active_page_end_line, page_text);
-    g_free(page_text);
+    extern int zig_save_document(void);
+    int status = zig_save_document();
     
     if (status == 0) {
         gui_set_sync_status("Saved");
         gtk_text_buffer_set_modified(buf, FALSE);
         if (global_gui->active_tab_index != -1 && global_gui->active_tab_index < global_gui->num_tabs) {
-            char *text = gui_get_text();
-            g_free(global_gui->tab_contents[global_gui->active_tab_index]);
-            global_gui->tab_contents[global_gui->active_tab_index] = text;
             global_gui->tab_modified[global_gui->active_tab_index] = FALSE;
             gui_tabs_refresh(global_gui);
         }
@@ -4786,9 +4733,17 @@ void gui_tabs_save_active_to_cache(void) {
     if (!gui) return;
     int idx = gui->active_tab_index;
     if (idx != -1 && idx < gui->num_tabs) {
-        char *text = gui_get_text();
-        g_free(gui->tab_contents[idx]);
-        gui->tab_contents[idx] = text;
+        if (strcmp(gui->open_tabs[idx], "Untitled") == 0) {
+            extern const char *zig_get_document_text(void);
+            extern void zig_free_document_text(const char *ptr);
+            const char *text = zig_get_document_text();
+            g_free(gui->tab_contents[idx]);
+            gui->tab_contents[idx] = text ? g_strdup(text) : NULL;
+            zig_free_document_text(text);
+        } else {
+            extern int zig_save_document(void);
+            zig_save_document();
+        }
         GtkTextBuffer *buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(gui->source_view));
         gui->tab_modified[idx] = gtk_text_buffer_get_modified(buf);
     }
@@ -4798,10 +4753,12 @@ void gui_tabs_restore_active_from_cache(void) {
     AppGui *gui = global_gui;
     if (!gui) return;
     int idx = gui->active_tab_index;
-    if (idx != -1 && idx < gui->num_tabs && gui->tab_contents[idx] != NULL) {
-        gui_set_text(gui->tab_contents[idx], -1);
-        GtkTextBuffer *buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(gui->source_view));
-        gtk_text_buffer_set_modified(buf, gui->tab_modified[idx]);
+    if (idx != -1 && idx < gui->num_tabs) {
+        if (strcmp(gui->open_tabs[idx], "Untitled") == 0 && gui->tab_contents[idx] != NULL) {
+            gui_set_text(gui->tab_contents[idx], -1);
+            GtkTextBuffer *buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(gui->source_view));
+            gtk_text_buffer_set_modified(buf, gui->tab_modified[idx]);
+        }
     }
 }
 
@@ -5137,20 +5094,44 @@ void gui_get_active_page_bounds(int *start_line, int *end_line, int *total_lines
         *total_lines = 0;
         return;
     }
-    *start_line = global_gui->active_page_start_line;
-    *end_line = global_gui->active_page_end_line;
+    *start_line = global_gui->viewport_start_line;
+    *end_line = global_gui->viewport_end_line;
     *total_lines = global_gui->total_virtual_lines;
+}
+
+void gui_prepare_tab_switch(void) {
+    if (!global_gui) return;
+
+    if (global_gui->source_view) {
+        GtkTextBuffer *buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(global_gui->source_view));
+        gtk_text_buffer_set_text(buf, "Loading…", -1);
+    }
+
+    while (g_main_context_pending(NULL)) {
+        g_main_context_iteration(NULL, FALSE);
+    }
+
+    if (global_gui->vadjustment) {
+        g_signal_handler_block(global_gui->vadjustment, global_gui->scroll_signal_id);
+        gtk_adjustment_set_value(global_gui->vadjustment, 0.0);
+        global_gui->viewport_start_line = 0;
+        global_gui->viewport_end_line = 0;
+        global_gui->last_scroll_requested_line = -1;
+        global_gui->pending_line = -1;
+        g_signal_handler_unblock(global_gui->vadjustment, global_gui->scroll_signal_id);
+    }
 }
 
 void gui_update_total_virtual_lines(int total_lines) {
     g_print("UPDATE_TOTAL_LINES: %d\n", total_lines);
     if (!global_gui) return;
+    if (total_lines <= 0) return;
+    if (global_gui->loading_viewport) return;
     global_gui->total_virtual_lines = total_lines;
     
-    // Update bottom spacer request
-    int line_h = global_gui->estimated_line_height;
+    int line_h = global_gui->line_height;
     if (line_h <= 0) line_h = 24;
-    int bottom_h = (total_lines - global_gui->active_page_end_line) * line_h;
+    int bottom_h = (total_lines - global_gui->viewport_end_line) * line_h;
     if (bottom_h < 0) bottom_h = 0;
     gtk_widget_set_size_request(global_gui->bottom_spacer, -1, bottom_h);
     gtk_widget_queue_resize(global_gui->virtual_layout_box);

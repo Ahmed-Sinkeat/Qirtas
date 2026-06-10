@@ -1,3 +1,6 @@
-# New Notebook Document
-
+# New Notebooocument
+Typing
+Undo
+Redo
+Paste
 - Start writing here...

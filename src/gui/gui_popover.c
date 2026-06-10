@@ -28,6 +28,120 @@ typedef struct {
     AppGui *gui;
 } AddPopoverWidgets;
 
+static Position iter_to_position(GtkTextIter *iter) {
+    Position pos = { 0, 0 };
+    if (!global_gui || !iter) return pos;
+    pos.line = global_gui->viewport_start_line + gtk_text_iter_get_line(iter);
+    pos.col = gtk_text_iter_get_line_offset(iter);
+    return pos;
+}
+
+static Position advance_position(Position pos, const char *text) {
+    if (!text) return pos;
+    const char *p = text;
+    while (*p) {
+        gunichar c = g_utf8_get_char(p);
+        if (c == '\n') {
+            pos.line += 1;
+            pos.col = 0;
+        } else {
+            pos.col += 1;
+        }
+        p = g_utf8_next_char(p);
+    }
+    return pos;
+}
+
+static void select_position_range(AppGui *gui, Position start, Position end) {
+    if (!gui || !gui->source_view) return;
+    GtkTextBuffer *buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(gui->source_view));
+    GtkTextIter start_iter, end_iter;
+
+    int rel_start_line = start.line - gui->viewport_start_line;
+    int rel_end_line = end.line - gui->viewport_start_line;
+    if (rel_start_line < 0) rel_start_line = 0;
+    if (rel_end_line < 0) rel_end_line = 0;
+
+    gtk_text_buffer_get_iter_at_line(buf, &start_iter, rel_start_line);
+    gtk_text_buffer_get_iter_at_line(buf, &end_iter, rel_end_line);
+
+    for (int i = 0; i < start.col; i++) {
+        if (gtk_text_iter_ends_line(&start_iter) || gtk_text_iter_is_end(&start_iter)) break;
+        gtk_text_iter_forward_char(&start_iter);
+    }
+    for (int i = 0; i < end.col; i++) {
+        if (gtk_text_iter_ends_line(&end_iter) || gtk_text_iter_is_end(&end_iter)) break;
+        gtk_text_iter_forward_char(&end_iter);
+    }
+
+    gtk_text_buffer_select_range(buf, &start_iter, &end_iter);
+}
+
+static char *transform_paragraph_block(const char *block, const char *prefix, gint start_line) {
+    if (!block) return g_strdup("");
+
+    GString *result = g_string_new("");
+    const char *line_start = block;
+    gint line_index = 0;
+
+    while (line_start && *line_start) {
+        const char *line_end = line_start;
+        while (*line_end && *line_end != '\n') {
+            line_end++;
+        }
+
+        gboolean has_newline = (*line_end == '\n');
+        gsize line_len = (gsize)(line_end - line_start);
+        gchar *line = g_strndup(line_start, line_len);
+
+        int ws = 0;
+        while (line[ws] == ' ' || line[ws] == '\t') ws++;
+        char *content = line + ws;
+
+        int strip_len = 0;
+        if (strncmp(content, "- [ ] ", 6) == 0 || strncmp(content, "- [x] ", 6) == 0 ||
+            strncmp(content, "* [ ] ", 6) == 0 || strncmp(content, "* [x] ", 6) == 0) {
+            strip_len = ws + 6;
+        } else if (strncmp(content, "- ", 2) == 0 || strncmp(content, "* ", 2) == 0 ||
+                   strncmp(content, "+ ", 2) == 0) {
+            strip_len = ws + 2;
+        } else if (content[0] == '#') {
+            int h = 0;
+            while (content[h] == '#') h++;
+            if (content[h] == ' ') strip_len = ws + h + 1;
+        } else {
+            int num = 0;
+            while (content[num] >= '0' && content[num] <= '9') num++;
+            if (num > 0 && content[num] == '.' && content[num + 1] == ' ') {
+                strip_len = ws + num + 2;
+            }
+        }
+
+        g_string_append_len(result, line, ws);
+        if (prefix && strlen(prefix) > 0) {
+            char final_prefix[64];
+            if (strcmp(prefix, "1. ") == 0) {
+                snprintf(final_prefix, sizeof(final_prefix), "%d. ", line_index + 1);
+            } else {
+                snprintf(final_prefix, sizeof(final_prefix), "%s", prefix);
+            }
+            g_string_append(result, final_prefix);
+        }
+        g_string_append(result, content + strip_len);
+        if (has_newline) {
+            g_string_append_c(result, '\n');
+            line_end++;
+        }
+
+        g_free(line);
+        line_index++;
+        if (!has_newline) break;
+        line_start = line_end;
+    }
+
+    return g_string_free(result, FALSE);
+}
+
 static gboolean editor_get_iter_at_widget_point(AppGui *gui, gdouble x, gdouble y, GtkTextIter *iter) {
     if (!gui || !gui->source_view || !iter) return FALSE;
     int bx, by;
@@ -40,37 +154,34 @@ static gboolean editor_get_iter_at_widget_point(AppGui *gui, gdouble x, gdouble 
 
 static void apply_format_with_saved(GtkTextBuffer *buf, const char *prefix, const char *suffix,
                                     gint saved_start, gint saved_end) {
-    gtk_text_buffer_begin_user_action(buf);
     gboolean has_selection = (saved_start != saved_end);
+    AppGui *gui = global_gui;
     if (!has_selection) {
         GtkTextIter cursor_iter;
         gtk_text_buffer_get_iter_at_offset(buf, &cursor_iter, saved_start);
-        gint offset = gtk_text_iter_get_offset(&cursor_iter);
-        gtk_text_buffer_insert(buf, &cursor_iter, prefix, -1);
-        gtk_text_buffer_get_iter_at_offset(buf, &cursor_iter, offset + (gint)strlen(prefix));
-        gtk_text_buffer_insert(buf, &cursor_iter, suffix, -1);
-        GtkTextIter final_cursor;
-        gtk_text_buffer_get_iter_at_offset(buf, &final_cursor, offset + (gint)strlen(prefix));
-        gtk_text_buffer_select_range(buf, &final_cursor, &final_cursor);
+        Position start_pos = iter_to_position(&cursor_iter);
+        char *wrapped = g_strconcat(prefix, suffix, NULL);
+        zig_insert_text(start_pos, wrapped);
+        load_viewport_page(gui, gui->viewport_start_line);
+        Position cursor_pos = advance_position(start_pos, prefix);
+        gui_set_cursor_position(cursor_pos.line + 1, cursor_pos.col);
+        zig_undo_commit();
+        g_free(wrapped);
     } else {
         GtkTextIter start, end;
         gtk_text_buffer_get_iter_at_offset(buf, &start, saved_start);
         gtk_text_buffer_get_iter_at_offset(buf, &end,   saved_end);
         gchar *text     = gtk_text_buffer_get_text(buf, &start, &end, TRUE);
         gchar *new_text = g_strconcat(prefix, text, suffix, NULL);
-        gint start_offset = gtk_text_iter_get_offset(&start);
-        gtk_text_buffer_delete(buf, &start, &end);
-        GtkTextIter insert_iter;
-        gtk_text_buffer_get_iter_at_offset(buf, &insert_iter, start_offset);
-        gtk_text_buffer_insert(buf, &insert_iter, new_text, -1);
-        GtkTextIter select_start, select_end;
-        gtk_text_buffer_get_iter_at_offset(buf, &select_start, start_offset);
-        gtk_text_buffer_get_iter_at_offset(buf, &select_end,   start_offset + (gint)strlen(new_text));
-        gtk_text_buffer_select_range(buf, &select_start, &select_end);
+        Position start_pos = iter_to_position(&start);
+        Position end_pos = iter_to_position(&end);
+        zig_replace_range(start_pos, end_pos, new_text);
+        load_viewport_page(gui, gui->viewport_start_line);
+        select_position_range(gui, start_pos, advance_position(start_pos, new_text));
+        zig_undo_commit();
         g_free(text);
         g_free(new_text);
     }
-    gtk_text_buffer_end_user_action(buf);
 }
 
 void apply_format(GtkTextBuffer *buf, const char *prefix, const char *suffix) {
@@ -90,55 +201,23 @@ void apply_format(GtkTextBuffer *buf, const char *prefix, const char *suffix) {
 
 static void apply_paragraph_format_core(GtkTextBuffer *buf, const char *prefix,
                                         gint start_line, gint end_line) {
-    gtk_text_buffer_begin_user_action(buf);
-    for (gint l = start_line; l <= end_line; l++) {
-        GtkTextIter line_start, line_end;
-        gtk_text_buffer_get_iter_at_line(buf, &line_start, l);
-        line_end = line_start;
-        gtk_text_iter_forward_to_line_end(&line_end);
-        gchar *line_text = gtk_text_buffer_get_text(buf, &line_start, &line_end, TRUE);
+    (void)buf;
+    int len = 0;
+    extern const char *zig_get_text_for_line_range(int start_line, int end_line, int *out_len);
+    const char *block_text = zig_get_text_for_line_range(start_line, end_line + 1, &len);
+    if (!block_text) return;
 
-        int ws = 0;
-        while (line_text[ws] == ' ' || line_text[ws] == '\t') ws++;
+    char *block_dup = g_strndup(block_text, len);
+    char *new_block = transform_paragraph_block(block_dup, prefix, start_line);
+    Position start_pos = { start_line, 0 };
+    Position end_pos = { end_line + 1, 0 };
+    zig_replace_range(start_pos, end_pos, new_block);
+    load_viewport_page(global_gui, global_gui->viewport_start_line);
+    gui_set_cursor_position(end_line + 1, G_MAXINT);
+    zig_undo_commit();
 
-        int strip_len = 0;
-        char *content = line_text + ws;
-        if (strncmp(content, "- [ ] ", 6) == 0 || strncmp(content, "- [x] ", 6) == 0 ||
-            strncmp(content, "* [ ] ", 6) == 0 || strncmp(content, "* [x] ", 6) == 0) {
-            strip_len = ws + 6;
-        } else if (strncmp(content, "- ", 2) == 0 || strncmp(content, "* ", 2) == 0 ||
-                   strncmp(content, "+ ", 2) == 0) {
-            strip_len = ws + 2;
-        } else if (content[0] == '#') {
-            int h = 0;
-            while (content[h] == '#') h++;
-            if (content[h] == ' ') strip_len = ws + h + 1;
-        } else {
-            int num = 0;
-            while (content[num] >= '0' && content[num] <= '9') num++;
-            if (num > 0 && content[num] == '.' && content[num+1] == ' ')
-                strip_len = ws + num + 2;
-        }
-
-        if (strip_len > 0) {
-            GtkTextIter strip_end = line_start;
-            gtk_text_iter_forward_chars(&strip_end, strip_len);
-            gtk_text_buffer_delete(buf, &line_start, &strip_end);
-            gtk_text_buffer_get_iter_at_line(buf, &line_start, l);
-        }
-
-        if (prefix && strlen(prefix) > 0) {
-            char final_prefix[64];
-            if (strcmp(prefix, "1. ") == 0)
-                snprintf(final_prefix, sizeof(final_prefix), "%d. ", (l - start_line) + 1);
-            else
-                snprintf(final_prefix, sizeof(final_prefix), "%s", prefix);
-            gtk_text_buffer_insert(buf, &line_start, final_prefix, -1);
-        }
-
-        g_free(line_text);
-    }
-    gtk_text_buffer_end_user_action(buf);
+    g_free(block_dup);
+    g_free(new_block);
 }
 
 static void apply_paragraph_format_with_saved(GtkTextBuffer *buf, const char *prefix,
@@ -149,15 +228,6 @@ static void apply_paragraph_format_with_saved(GtkTextBuffer *buf, const char *pr
     gint start_line = gtk_text_iter_get_line(&start);
     gint end_line   = gtk_text_iter_get_line(&end);
     apply_paragraph_format_core(buf, prefix, start_line, end_line);
-
-    gint total_lines = gtk_text_buffer_get_line_count(buf);
-    if (end_line >= total_lines) end_line = total_lines - 1;
-    if (end_line < 0) end_line = 0;
-
-    GtkTextIter cursor_iter;
-    gtk_text_buffer_get_iter_at_line(buf, &cursor_iter, end_line);
-    gtk_text_iter_forward_to_line_end(&cursor_iter);
-    gtk_text_buffer_select_range(buf, &cursor_iter, &cursor_iter);
 }
 
 void apply_paragraph_format(GtkTextBuffer *buf, const char *prefix) {
@@ -202,6 +272,7 @@ static gboolean do_idle_format(gpointer user_data) {
         ScrollToCursorData *d = g_new(ScrollToCursorData, 1);
         d->gui  = global_gui;
         d->offset = gtk_text_iter_get_offset(&insert_iter);
+        d->generation = global_gui->buffer_generation;
         g_idle_add(idle_scroll_to_cursor, d);
     }
 
@@ -347,4 +418,3 @@ void on_editor_right_click(GtkGestureClick *gesture, gint n_press, gdouble x, gd
     gtk_popover_popup(GTK_POPOVER(popover));
     gtk_gesture_set_state(GTK_GESTURE(gesture), GTK_EVENT_SEQUENCE_CLAIMED);
 }
-

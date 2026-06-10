@@ -6,9 +6,24 @@
 
 typedef void (*GuiIdleCallback)(void *user_data);
 
+typedef struct {
+    int line;
+    int col;
+} Position;
+
+extern void zig_insert_text(Position pos, const char *text);
+extern void zig_delete_range(Position start, Position end);
+extern void zig_replace_range(Position start, Position end, const char *text);
+extern void zig_undo_push(int cursor_line, int cursor_col);
+extern void zig_undo_commit(void);
+extern void zig_undo(void);
+extern void zig_redo(void);
+extern void zig_undo_clear(void);
+extern int zig_save_document(void);
+extern const char *zig_get_document_text(void);
+extern void zig_free_document_text(const char *ptr);
+
 /* Zig -> C FFI */
-char *gui_get_text(void);
-void gui_free_text(char *text);
 void gui_set_text(const char *text, int len);
 void gui_set_title(const char *title);
 void gui_set_sync_status(const char *status);

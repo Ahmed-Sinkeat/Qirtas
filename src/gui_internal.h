@@ -109,16 +109,18 @@ typedef struct {
     GtkWidget     *top_spacer;
     GtkWidget     *bottom_spacer;
     GtkAdjustment *vadjustment;
+    gulong         scroll_signal_id;
     gboolean       in_scroll_update;
+    gboolean       loading_viewport;
     gboolean       mouse_dragging;
     gboolean       primary_button_down;
     double         mouse_press_x;
     double         mouse_press_y;
     double         last_v_offset;
     int            total_virtual_lines;
-    int            active_page_start_line;
-    int            active_page_end_line;
-    int            estimated_line_height;
+    int            last_scroll_requested_line;
+    guint          buffer_generation;
+    int            pending_line;
 
     /* Cursor trail animation */
     GtkWidget *cursor_trail_area;
@@ -219,6 +221,10 @@ void parse_and_render_hrs(GtkTextBuffer *buf, AppGui *gui);
 void apply_theme(AppGui *gui, const char *theme_name);
 void update_editor_font(AppGui *gui);
 void reset_cursor_trail(AppGui *gui);
+void gui_push_undo_snapshot(void);
+void request_viewport_position(AppGui *gui, int abs_line);
+void gui_reload_viewport(void);
+void gui_set_buffer_modified(gboolean modified);
 void on_search_text_changed(GtkSearchEntry *entry, gpointer user_data);
 void on_search_next_clicked(GtkButton *btn, gpointer user_data);
 void on_search_prev_clicked(GtkButton *btn, gpointer user_data);
@@ -240,6 +246,7 @@ void on_buffer_changed(GtkTextBuffer *buf, gpointer user_data);
 void on_insert_text_before(GtkTextBuffer *buf, GtkTextIter *location, gchar *text, gint len, gpointer user_data);
 void on_insert_text_after(GtkTextBuffer *buf, GtkTextIter *location, gchar *text, gint len, gpointer user_data);
 void on_delete_range_after(GtkTextBuffer *buf, GtkTextIter *start, GtkTextIter *end, gpointer user_data);
+void on_delete_range_before(GtkTextBuffer *buf, GtkTextIter *start, GtkTextIter *end, gpointer user_data);
 void on_mark_set(GtkTextBuffer *buf, GtkTextIter *location, GtkTextMark *mark, gpointer user_data);
 void save_trail_color_settings(AppGui *gui);
 void save_pointer_color_settings(AppGui *gui);
@@ -259,10 +266,9 @@ gboolean maybe_delete_empty_pair(GtkTextBuffer *buf);
 void duplicate_current_line(GtkTextBuffer *buf);
 void delete_current_line(GtkTextBuffer *buf);
 void move_current_line(GtkTextBuffer *buf, gboolean up);
+void load_viewport_page(AppGui *gui, int new_start);
 gboolean on_editor_key_pressed(GtkEventControllerKey *ctrl, guint keyval, guint keycode, GdkModifierType state, gpointer user_data);
 void trigger_save_as(AppGui *gui);
 void gui_manual_save(AppGui *gui);
 void toggle_comment_current_line(GtkTextBuffer *buf);
 void clear_selection_formatting(GtkTextBuffer *buf);
-
-

@@ -75,15 +75,35 @@ static void apply_wiki_link_tags_local_impl(GtkTextBuffer *buf) {
     }
 }
 
-static void idle_wiki_local_cb(GtkTextBuffer *buf) {
+typedef struct {
+    AppGui *gui;
+    guint generation;
+} WikiData;
+
+static gboolean idle_wiki_local_cb(gpointer user_data) {
+    WikiData *d = user_data;
     wiki_local_queued = FALSE;
-    apply_wiki_link_tags_local_impl(buf);
+    if (d->gui && d->generation != d->gui->buffer_generation) {
+        g_free(d);
+        return G_SOURCE_REMOVE;
+    }
+    if (d->gui && d->gui->text_buffer) {
+        apply_wiki_link_tags_local_impl(d->gui->text_buffer);
+    }
+    g_free(d);
+    return G_SOURCE_REMOVE;
 }
 
 void apply_wiki_link_tags_local(GtkTextBuffer *buf) {
+    (void)buf;
     if (wiki_local_queued) return;
+    if (!global_gui) return;
+    
     wiki_local_queued = TRUE;
-    g_idle_add_once((GSourceOnceFunc)idle_wiki_local_cb, buf);
+    WikiData *d = g_new(WikiData, 1);
+    d->gui = global_gui;
+    d->generation = global_gui->buffer_generation;
+    g_idle_add(idle_wiki_local_cb, d);
 }
 
 static void apply_wiki_link_tags_impl(GtkTextBuffer *buf) {
@@ -118,15 +138,30 @@ static void apply_wiki_link_tags_impl(GtkTextBuffer *buf) {
     }
 }
 
-static void idle_wiki_global_cb(GtkTextBuffer *buf) {
+static gboolean idle_wiki_global_cb(gpointer user_data) {
+    WikiData *d = user_data;
     wiki_global_queued = FALSE;
-    apply_wiki_link_tags_impl(buf);
+    if (d->gui && d->generation != d->gui->buffer_generation) {
+        g_free(d);
+        return G_SOURCE_REMOVE;
+    }
+    if (d->gui && d->gui->text_buffer) {
+        apply_wiki_link_tags_impl(d->gui->text_buffer);
+    }
+    g_free(d);
+    return G_SOURCE_REMOVE;
 }
 
 void apply_wiki_link_tags(GtkTextBuffer *buf) {
+    (void)buf;
     if (wiki_global_queued) return;
+    if (!global_gui) return;
+    
     wiki_global_queued = TRUE;
-    g_idle_add_once((GSourceOnceFunc)idle_wiki_global_cb, buf);
+    WikiData *d = g_new(WikiData, 1);
+    d->gui = global_gui;
+    d->generation = global_gui->buffer_generation;
+    g_idle_add(idle_wiki_global_cb, d);
 }
 
 void on_editor_left_click(GtkGestureClick *gesture, gint n_press, gdouble x, gdouble y, gpointer user_data) {

@@ -27,6 +27,10 @@ static int get_line_height(GtkWidget *text_view) {
 
 gboolean idle_scroll_to_cursor(gpointer user_data) {
     ScrollToCursorData *d = (ScrollToCursorData *)user_data;
+    if (d->gui && d->generation != d->gui->buffer_generation) {
+        g_free(d);
+        return G_SOURCE_REMOVE;
+    }
     AppGui *gui = d->gui;
     gint offset = d->offset;
     g_free(d);
@@ -269,22 +273,23 @@ static void update_conceal_markdown_all_impl(GtkTextBuffer *buf) {
     if (!conceal_tag) {
         conceal_tag = gtk_text_buffer_create_tag(buf, "conceal", "invisible", TRUE, NULL);
     }
-    GtkTextTag *h1_tag = gtk_text_tag_table_lookup(table, "heading1");
-    if (!h1_tag) h1_tag = gtk_text_buffer_create_tag(buf, "heading1", "scale", 2.0, NULL);
-    GtkTextTag *h2_tag = gtk_text_tag_table_lookup(table, "heading2");
-    if (!h2_tag) h2_tag = gtk_text_buffer_create_tag(buf, "heading2", "scale", 1.6, NULL);
-    GtkTextTag *h3_tag = gtk_text_tag_table_lookup(table, "heading3");
-    if (!h3_tag) h3_tag = gtk_text_buffer_create_tag(buf, "heading3", "scale", 1.3, NULL);
-    GtkTextTag *h4_tag = gtk_text_tag_table_lookup(table, "heading4");
-    if (!h4_tag) h4_tag = gtk_text_buffer_create_tag(buf, "heading4", "scale", 1.1, NULL);
+    GtkTextTag *h1_tag = gtk_text_buffer_get_tag_table(buf);
+    GtkTextTag *h1_tag_lookup = gtk_text_tag_table_lookup(table, "heading1");
+    if (!h1_tag_lookup) h1_tag_lookup = gtk_text_buffer_create_tag(buf, "heading1", "scale", 2.0, NULL);
+    GtkTextTag *h2_tag_lookup = gtk_text_tag_table_lookup(table, "heading2");
+    if (!h2_tag_lookup) h2_tag_lookup = gtk_text_buffer_create_tag(buf, "heading2", "scale", 1.6, NULL);
+    GtkTextTag *h3_tag_lookup = gtk_text_tag_table_lookup(table, "heading3");
+    if (!h3_tag_lookup) h3_tag_lookup = gtk_text_buffer_create_tag(buf, "heading3", "scale", 1.3, NULL);
+    GtkTextTag *h4_tag_lookup = gtk_text_tag_table_lookup(table, "heading4");
+    if (!h4_tag_lookup) h4_tag_lookup = gtk_text_buffer_create_tag(buf, "heading4", "scale", 1.1, NULL);
 
     GtkTextIter start, end;
     gtk_text_buffer_get_bounds(buf, &start, &end);
     gtk_text_buffer_remove_tag(buf, conceal_tag, &start, &end);
-    gtk_text_buffer_remove_tag(buf, h1_tag, &start, &end);
-    gtk_text_buffer_remove_tag(buf, h2_tag, &start, &end);
-    gtk_text_buffer_remove_tag(buf, h3_tag, &start, &end);
-    gtk_text_buffer_remove_tag(buf, h4_tag, &start, &end);
+    gtk_text_buffer_remove_tag(buf, h1_tag_lookup, &start, &end);
+    gtk_text_buffer_remove_tag(buf, h2_tag_lookup, &start, &end);
+    gtk_text_buffer_remove_tag(buf, h3_tag_lookup, &start, &end);
+    gtk_text_buffer_remove_tag(buf, h4_tag_lookup, &start, &end);
 
     gchar *text = gtk_text_buffer_get_text(buf, &start, &end, TRUE);
     if (!text || strlen(text) == 0) {
@@ -334,13 +339,13 @@ static void update_conceal_markdown_all_impl(GtkTextBuffer *buf) {
             }
             if (h_level > 0 && (line_text[h_level] == ' ' || line_text[h_level] == '\0')) {
                 if (h_level == 1) {
-                    gtk_text_buffer_apply_tag(buf, h1_tag, &line_start, &line_end);
+                    gtk_text_buffer_apply_tag(buf, h1_tag_lookup, &line_start, &line_end);
                 } else if (h_level == 2) {
-                    gtk_text_buffer_apply_tag(buf, h2_tag, &line_start, &line_end);
+                    gtk_text_buffer_apply_tag(buf, h2_tag_lookup, &line_start, &line_end);
                 } else if (h_level == 3) {
-                    gtk_text_buffer_apply_tag(buf, h3_tag, &line_start, &line_end);
+                    gtk_text_buffer_apply_tag(buf, h3_tag_lookup, &line_start, &line_end);
                 } else if (h_level >= 4) {
-                    gtk_text_buffer_apply_tag(buf, h4_tag, &line_start, &line_end);
+                    gtk_text_buffer_apply_tag(buf, h4_tag_lookup, &line_start, &line_end);
                 }
             }
             g_free(line_text);
@@ -350,15 +355,36 @@ static void update_conceal_markdown_all_impl(GtkTextBuffer *buf) {
     if (global_gui) global_gui->in_conceal_update = FALSE;
 }
 
-static void idle_global_conceal_cb(GtkTextBuffer *buf) {
+typedef struct {
+    AppGui *gui;
+    guint generation;
+} ConcealData;
+
+static gboolean idle_global_conceal_cb(gpointer user_data) {
+    ConcealData *d = user_data;
     global_conceal_queued = FALSE;
-    update_conceal_markdown_all_impl(buf);
+    if (d->gui && d->generation != d->gui->buffer_generation) {
+        g_free(d);
+        return G_SOURCE_REMOVE;
+    }
+    
+    if (d->gui && d->gui->text_buffer) {
+        update_conceal_markdown_all_impl(d->gui->text_buffer);
+    }
+    g_free(d);
+    return G_SOURCE_REMOVE;
 }
 
 void update_conceal_markdown_all(GtkTextBuffer *buf) {
+    (void)buf;
     if (global_conceal_queued) return;
+    if (!global_gui) return;
+    
     global_conceal_queued = TRUE;
-    g_idle_add_once((GSourceOnceFunc)idle_global_conceal_cb, buf);
+    ConcealData *d = g_new(ConcealData, 1);
+    d->gui = global_gui;
+    d->generation = global_gui->buffer_generation;
+    g_idle_add(idle_global_conceal_cb, d);
 }
 
 static void update_conceal_markdown_impl(GtkTextBuffer *buf) {
@@ -403,19 +429,16 @@ static void update_conceal_markdown_impl(GtkTextBuffer *buf) {
     GtkTextTag *h4_tag = gtk_text_tag_table_lookup(table, "heading4");
     if (!h4_tag) h4_tag = gtk_text_buffer_create_tag(buf, "heading4", "scale", 1.1, NULL);
 
-    // Re-fetch start/end iterators defensively to ensure they are fully stable
     gtk_text_buffer_get_iter_at_line(buf, &start, start_line);
     gtk_text_buffer_get_iter_at_line(buf, &end, end_line);
     gtk_text_iter_forward_to_line_end(&end);
 
-    // Remove tags in the local range first
     gtk_text_buffer_remove_tag(buf, conceal_tag, &start, &end);
     gtk_text_buffer_remove_tag(buf, h1_tag, &start, &end);
     gtk_text_buffer_remove_tag(buf, h2_tag, &start, &end);
     gtk_text_buffer_remove_tag(buf, h3_tag, &start, &end);
     gtk_text_buffer_remove_tag(buf, h4_tag, &start, &end);
 
-    // Skip regexes if no markdown characters exist in the local 3-line range
     if (!strchr(text, '*') && !strchr(text, '=') && !strchr(text, '#') &&
         !strchr(text, '[') && !strchr(text, ']') && !strchr(text, '(') &&
         !strchr(text, ')') && !strchr(text, '!')) {
@@ -430,12 +453,10 @@ static void update_conceal_markdown_impl(GtkTextBuffer *buf) {
     gtk_text_buffer_get_iter_at_mark(buf, &current_cursor, insert_mark);
     gint cursor_char = gtk_text_iter_get_offset(&current_cursor);
 
-    // Formatting matches
     apply_regex_conceal_local(buf, text, range_start_offset, "\\*\\*([^\\n]*?[^\\n\\*][^\\n]*?)\\*\\*", cursor_char, 2, conceal_tag);
     apply_regex_conceal_local(buf, text, range_start_offset, "==([^\\n]*?[^\\n=][^\\n]*?)==", cursor_char, 2, conceal_tag);
     apply_regex_conceal_local(buf, text, range_start_offset, "(?<!\\*)\\*([^\\n\\*]+?)\\*(?!\\*)", cursor_char, 1, conceal_tag);
 
-    /* Heading markers: match and conceal the # characters and the trailing space */
     apply_regex_conceal_local(buf, text, range_start_offset, "(?m)^#[ \\t]", cursor_char, 2, conceal_tag);
     apply_regex_conceal_local(buf, text, range_start_offset, "(?m)^##[ \\t]", cursor_char, 3, conceal_tag);
     apply_regex_conceal_local(buf, text, range_start_offset, "(?m)^###[ \\t]", cursor_char, 4, conceal_tag);
@@ -443,15 +464,11 @@ static void update_conceal_markdown_impl(GtkTextBuffer *buf) {
     apply_regex_conceal_local(buf, text, range_start_offset, "(?m)^#####[ \\t]", cursor_char, 6, conceal_tag);
     apply_regex_conceal_local(buf, text, range_start_offset, "(?m)^######[ \\t]", cursor_char, 7, conceal_tag);
 
-    /* Inline links: match and conceal opening [ and closing ](url) */
     apply_regex_conceal_local(buf, text, range_start_offset, "\\[([^\\]]+)\\]\\([^)]*\\)", cursor_char, 1, conceal_tag);
-
-    /* Images: match and conceal entire match */
     apply_regex_conceal_local(buf, text, range_start_offset, "!\\[[^\\]]*\\]\\([^)]*\\)", cursor_char, 2, conceal_tag);
 
     g_free(text);
 
-    /* Heading size tags pass locally */
     for (int i = start_line; i <= end_line; i++) {
         GtkTextIter line_start, line_end;
         gtk_text_buffer_get_iter_at_line(buf, &line_start, i);
@@ -482,15 +499,31 @@ static void update_conceal_markdown_impl(GtkTextBuffer *buf) {
     if (global_gui) global_gui->in_conceal_update = FALSE;
 }
 
-static void idle_local_conceal_cb(GtkTextBuffer *buf) {
+static gboolean idle_local_conceal_cb(gpointer user_data) {
+    ConcealData *d = user_data;
     local_conceal_queued = FALSE;
-    update_conceal_markdown_impl(buf);
+    if (d->gui && d->generation != d->gui->buffer_generation) {
+        g_free(d);
+        return G_SOURCE_REMOVE;
+    }
+    
+    if (d->gui && d->gui->text_buffer) {
+        update_conceal_markdown_impl(d->gui->text_buffer);
+    }
+    g_free(d);
+    return G_SOURCE_REMOVE;
 }
 
 void update_conceal_markdown(GtkTextBuffer *buf) {
+    (void)buf;
     if (local_conceal_queued) return;
+    if (!global_gui) return;
+    
     local_conceal_queued = TRUE;
-    g_idle_add_once((GSourceOnceFunc)idle_local_conceal_cb, buf);
+    ConcealData *d = g_new(ConcealData, 1);
+    d->gui = global_gui;
+    d->generation = global_gui->buffer_generation;
+    g_idle_add(idle_local_conceal_cb, d);
 }
 
 void on_buffer_modified_changed(GtkTextBuffer *buf, gpointer user_data) {
@@ -509,8 +542,6 @@ void on_mark_set(GtkTextBuffer *buf, GtkTextIter *location, GtkTextMark *mark, g
 
     GtkTextMark *insert_mark = gtk_text_buffer_get_insert(buf);
     if (mark == insert_mark) {
-        gint scroll_offset = gtk_text_iter_get_offset(location);
-        
         /* Defer tag updates to idle so Pango layout is stable and doesn't get stale byte-index cache. */
         update_conceal_markdown(buf);
 
@@ -519,7 +550,8 @@ void on_mark_set(GtkTextBuffer *buf, GtkTextIter *location, GtkTextMark *mark, g
 
         ScrollToCursorData *d = g_new(ScrollToCursorData, 1);
         d->gui = gui;
-        d->offset = scroll_offset;
+        d->offset = gtk_text_iter_get_offset(location);
+        d->generation = gui->buffer_generation;
         g_idle_add(idle_scroll_to_cursor, d);
     }
 }

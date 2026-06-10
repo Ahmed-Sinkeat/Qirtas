@@ -20,14 +20,14 @@ const c = @cImport({
 });
 
 extern fn run_gui(argc: c_int, argv: ?[*]? [*]const u8) c_int;
-extern fn gui_get_text() ?[*]u8;
-extern fn gui_free_text(text: [*]u8) void;
 extern fn gui_set_text(text: [*]const u8, len: c_int) void;
 extern fn gui_set_title(title: [*:0]const u8) void;
 extern fn gui_set_sync_status(status: [*:0]const u8) void;
 extern fn gui_show_editor() void;
 extern fn gui_get_cursor_position(line: *c_int, col: *c_int) void;
 extern fn gui_set_cursor_position(line: c_int, col: c_int) void;
+extern fn gui_reload_viewport() void;
+extern fn gui_set_buffer_modified(modified: c_int) void;
 extern fn gui_refresh_explorer() void;
 extern fn gui_index_all_files() void;
 extern fn gui_index_file(filename: [*:0]const u8) void;
@@ -67,6 +67,23 @@ var initial_cursor_col: c_int = 0;
 
 pub var active_master_key: ?[32]u8 = null;
 
+const UndoEntry = struct {
+    text: []u8,
+    cursor_line: c_int,
+    cursor_col: c_int,
+};
+
+const UNDO_CAPACITY: usize = 100;
+
+var undo_stack: [UNDO_CAPACITY]UndoEntry = undefined;
+var undo_top: usize = 0;
+var redo_stack: [UNDO_CAPACITY]UndoEntry = undefined;
+var redo_top: usize = 0;
+var undo_push_pending: bool = false;
+var undo_pending_line: c_int = 0;
+var undo_pending_col: c_int = 0;
+var file_open_in_progress: bool = false;
+
 pub export fn zig_has_active_master_key() callconv(.c) c_int {
     return if (active_master_key != null) 1 else 0;
 }
@@ -87,6 +104,62 @@ fn fillRandomBytes(buf: []u8) !void {
             else => return error.RandomFailed,
         }
     }
+}
+
+fn currentDocumentSlice() []const u8 {
+    return if (active_mmap_ptr) |ptr| ptr[0..active_mmap_size] else "";
+}
+
+fn freeUndoEntry(entry: *UndoEntry) void {
+    if (entry.text.len > 0) {
+        std.heap.page_allocator.free(entry.text);
+    }
+}
+
+fn dropOldestEntry(stack: *[UNDO_CAPACITY]UndoEntry, top: *usize) void {
+    if (top.* == 0) return;
+    freeUndoEntry(&stack[0]);
+    var i: usize = 1;
+    while (i < top.*) : (i += 1) {
+        stack[i - 1] = stack[i];
+    }
+    top.* -= 1;
+}
+
+fn clearUndoStack(stack: *[UNDO_CAPACITY]UndoEntry, top: *usize) void {
+    while (top.* > 0) {
+        top.* -= 1;
+        freeUndoEntry(&stack[top.*]);
+    }
+}
+
+fn pushUndoEntry(stack: *[UNDO_CAPACITY]UndoEntry, top: *usize, entry: UndoEntry) void {
+    if (top.* == UNDO_CAPACITY) {
+        dropOldestEntry(stack, top);
+    }
+    stack[top.*] = entry;
+    top.* += 1;
+}
+
+fn captureUndoEntry(cursor_line: c_int, cursor_col: c_int) !UndoEntry {
+    const ptr = active_mmap_ptr orelse return UndoEntry{
+        .text = @constCast(""[0..0]),
+        .cursor_line = cursor_line,
+        .cursor_col = cursor_col,
+    };
+    const len = active_mmap_size;
+    if (len == 0) return UndoEntry{
+        .text = @constCast(""[0..0]),
+        .cursor_line = cursor_line,
+        .cursor_col = cursor_col,
+    };
+    const snapshot = try std.heap.page_allocator.alloc(u8, len);
+    @memcpy(snapshot, ptr[0..len]);
+    return UndoEntry{
+        .text = snapshot,
+        .cursor_line = cursor_line,
+        .cursor_col = cursor_col,
+    };
 }
 
 pub fn encryptWithMasterKey(allocator: std.mem.Allocator, key: [32]u8, plaintext: []const u8) ![]u8 {
@@ -337,12 +410,15 @@ pub export fn zig_on_gui_ready() callconv(.c) void {
         }
     }
 
+    file_open_in_progress = true;
+    defer file_open_in_progress = false;
     load_file_and_update_gui(file_to_load) catch |err| {
         std.debug.print("Failed to load active notes: {}\n", .{err});
     };
 
     // Restore cursor position
     gui_set_cursor_position(initial_cursor_line, initial_cursor_col);
+    zig_undo_push(initial_cursor_line, initial_cursor_col);
 
     // Spawn Asynchronous Autosave Thread
     // _ = std.Thread.spawn(.{}, autosave_thread_loop, .{}) catch |err| {
@@ -355,8 +431,29 @@ pub export fn zig_on_gui_ready() callconv(.c) void {
     };
 }
 
+extern fn gui_prepare_tab_switch() void;
+
+fn isSupported(filename: []const u8) bool {
+    const supported = &[_][]const u8{
+        ".md", ".txt",
+        ".zig", ".c", ".h",
+        ".css", ".js", ".ts",
+        ".json", ".yaml", ".toml",
+        ".html", ".xml",
+    };
+    for (supported) |ext| {
+        if (std.mem.endsWith(u8, filename, ext)) return true;
+    }
+    return false;
+}
+
 pub export fn zig_open_file(filename_ptr: [*:0]const u8) callconv(.c) void {
+    if (file_open_in_progress) return;
+    file_open_in_progress = true;
+    defer file_open_in_progress = false;
+
     gui_tabs_save_active_to_cache();
+    gui_prepare_tab_switch();
 
     const filename = std.mem.span(filename_ptr);
 
@@ -369,6 +466,8 @@ pub export fn zig_open_file(filename_ptr: [*:0]const u8) callconv(.c) void {
     }
 
     if (std.mem.eql(u8, filename, "Untitled")) {
+        zig_undo_clear();
+
         // Unload existing mapping
         if (active_mmap_ptr) |ptr| {
             unload_file_mmap(ptr, active_mmap_size);
@@ -390,17 +489,15 @@ pub export fn zig_open_file(filename_ptr: [*:0]const u8) callconv(.c) void {
         gui_set_sync_status("Not Synced");
         gui_show_editor();
         gui_tabs_restore_active_from_cache();
+        var seed_line: c_int = 0;
+        var seed_col: c_int = 0;
+        gui_get_cursor_position(&seed_line, &seed_col);
+        zig_undo_push(seed_line, seed_col);
         return;
     }
 
     // Filter editable extensions
-    if (std.mem.endsWith(u8, filename, ".md") or 
-        std.mem.endsWith(u8, filename, ".txt") or 
-        std.mem.endsWith(u8, filename, ".zig") or 
-        std.mem.endsWith(u8, filename, ".zon") or
-        std.mem.endsWith(u8, filename, ".c") or
-        std.mem.endsWith(u8, filename, ".h")) 
-    {
+    if (isSupported(filename)) {
         var display_name: []const u8 = filename;
         const is_absolute = filename.len > 0 and filename[0] == '/';
         if (is_absolute) {
@@ -433,6 +530,10 @@ pub export fn zig_open_file(filename_ptr: [*:0]const u8) callconv(.c) void {
             std.debug.print("Failed to open file {s}: {}\n", .{display_name, err});
         };
         gui_tabs_restore_active_from_cache();
+        var seed_line: c_int = 0;
+        var seed_col: c_int = 0;
+        gui_get_cursor_position(&seed_line, &seed_col);
+        zig_undo_push(seed_line, seed_col);
     }
 }
 
@@ -691,6 +792,8 @@ pub export fn zig_open_vault(dir_path_ptr: [*:0]const u8) callconv(.c) void {
     register_file_watch(file_to_open);
 
     // 7. Load file contents
+    file_open_in_progress = true;
+    defer file_open_in_progress = false;
     load_file_and_update_gui(file_to_open) catch |err| {
         std.debug.print("Failed to open file {s}: {}\n", .{file_to_open, err});
     };
@@ -762,6 +865,8 @@ pub export fn zig_open_wiki_link(note_name_ptr: [*:0]const u8) callconv(.c) void
 
 // Exported FFI: Save cursor and state on app shutdown
 pub export fn zig_on_shutdown() callconv(.c) void {
+    zig_undo_clear();
+
     var line: c_int = 1;
     var col: c_int = 0;
     gui_get_cursor_position(&line, &col);
@@ -850,11 +955,14 @@ fn populate_line_offsets(content: []const u8) !void {
     while (i < content.len) : (i += 1) {
         if (content[i] == '\n') {
             try line_offsets.append(gpa, i + 1);
+        } else if (content[i] == '\r' and i + 1 < content.len and content[i + 1] == '\n') {
+            continue;
         }
     }
 }
 
 fn remap_active_file() !void {
+    if (!file_open_in_progress) return error.RemapWithoutGuard;
     const gpa = std.heap.page_allocator;
     const path = active_file_path[0..active_file_path_len];
     const path_z = try gpa.dupeZ(u8, path);
@@ -879,6 +987,7 @@ fn remap_active_file() !void {
 
 fn load_file_and_update_gui(filename: []const u8) !void {
     const gpa = std.heap.page_allocator;
+    zig_undo_clear();
     const filename_z = try gpa.dupeZ(u8, filename);
     defer gpa.free(filename_z);
 
@@ -904,10 +1013,16 @@ fn load_file_and_update_gui(filename: []const u8) !void {
     try remap_active_file();
 
     const total_lines = @as(c_int, @intCast(line_offsets.items.len));
-    const enabled = if (total_lines >= 2000) @as(c_int, 1) else @as(c_int, 0);
+    const enabled = if (total_lines >= 500) @as(c_int, 1) else @as(c_int, 0);
     gui_set_virtual_scroll_mode(enabled, total_lines);
 
-    const end_line = if (enabled == 1) (if (total_lines > 100) @as(c_int, 100) else total_lines) else total_lines;
+    var page_size: c_int = 400;
+    if (total_lines > 4000) {
+        page_size = 250;
+    } else if (total_lines > 2000) {
+        page_size = 300;
+    }
+    const end_line = if (enabled == 1) (if (total_lines > page_size) page_size else total_lines) else total_lines;
     
     var page_len: c_int = 0;
     const page_text_ptr = zig_get_text_for_line_range(0, end_line, &page_len);
@@ -967,7 +1082,23 @@ pub export fn zig_get_text_for_line_range(start_line: c_int, end_line: c_int, ou
 );        
 
     if (active_mmap_ptr) |ptr| {
-        const slice = ptr[start_offset..end_offset];
+        var s = start_offset;
+        var e = end_offset;
+        const doc = ptr[0..active_mmap_size];
+
+        while (s < e and s < active_mmap_size and (doc[s] & 0xC0) == 0x80) {
+            s += 1;
+        }
+        while (e > s and e <= active_mmap_size and (doc[e - 1] & 0xC0) == 0x80) {
+            e -= 1;
+        }
+
+        if (s >= e) {
+            out_len.* = 0;
+            return "";
+        }
+
+        const slice = ptr[s..e];
         out_len.* = @as(c_int, @intCast(slice.len));
         return slice.ptr;
     }
@@ -1065,6 +1196,7 @@ fn file_watcher_thread_loop() void {
             const g_wd = global_wd.load(.monotonic);
             const d_wd = directory_wd.load(.monotonic);
             if (event.wd == g_wd) {
+                if (file_open_in_progress) continue;
                 gui_run_on_main_thread(&reload_file_callback, null);
             } else if (event.wd == d_wd) {
                 if (event.len > 0) {
@@ -1099,6 +1231,7 @@ fn refresh_explorer_callback(user_data: ?*anyopaque) callconv(.c) void {
 // GUI-Thread callback: reloads file only if content has changed (prevents self-reload loops)
 fn reload_file_callback(user_data: ?*anyopaque) callconv(.c) void {
     _ = user_data;
+    if (file_open_in_progress) return;
 
     std.debug.print("RELOAD_BLOCKED_TEST\n", .{});
 
@@ -1130,7 +1263,7 @@ fn reload_file_callback(user_data: ?*anyopaque) callconv(.c) void {
     if (start >= total_lines) start = 0;
     if (end > total_lines) end = total_lines;
     if (end <= start) {
-        end = if (total_lines > 100) 100 else total_lines;
+        end = if (total_lines > 400) 400 else total_lines;
         start = 0;
     }
 
@@ -1285,6 +1418,228 @@ pub export fn zig_get_search_rank(filepath_ptr: [*:0]const u8) callconv(.c) c_in
         return @intCast(rank);
     }
     return -1;
+}
+
+pub const Position = extern struct {
+    line: c_int,
+    col: c_int,
+};
+
+fn positionToOffset(pos: Position) usize {
+    if (pos.line < 0) return 0;
+    const u_line = @as(usize, @intCast(pos.line));
+    if (u_line >= line_offsets.items.len) {
+        return active_mmap_size;
+    }
+    const line_start = line_offsets.items[u_line];
+    const line_end = if (u_line + 1 < line_offsets.items.len)
+        line_offsets.items[u_line + 1]
+    else
+        active_mmap_size;
+
+    const content = if (active_mmap_ptr) |ptr| ptr[0..active_mmap_size] else "";
+    const line_text = content[line_start..line_end];
+
+    var byte_idx: usize = 0;
+    var char_idx: usize = 0;
+    const u_col = if (pos.col < 0) @as(usize, 0) else @as(usize, @intCast(pos.col));
+    while (char_idx < u_col and byte_idx < line_text.len) {
+        const len = std.unicode.utf8ByteSequenceLength(line_text[byte_idx]) catch 1;
+        byte_idx += len;
+        char_idx += 1;
+    }
+    return line_start + byte_idx;
+}
+
+fn write_document_content_and_remap(new_content: []const u8) !void {
+    if (active_file_path_len == 0) return error.NoActiveFile;
+    if (file_open_in_progress) return error.RemapWithoutGuard;
+    file_open_in_progress = true;
+    defer file_open_in_progress = false;
+    const path = active_file_path[0..active_file_path_len];
+    const gpa = std.heap.page_allocator;
+
+    if (std.mem.eql(u8, path, "Untitled")) {
+        const plain_buf = try gpa.dupe(u8, new_content);
+        if (active_mmap_ptr) |ptr| {
+            gpa.free(ptr[0..active_mmap_size]);
+        }
+        active_mmap_ptr = plain_buf.ptr;
+        active_mmap_size = plain_buf.len;
+        try populate_line_offsets(new_content);
+        gui_update_total_virtual_lines(@as(c_int, @intCast(line_offsets.items.len)));
+        return;
+    }
+
+    var file = try Io.Dir.cwd().createFile(global_io, path, .{});
+    defer file.close(global_io);
+
+    if (active_file_is_encrypted) {
+        const key = active_master_key orelse return error.NoMasterKey;
+        const enc_blob = try encryptWithMasterKey(gpa, key, new_content);
+        defer gpa.free(enc_blob);
+        try file.writeStreamingAll(global_io, enc_blob);
+    } else {
+        try file.writeStreamingAll(global_io, new_content);
+    }
+
+    try remap_active_file();
+}
+
+fn restoreSnapshot(entry: UndoEntry) void {
+    file_open_in_progress = true;
+    defer file_open_in_progress = false;
+    write_document_content_and_remap(entry.text) catch return;
+    gui_reload_viewport();
+    gui_set_buffer_modified(1);
+    gui_set_sync_status("Not Synced");
+    gui_set_cursor_position(entry.cursor_line, entry.cursor_col);
+}
+
+pub export fn zig_undo_push(cursor_line: c_int, cursor_col: c_int) callconv(.c) void {
+    if (!undo_push_pending) {
+        undo_push_pending = true;
+        undo_pending_line = cursor_line;
+        undo_pending_col = cursor_col;
+    }
+}
+
+pub export fn zig_undo_commit() callconv(.c) void {
+    if (!undo_push_pending) return;
+    undo_push_pending = false;
+    const entry = captureUndoEntry(undo_pending_line, undo_pending_col) catch return;
+    pushUndoEntry(&undo_stack, &undo_top, entry);
+    clearUndoStack(&redo_stack, &redo_top);
+}
+
+pub export fn zig_undo_clear() callconv(.c) void {
+    clearUndoStack(&undo_stack, &undo_top);
+    clearUndoStack(&redo_stack, &redo_top);
+}
+
+pub export fn zig_undo() callconv(.c) void {
+    if (undo_top < 2) return;
+
+    const current = undo_stack[undo_top - 1];
+    undo_top -= 1;
+    pushUndoEntry(&redo_stack, &redo_top, current);
+
+    const previous = undo_stack[undo_top - 1];
+    restoreSnapshot(previous);
+}
+
+pub export fn zig_redo() callconv(.c) void {
+    if (redo_top == 0) return;
+
+    var current_line: c_int = 0;
+    var current_col: c_int = 0;
+    gui_get_cursor_position(&current_line, &current_col);
+    const current = captureUndoEntry(current_line, current_col) catch UndoEntry{
+        .text = @constCast(""[0..0]),
+        .cursor_line = current_line,
+        .cursor_col = current_col,
+    };
+    pushUndoEntry(&undo_stack, &undo_top, current);
+
+    const redo_entry = redo_stack[redo_top - 1];
+    redo_top -= 1;
+    restoreSnapshot(redo_entry);
+}
+
+pub export fn zig_insert_text(pos: Position, text: [*:0]const u8) callconv(.c) void {
+    const text_slice = std.mem.span(text);
+    if (text_slice.len == 0) return;
+
+    const gpa = std.heap.page_allocator;
+    const content = if (active_mmap_ptr) |ptr| ptr[0..active_mmap_size] else "";
+
+    const offset = positionToOffset(pos);
+    const new_size = content.len + text_slice.len;
+    const new_content = gpa.alloc(u8, new_size) catch return;
+    defer gpa.free(new_content);
+
+    @memcpy(new_content[0..offset], content[0..offset]);
+    @memcpy(new_content[offset .. offset + text_slice.len], text_slice);
+    @memcpy(new_content[offset + text_slice.len ..], content[offset..]);
+
+    write_document_content_and_remap(new_content) catch {};
+}
+
+pub export fn zig_delete_range(start: Position, end: Position) callconv(.c) void {
+    const content = if (active_mmap_ptr) |ptr| ptr[0..active_mmap_size] else "";
+    const start_offset = positionToOffset(start);
+    const end_offset = positionToOffset(end);
+
+    if (start_offset >= end_offset) return;
+
+    const gpa = std.heap.page_allocator;
+    const deleted_len = end_offset - start_offset;
+    const new_size = content.len - deleted_len;
+    const new_content = gpa.alloc(u8, new_size) catch return;
+    defer gpa.free(new_content);
+
+    @memcpy(new_content[0..start_offset], content[0..start_offset]);
+    @memcpy(new_content[start_offset..], content[end_offset..]);
+
+    write_document_content_and_remap(new_content) catch {};
+}
+
+pub export fn zig_replace_range(start: Position, end: Position, text: [*:0]const u8) callconv(.c) void {
+    const text_slice = std.mem.span(text);
+    const content = if (active_mmap_ptr) |ptr| ptr[0..active_mmap_size] else "";
+    const start_offset = positionToOffset(start);
+    const end_offset = positionToOffset(end);
+
+    if (start_offset > end_offset) return;
+
+    const gpa = std.heap.page_allocator;
+    const deleted_len = end_offset - start_offset;
+    const new_size = content.len - deleted_len + text_slice.len;
+    const new_content = gpa.alloc(u8, new_size) catch return;
+    defer gpa.free(new_content);
+
+    @memcpy(new_content[0..start_offset], content[0..start_offset]);
+    @memcpy(new_content[start_offset .. start_offset + text_slice.len], text_slice);
+    @memcpy(new_content[start_offset + text_slice.len ..], content[end_offset..]);
+
+    write_document_content_and_remap(new_content) catch {};
+}
+
+pub export fn zig_save_document() callconv(.c) c_int {
+    if (active_file_path_len == 0) return 1;
+    const path = active_file_path[0..active_file_path_len];
+    if (std.mem.eql(u8, path, "Untitled")) return 0;
+    const gpa = std.heap.page_allocator;
+
+    const content = if (active_mmap_ptr) |ptr| ptr[0..active_mmap_size] else "";
+
+    var file = Io.Dir.cwd().createFile(global_io, path, .{}) catch return 1;
+    defer file.close(global_io);
+
+    if (active_file_is_encrypted) {
+        const key = active_master_key orelse return 1;
+        const enc_blob = encryptWithMasterKey(gpa, key, content) catch return 1;
+        defer gpa.free(enc_blob);
+        file.writeStreamingAll(global_io, enc_blob) catch return 1;
+    } else {
+        file.writeStreamingAll(global_io, content) catch return 1;
+    }
+    return 0;
+}
+
+pub export fn zig_get_document_text() ?[*:0]const u8 {
+    const content = if (active_mmap_ptr) |ptr| ptr[0..active_mmap_size] else "";
+    const gpa = std.heap.page_allocator;
+    const content_z = gpa.dupeZ(u8, content) catch return null;
+    return content_z.ptr;
+}
+
+pub export fn zig_free_document_text(ptr: ?[*:0]const u8) void {
+    if (ptr) |p| {
+        const len = std.mem.len(p);
+        const slice = p[0..len + 1];
+        std.heap.page_allocator.free(slice);
+    }
 }
 
 pub fn alert_file_updated() void {

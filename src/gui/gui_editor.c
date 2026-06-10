@@ -7,123 +7,112 @@
 
 /* Forward declare externally defined helper functions from other modules if needed */
 extern void gui_set_sync_status(const char *status);
-extern char* gui_get_text(void);
 extern void gui_set_text(const char *text, int len);
 extern void gui_set_title(const char *title);
 extern void gui_trigger_autosave(void);
 
+static Position iter_to_position(GtkTextIter *iter) {
+    Position pos = { 0, 0 };
+    if (!global_gui || !iter) return pos;
+    pos.line = global_gui->viewport_start_line + gtk_text_iter_get_line(iter);
+    pos.col = gtk_text_iter_get_line_offset(iter);
+    return pos;
+}
+
+static Position advance_position(Position pos, const char *text) {
+    if (!text) return pos;
+    const char *p = text;
+    while (*p) {
+        gunichar c = g_utf8_get_char(p);
+        if (c == '\n') {
+            pos.line += 1;
+            pos.col = 0;
+        } else {
+            pos.col += 1;
+        }
+        p = g_utf8_next_char(p);
+    }
+    return pos;
+}
+
 void duplicate_current_line(GtkTextBuffer *buf) {
+    (void)buf;
     GtkTextIter cursor_iter;
     gtk_text_buffer_get_iter_at_mark(buf, &cursor_iter, gtk_text_buffer_get_insert(buf));
-    gint line_num = gtk_text_iter_get_line(&cursor_iter);
-    gint col = gtk_text_iter_get_line_offset(&cursor_iter);
+    int abs_line = global_gui->viewport_start_line + gtk_text_iter_get_line(&cursor_iter);
+    int col = gtk_text_iter_get_line_offset(&cursor_iter);
 
-    gtk_text_buffer_begin_user_action(buf);
+    int len = 0;
+    extern const char *zig_get_text_for_line_range(int start_line, int end_line, int *out_len);
+    const char *line_text = zig_get_text_for_line_range(abs_line, abs_line + 1, &len);
+    if (!line_text) return;
 
-    GtkTextIter line_start, line_end;
-    gtk_text_buffer_get_iter_at_line(buf, &line_start, line_num);
-    line_end = line_start;
-    gtk_text_iter_forward_to_line_end(&line_end);
+    char *line_text_dup = g_strndup(line_text, len);
 
-    gchar *line_text = gtk_text_buffer_get_text(buf, &line_start, &line_end, TRUE);
+    Position insert_pos = { abs_line + 1, 0 };
+    zig_insert_text(insert_pos, line_text_dup);
+    g_free(line_text_dup);
 
-    gchar *dup_text = g_strconcat("\n", line_text, NULL);
-    gtk_text_buffer_insert(buf, &line_end, dup_text, -1);
-
-    GtkTextIter final_cursor;
-    gtk_text_buffer_get_iter_at_line(buf, &final_cursor, line_num);
-    for (int i = 0; i < col; i++) {
-        if (gtk_text_iter_ends_line(&final_cursor)) break;
-        gtk_text_iter_forward_char(&final_cursor);
-    }
-    gtk_text_buffer_place_cursor(buf, &final_cursor);
-
-    g_free(line_text);
-    g_free(dup_text);
-
-    gtk_text_buffer_end_user_action(buf);
+    load_viewport_page(global_gui, global_gui->viewport_start_line);
+    gui_set_cursor_position(abs_line + 1, col);
+    zig_undo_commit();
 }
 
 void delete_current_line(GtkTextBuffer *buf) {
+    (void)buf;
     GtkTextIter cursor_iter;
     gtk_text_buffer_get_iter_at_mark(buf, &cursor_iter, gtk_text_buffer_get_insert(buf));
-    gint line_num = gtk_text_iter_get_line(&cursor_iter);
+    int abs_line = global_gui->viewport_start_line + gtk_text_iter_get_line(&cursor_iter);
+    int col = gtk_text_iter_get_line_offset(&cursor_iter);
 
-    gtk_text_buffer_begin_user_action(buf);
+    Position start = { abs_line, 0 };
+    Position end = { abs_line + 1, 0 };
 
-    GtkTextIter line_start, line_end;
-    gtk_text_buffer_get_iter_at_line(buf, &line_start, line_num);
-    line_end = line_start;
+    zig_delete_range(start, end);
 
-    gint total_lines = gtk_text_buffer_get_line_count(buf);
-    if (line_num < total_lines - 1) {
-        gtk_text_iter_forward_line(&line_end);
-        gtk_text_buffer_delete(buf, &line_start, &line_end);
-    } else if (line_num > 0) {
-        gtk_text_buffer_get_iter_at_line(buf, &line_start, line_num - 1);
-        gtk_text_iter_forward_to_line_end(&line_start);
-        gtk_text_iter_forward_to_line_end(&line_end);
-        gtk_text_buffer_delete(buf, &line_start, &line_end);
-    } else {
-        gtk_text_iter_forward_to_line_end(&line_end);
-        gtk_text_buffer_delete(buf, &line_start, &line_end);
-    }
-
-    gtk_text_buffer_end_user_action(buf);
+    load_viewport_page(global_gui, global_gui->viewport_start_line);
+    gui_set_cursor_position(abs_line + 1, col);
+    zig_undo_commit();
 }
 
 void move_current_line(GtkTextBuffer *buf, gboolean up) {
+    (void)buf;
     GtkTextIter cursor_iter;
     gtk_text_buffer_get_iter_at_mark(buf, &cursor_iter, gtk_text_buffer_get_insert(buf));
-    gint line_num = gtk_text_iter_get_line(&cursor_iter);
-    gint col = gtk_text_iter_get_line_offset(&cursor_iter);
-    gint total_lines = gtk_text_buffer_get_line_count(buf);
+    int abs_line = global_gui->viewport_start_line + gtk_text_iter_get_line(&cursor_iter);
+    int col = gtk_text_iter_get_line_offset(&cursor_iter);
 
-    if (up && line_num == 0) return;
-    if (!up && line_num >= total_lines - 1) return;
+    int total_lines = global_gui->total_virtual_lines;
 
-    gint target_line = up ? line_num - 1 : line_num + 1;
+    if (up && abs_line == 0) return;
+    if (!up && abs_line >= total_lines - 1) return;
 
-    gtk_text_buffer_begin_user_action(buf);
+    int target_line = up ? abs_line - 1 : abs_line + 1;
 
-    GtkTextIter line1_start, line1_end;
-    gtk_text_buffer_get_iter_at_line(buf, &line1_start, up ? target_line : line_num);
-    line1_end = line1_start;
-    gtk_text_iter_forward_to_line_end(&line1_end);
+    extern const char *zig_get_text_for_line_range(int start_line, int end_line, int *out_len);
+    int len_curr = 0, len_other = 0;
+    const char *curr_text = zig_get_text_for_line_range(abs_line, abs_line + 1, &len_curr);
+    const char *other_text = zig_get_text_for_line_range(target_line, target_line + 1, &len_other);
 
-    GtkTextIter line2_start, line2_end;
-    gtk_text_buffer_get_iter_at_line(buf, &line2_start, up ? line_num : target_line);
-    line2_end = line2_start;
-    gtk_text_iter_forward_to_line_end(&line2_end);
+    if (!curr_text || !other_text) return;
 
-    gchar *line1_text = gtk_text_buffer_get_text(buf, &line1_start, &line1_end, TRUE);
-    gchar *line2_text = gtk_text_buffer_get_text(buf, &line2_start, &line2_end, TRUE);
+    char *curr_dup = g_strndup(curr_text, len_curr);
+    char *other_dup = g_strndup(other_text, len_other);
 
-    gtk_text_buffer_delete(buf, &line2_start, &line2_end);
-    GtkTextIter insert_iter2;
-    gtk_text_buffer_get_iter_at_line(buf, &insert_iter2, up ? line_num : target_line);
-    gtk_text_buffer_insert(buf, &insert_iter2, line1_text, -1);
+    Position start = { up ? target_line : abs_line, 0 };
+    Position end = { up ? abs_line + 1 : target_line + 1, 0 };
 
-    gtk_text_buffer_get_iter_at_line(buf, &line1_start, up ? target_line : line_num);
-    line1_end = line1_start;
-    gtk_text_iter_forward_to_line_end(&line1_end);
-    gtk_text_buffer_delete(buf, &line1_start, &line1_end);
-    GtkTextIter insert_iter1;
-    gtk_text_buffer_get_iter_at_line(buf, &insert_iter1, up ? target_line : line_num);
-    gtk_text_buffer_insert(buf, &insert_iter1, line2_text, -1);
+    char *combined = up ? g_strconcat(curr_dup, other_dup, NULL) : g_strconcat(other_dup, curr_dup, NULL);
 
-    GtkTextIter final_cursor;
-    gtk_text_buffer_get_iter_at_line(buf, &final_cursor, target_line);
-    for (int i = 0; i < col; i++) {
-        if (gtk_text_iter_ends_line(&final_cursor)) break;
-        gtk_text_iter_forward_char(&final_cursor);
-    }
-    gtk_text_buffer_place_cursor(buf, &final_cursor);
+    zig_replace_range(start, end, combined);
 
-    g_free(line1_text);
-    g_free(line2_text);
+    g_free(curr_dup);
+    g_free(other_dup);
+    g_free(combined);
 
-    gtk_text_buffer_end_user_action(buf);
+    load_viewport_page(global_gui, global_gui->viewport_start_line);
+    gui_set_cursor_position(target_line + 1, col);
+    zig_undo_commit();
 }
 
 void gui_manual_save(AppGui *gui) {
@@ -223,12 +212,18 @@ static void on_paste_plain_text_received(GObject *source_object, GAsyncResult *r
         AppGui *gui = (AppGui *)user_data;
         GtkTextBuffer *buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(gui->source_view));
         GtkTextIter start, end;
-        gtk_text_buffer_begin_user_action(buf);
-        if (gtk_text_buffer_get_selection_bounds(buf, &start, &end)) {
-            gtk_text_buffer_delete(buf, &start, &end);
+        if (!gtk_text_buffer_get_selection_bounds(buf, &start, &end)) {
+            gtk_text_buffer_get_iter_at_mark(buf, &start, gtk_text_buffer_get_insert(buf));
+            end = start;
         }
-        gtk_text_buffer_insert_at_cursor(buf, text, -1);
-        gtk_text_buffer_end_user_action(buf);
+
+        Position start_pos = iter_to_position(&start);
+        Position end_pos = iter_to_position(&end);
+        zig_replace_range(start_pos, end_pos, text);
+        load_viewport_page(gui, gui->viewport_start_line);
+
+        Position cursor_pos = advance_position(start_pos, text);
+        gui_set_cursor_position(cursor_pos.line + 1, cursor_pos.col);
         g_free(text);
     }
 }
@@ -372,17 +367,15 @@ gboolean on_editor_key_pressed(GtkEventControllerKey *ctrl,
     }
     /* ── Undo & Redo ── */
     if (match_app_shortcut("undo", keyval, keycode, state)) {
-        if (gtk_text_buffer_get_enable_undo(buf)) {
-            gtk_text_buffer_undo(buf);
-            return TRUE;
-        }
+        zig_undo();
+        gtk_text_buffer_set_modified(buf, TRUE);
+        return TRUE;
     }
     if (match_app_shortcut("redo", keyval, keycode, state) ||
         (ctrl_held && shift_held && (keyval == GDK_KEY_z || keyval == GDK_KEY_Z || keycode_matches_latin_keyval(keycode, GDK_KEY_z)))) {
-        if (gtk_text_buffer_get_enable_undo(buf)) {
-            gtk_text_buffer_redo(buf);
-            return TRUE;
-        }
+        zig_redo();
+        gtk_text_buffer_set_modified(buf, TRUE);
+        return TRUE;
     }
     /* ── Copy, Cut, Paste ── */
     if (match_app_shortcut("copy", keyval, keycode, state)) {
@@ -410,7 +403,19 @@ gboolean on_editor_key_pressed(GtkEventControllerKey *ctrl,
         gtk_text_buffer_get_iter_at_mark(buf, &end, gtk_text_buffer_get_insert(buf));
         start = end;
         gtk_text_iter_backward_word_start(&start);
-        gtk_text_buffer_delete_interactive(buf, &start, &end, TRUE);
+
+        int start_line = gui->viewport_start_line + gtk_text_iter_get_line(&start);
+        int start_col = gtk_text_iter_get_line_offset(&start);
+        int end_line = gui->viewport_start_line + gtk_text_iter_get_line(&end);
+        int end_col = gtk_text_iter_get_line_offset(&end);
+
+        Position p_start = { start_line, start_col };
+        Position p_end = { end_line, end_col };
+        zig_delete_range(p_start, p_end);
+
+        load_viewport_page(gui, gui->viewport_start_line);
+        gui_set_cursor_position(start_line + 1, start_col);
+        zig_undo_commit();
         return TRUE;
     }
     if (match_app_shortcut("delete_next_word", keyval, keycode, state)) {
@@ -418,7 +423,19 @@ gboolean on_editor_key_pressed(GtkEventControllerKey *ctrl,
         gtk_text_buffer_get_iter_at_mark(buf, &start, gtk_text_buffer_get_insert(buf));
         end = start;
         gtk_text_iter_forward_word_end(&end);
-        gtk_text_buffer_delete_interactive(buf, &start, &end, TRUE);
+
+        int start_line = gui->viewport_start_line + gtk_text_iter_get_line(&start);
+        int start_col = gtk_text_iter_get_line_offset(&start);
+        int end_line = gui->viewport_start_line + gtk_text_iter_get_line(&end);
+        int end_col = gtk_text_iter_get_line_offset(&end);
+
+        Position p_start = { start_line, start_col };
+        Position p_end = { end_line, end_col };
+        zig_delete_range(p_start, p_end);
+
+        load_viewport_page(gui, gui->viewport_start_line);
+        gui_set_cursor_position(start_line + 1, start_col);
+        zig_undo_commit();
         return TRUE;
     }
     /* ── Cursor Movements ── */
@@ -561,9 +578,12 @@ gboolean on_editor_key_pressed(GtkEventControllerKey *ctrl,
             }
             
             if (is_empty_bullet) {
-                GtkTextIter line_end = insert_iter;
-                gtk_text_buffer_delete(buf, &line_start, &line_end);
-                gtk_text_buffer_insert(buf, &line_start, "\n", 1);
+                Position start_pos = iter_to_position(&line_start);
+                Position end_pos = iter_to_position(&insert_iter);
+                zig_replace_range(start_pos, end_pos, "\n");
+                load_viewport_page(gui, gui->viewport_start_line);
+                gui_set_cursor_position(start_pos.line + 1, start_pos.col);
+                zig_undo_commit();
                 g_free(line_text);
                 return TRUE;
             }
@@ -571,7 +591,13 @@ gboolean on_editor_key_pressed(GtkEventControllerKey *ctrl,
             gchar *indent = g_strndup(line_text, ws_len);
             gchar *newline_and_bullet = g_strconcat("\n", indent, bullet_prefix, NULL);
             
-            gtk_text_buffer_insert(buf, &insert_iter, newline_and_bullet, -1);
+            Position insert_pos = iter_to_position(&insert_iter);
+            zig_insert_text(insert_pos, newline_and_bullet);
+            load_viewport_page(gui, gui->viewport_start_line);
+
+            Position cursor_pos = advance_position(insert_pos, newline_and_bullet);
+            gui_set_cursor_position(cursor_pos.line + 1, cursor_pos.col);
+            zig_undo_commit();
             
             g_free(indent);
             g_free(newline_and_bullet);
@@ -581,5 +607,6 @@ gboolean on_editor_key_pressed(GtkEventControllerKey *ctrl,
         g_free(line_text);
     }
 
+    zig_undo_commit();
     return FALSE;
 }
