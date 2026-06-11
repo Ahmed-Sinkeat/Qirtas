@@ -2099,3 +2099,70 @@ pub export fn zig_get_dropbox_credentials_decrypted(client_id_buf: [*]u8, client
 
     return 1;
 }
+
+// ─────────────────────────────────────────────────────────────
+// Tests (run with: zig build test)
+// ─────────────────────────────────────────────────────────────
+
+test "encryptToken/decryptToken round-trip" {
+    const allocator = std.testing.allocator;
+    const secret = "ya29.a0AfH6-test-token-with-arabic-قرطاس";
+    const enc = try encryptToken(allocator, secret);
+    defer allocator.free(enc);
+    // ciphertext is hex and never equals plaintext
+    try std.testing.expect(std.mem.indexOf(u8, enc, secret) == null);
+    const dec = try decryptToken(allocator, enc);
+    defer allocator.free(dec);
+    try std.testing.expectEqualStrings(secret, dec);
+}
+
+test "decryptToken rejects tampered ciphertext" {
+    const allocator = std.testing.allocator;
+    const enc = try encryptToken(allocator, "sensitive");
+    defer allocator.free(enc);
+    const tampered = try allocator.dupe(u8, enc);
+    defer allocator.free(tampered);
+    // flip one hex nibble inside the ciphertext region (past the 24-char nonce)
+    const i = 26;
+    tampered[i] = if (tampered[i] == 'a') 'b' else 'a';
+    try std.testing.expectError(error.AuthenticationFailed, decryptToken(allocator, tampered));
+}
+
+test "decryptToken rejects truncated input" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(error.InvalidEncryptedTokenLength, decryptToken(allocator, "deadbeef"));
+}
+
+test "parse_iso8601_to_unix known timestamps" {
+    try std.testing.expectEqual(@as(i64, 0), try parse_iso8601_to_unix("1970-01-01T00:00:00Z"));
+    // 2026-06-12 00:00:00 UTC
+    try std.testing.expectEqual(@as(i64, 1781222400), try parse_iso8601_to_unix("2026-06-12T00:00:00.000Z"));
+    // leap day handled
+    try std.testing.expectEqual(@as(i64, 1709164800), try parse_iso8601_to_unix("2024-02-29T00:00:00Z"));
+    try std.testing.expectError(error.InvalidDateFormat, parse_iso8601_to_unix("2024-02-29"));
+}
+
+test "make_conflict_filename" {
+    const allocator = std.testing.allocator;
+    const a = try make_conflict_filename(allocator, "notes.md");
+    defer allocator.free(a);
+    try std.testing.expectEqualStrings("notes_conflict.md", a);
+    const b = try make_conflict_filename(allocator, "README");
+    defer allocator.free(b);
+    try std.testing.expectEqualStrings("README_conflict", b);
+}
+
+test "is_syncable_file filter" {
+    try std.testing.expect(is_syncable_file("a.md"));
+    try std.testing.expect(is_syncable_file("a.txt"));
+    try std.testing.expect(!is_syncable_file("vault.db"));
+    try std.testing.expect(!is_syncable_file("image.png"));
+    try std.testing.expect(!is_syncable_file(".md.swp"));
+}
+
+test "config dir resolves under qirtas" {
+    const dir = main.configDir();
+    try std.testing.expect(std.mem.endsWith(u8, dir, "/qirtas"));
+    const db = std.mem.span(main.dbPathZ());
+    try std.testing.expect(std.mem.endsWith(u8, db, "/qirtas/vault.db"));
+}

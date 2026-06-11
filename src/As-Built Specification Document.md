@@ -8,14 +8,14 @@
 
 ## 1. Project Summary
 
-Qirtas is a focused, privacy-first markdown notebook for Linux. It combines a Zig backend for file I/O, autosave, encryption, and cloud sync with a C GTK4/Adwaita frontend for native rendering and editing.
+Qirtas is a focused markdown notebook for Linux. It combines a Zig backend for file I/O, autosave, vault obfuscation, and cloud sync with a C GTK4/Adwaita frontend for native rendering and editing.
 
 **Design Principles:**
 - Native GTK4 rendering, no Electron
 - Zig backend owns all persistent state
 - C frontend is a pure presentation layer
-- ChaCha20Poly1305 encryption for local vault files
-- On-demand cloud sync (not continuous)
+- ChaCha20Poly1305 for vault content — **but see `docs/SECURITY.md`: the unlock key derives from world-readable `/etc/machine-id` on the same disk, so this currently defeats casual browsing only, NOT device theft. Do not market as "encrypted"/"privacy-first" until the key-handling roadmap there is done and human-reviewed.**
+- On-demand cloud sync (not continuous) — conflict safety differs per backend, see `docs/SYNC.md` conflict matrix (Dropbox/Local can silently lose edits)
 
 ---
 
@@ -38,6 +38,15 @@ Qirtas is a focused, privacy-first markdown notebook for Linux. It combines a Zi
 - Files encrypted with a random 32-byte Master Key.
 - Master Key stored in `system_keys`, unlocked via `machine-id`-derived key.
 - Recovery uses a 24-word BIP-39 mnemonic with optional passphrase.
+
+**Threat-model caveat (2026-06-12):** `/etc/machine-id` is world-readable and
+on the same disk as the vault — an attacker with the disk has both ciphertext
+and key material. Honest scope today: protection against casual file browsing
+only. Working-directory `.md` files are plaintext regardless. Full analysis,
+accurate-claims wording, and the fix roadmap (Argon2id passphrase unlock —
+schema columns already reserved — or libsecret keyring) live in
+`docs/SECURITY.md`. Crypto path needs human security review before any
+user-facing "encrypted" claim.
 
 ### 2.4 Cloud Sync: On-Demand Event-Driven
 
@@ -312,7 +321,25 @@ Default typography: **Inter** (premium writing experience). Tabs are consolidate
 
 ---
 
-## 8. Known Technical Debt
+## 8. Testing
+
+`zig build test` builds and runs the Zig test suite (`build.zig` wires the
+GTK/sqlite linkage for it). Coverage as of 2026-06-12:
+
+- `main.zig` — system_keys schema shape test
+- `sync.zig` — token crypto round-trip (encrypt→decrypt identity), tamper
+  rejection (modified ciphertext must fail authentication), ISO-8601
+  timestamp parsing, conflict filename generation, syncable-file filter,
+  XDG path resolution shape
+
+Known gaps (highest value next): C-side is untested (manual memory management
+in 6k+ lines of GUI code); no integration test for the sync state machine
+(metadata-based 3-way decisions in `sync_now_impl`); no test for BIP-39
+recovery round-trip; no fuzzing of `parse_json_value` in `gui_sync.c`.
+
+---
+
+## 9. Known Technical Debt
 
 | Item | Status |
 |---|---|

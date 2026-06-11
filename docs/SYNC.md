@@ -87,9 +87,21 @@ The status text on each sync card is the primary diagnostic. Run the app from a 
 | `Error: cannot create sync folder.` / `sync target is not a directory.` | `~/QirtasSync` (or `QIRTAS_LOCAL_SYNC_DIR`) couldn't be created, or exists as a file | Remove/rename the blocking file |
 | `Error: sync failed.` | Anything not mapped above | Terminal output has the real error name |
 
-### Conflict behavior
+### ⚠️ Conflict behavior — READ THIS, it differs per backend
 
-If a file changed both locally **and** in the cloud since the last sync: the cloud version wins the original filename, your local version is preserved as `<name>_conflict.<ext>`. Merge by hand. Decided by comparing local mtime and Drive `modifiedTime` against `file_metadata.last_modified` in the vault DB.
+What happens when the same note changed on two machines since the last sync:
+
+| Backend | Behavior on conflict | Can it lose your edits? |
+|---|---|---|
+| **Google Drive** | True 3-way detection (local mtime + Drive modifiedTime vs `file_metadata.last_modified` in the vault DB). Cloud version takes the original filename, your local version is preserved as `<name>_conflict.<ext>`. Merge by hand. | No — both versions kept |
+| **Dropbox** | **No conflict detection at all.** The script downloads every remote `.md`/`.txt` over your local files FIRST, then uploads. Any local edit made since the other machine's last upload is **silently overwritten by the remote copy**, and the overwritten file is then re-uploaded. | **YES — local edits since last sync are destroyed** |
+| **GitHub** | `git pull --rebase --strategy-option=theirs` — on conflicting lines the **remote side silently wins**, then your (now-merged) state is pushed. Non-conflicting changes survive; conflicting hunks of your local edit are lost. Old versions remain recoverable in git history. | Partially — conflicting hunks lost from working copy, recoverable via `git log` in `~/.config/qirtas/github_sync` |
+| **Local folder** | Newest mtime wins, full-file copy, no conflict copies, no both-changed detection. If both sides changed, the older edit is **silently overwritten**. | **YES — older side's edits are destroyed** |
+
+**Practical rule until this is unified: treat Google Drive as the only
+conflict-safe backend. Press Sync Now *before* editing on a second machine
+when using Dropbox/Local.** The right fix is to port the Drive-style 3-way
+metadata comparison (+`_conflict` copies) to the other three backends.
 
 ---
 
