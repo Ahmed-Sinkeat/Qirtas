@@ -2,7 +2,10 @@
 
 #include "gui_shared.h"
 
-#define DB_PATH "/home/.config/lawh/vault.db"
+/* Vault DB lives at $XDG_CONFIG_HOME/qirtas/vault.db — resolved once on
+ * the Zig side (single source of truth, includes legacy migration). */
+const char *zig_db_path(void);
+#define DB_PATH zig_db_path()
 #define GHOST_COUNT 40
 #define GHOST_MIN_DIST 3.0
 

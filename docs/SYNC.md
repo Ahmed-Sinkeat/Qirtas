@@ -5,8 +5,8 @@ Four sync providers, all **on-demand** (fire on Save, app close, or the ● Sync
 | Provider | Mechanism | Where files go |
 |---|---|---|
 | Google Drive | OAuth loopback (port 12345) + Drive `appDataFolder` API, native Zig HTTP | Hidden app-data folder in your Drive |
-| Dropbox | OAuth loopback (port 5173), upload via `~/.config/lawh/dropbox_sync.sh` | Your Dropbox app folder |
-| GitHub | Device flow (code shown in dialog), push via `~/.config/lawh/github_sync.sh` | Repo `lawh-notes` (hardcoded) |
+| Dropbox | OAuth loopback (port 5173), upload via `~/.config/qirtas/dropbox_sync.sh` | Your Dropbox app folder |
+| GitHub | Device flow (code shown in dialog), push via `~/.config/qirtas/github_sync.sh` | Repo `lawh-notes` (hardcoded) |
 | Local folder | Plain newest-wins file copy | `~/QirtasSync` (override: `QIRTAS_LOCAL_SYNC_DIR`) |
 
 Synced file types: `.md .txt .zig .zon .c .h` in the **current working directory** of the app.
@@ -81,7 +81,7 @@ The status text on each sync card is the primary diagnostic. Run the app from a 
 | `Error: database unavailable.` | Could not open the vault DB (currently hardcoded `/home/.config/lawh/vault.db`) | Ensure path exists and is writable; see "Known limitations" |
 | `Error: Google Drive list/download/update/upload/metadata failed.` | The specific Drive API call failed after 3 retries (transient 5xx/429 are retried with backoff) | Terminal shows the HTTP status per attempt. 403 with valid auth = Drive API not enabled for your project |
 | `Error: connection refused / unknown host / network unreachable / connection reset / no network addresses.` | Plain network failure at that step | Check connectivity/DNS/VPN |
-| `Error: dropbox_sync.sh missing.` / `Error: github_sync.sh missing.` | Helper script absent or not executable at `~/.config/lawh/` (checked with `access(X_OK)` since 2026-06-12) | Restore the script, `chmod +x` it |
+| `Error: dropbox_sync.sh missing.` / `Error: github_sync.sh missing.` | Helper script absent or not executable at `~/.config/qirtas/` (checked with `access(X_OK)`) | Restore the script, `chmod +x` it |
 | `Error: Dropbox sync failed.` / `Error: GitHub sync failed.` | Helper script ran but exited non-zero | Run it by hand to see why: `bash -x /home/.config/lawh/github_sync.sh <token> lawh-notes .` |
 | `Error: cannot open folder.` | `opendir(".")` failed — app's working directory vanished or lacks permission | Launch from a valid directory |
 | `Error: cannot create sync folder.` / `sync target is not a directory.` | `~/QirtasSync` (or `QIRTAS_LOCAL_SYNC_DIR`) couldn't be created, or exists as a file | Remove/rename the blocking file |
@@ -95,8 +95,8 @@ If a file changed both locally **and** in the cloud since the last sync: the clo
 
 ## 3. Known limitations / sharp edges
 
-1. **Hardcoded DB path** `/home/.config/lawh/vault.db` (not `~/.config`!) in both `sync.zig` and `gui_internal.h`. Works only because that exact directory exists on the dev machine. Should become XDG-based.
-2. **Helper-script dependency**: Dropbox/GitHub data transfer happens in shell scripts at `~/.config/lawh/`, outside the repo — not installed by the build; a fresh machine will hit the "script missing" error.
+1. ~~Hardcoded DB path~~ **Fixed (2026-06-12):** everything now lives in `$XDG_CONFIG_HOME/qirtas/` (default `~/.config/qirtas/`) — vault.db and the sync scripts. On first launch the app automatically copies (never deletes) any data found at the old `/home/.config/lawh/` location. Path is resolved once in `main.zig` (`configDir()`/`dbPathZ()`) and exported to C as `zig_db_path()`.
+2. **Helper-script dependency**: Dropbox/GitHub data transfer happens in shell scripts at `~/.config/qirtas/`, outside the repo — not installed by the build; a fresh machine will hit the "script missing" error.
 3. **GitHub repo hardcoded** to `lawh-notes`; repo entry field in the UI is not wired.
 4. `zig_github_connect()` in sync.zig writes a mock token to a nonexistent column — dead code (the real flow is the C device flow); harmless but should be deleted.
 5. Sync scans only the app's **current working directory**, non-recursive.

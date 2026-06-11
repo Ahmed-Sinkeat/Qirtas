@@ -2614,7 +2614,6 @@ static void activate(GtkApplication *app, gpointer user_data) {
     /* 3. Register custom icon theme paths to default GTK display icon theme */
     GtkIconTheme *icon_theme = gtk_icon_theme_get_for_display(gdk_display_get_default());
     gtk_icon_theme_add_search_path(icon_theme, "src/ui/icons");
-    gtk_icon_theme_add_search_path(icon_theme, "/home/sinkeat/projects/lawh/src/ui/icons");
     if (strlen(custom_icon_path) > 0) {
         char resolved_path[PATH_MAX];
         if (realpath(custom_icon_path, resolved_path) != NULL) {

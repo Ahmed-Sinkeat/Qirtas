@@ -2,7 +2,94 @@ const std = @import("std");
 const Io = std.Io;
 const sync = @import("sync.zig");
 
-const DB_PATH = "/home/.config/lawh/vault.db";
+/// XDG-correct config directory: $XDG_CONFIG_HOME/qirtas, falling back to
+/// $HOME/.config/qirtas, then /tmp/qirtas. Computed once.
+var config_dir_buf: [512]u8 = undefined;
+var config_dir_slice: []const u8 = "";
+
+pub fn configDir() []const u8 {
+    if (config_dir_slice.len != 0) return config_dir_slice;
+    if (c.getenv("XDG_CONFIG_HOME")) |xdg| {
+        const x = std.mem.span(xdg);
+        if (x.len > 0) {
+            config_dir_slice = std.fmt.bufPrint(&config_dir_buf, "{s}/qirtas", .{x}) catch "/tmp/qirtas";
+            return config_dir_slice;
+        }
+    }
+    if (c.getenv("HOME")) |home| {
+        const h = std.mem.span(home);
+        if (h.len > 0) {
+            config_dir_slice = std.fmt.bufPrint(&config_dir_buf, "{s}/.config/qirtas", .{h}) catch "/tmp/qirtas";
+            return config_dir_slice;
+        }
+    }
+    config_dir_slice = "/tmp/qirtas";
+    return config_dir_slice;
+}
+
+var db_path_buf: [600]u8 = [_]u8{0} ** 600;
+
+pub fn dbPathZ() [*:0]const u8 {
+    if (db_path_buf[0] == 0) {
+        _ = std.fmt.bufPrintZ(&db_path_buf, "{s}/vault.db", .{configDir()}) catch {
+            const fallback = "/tmp/qirtas-vault.db";
+            @memcpy(db_path_buf[0..fallback.len], fallback);
+            db_path_buf[fallback.len] = 0;
+        };
+    }
+    return @ptrCast(&db_path_buf);
+}
+
+/// Single source of truth for the C side too.
+pub export fn zig_db_path() callconv(.c) [*:0]const u8 {
+    return dbPathZ();
+}
+
+const LEGACY_CONFIG_DIR = "/home/.config/lawh";
+
+fn copyFileRaw(src_z: [*:0]const u8, dst_z: [*:0]const u8, mode: c.mode_t) void {
+    const in_fd = c.open(src_z, c.O_RDONLY);
+    if (in_fd < 0) return;
+    defer _ = c.close(in_fd);
+    const out_fd = c.open(dst_z, c.O_WRONLY | c.O_CREAT | c.O_TRUNC, mode);
+    if (out_fd < 0) return;
+    defer _ = c.close(out_fd);
+    var buf: [65536]u8 = undefined;
+    while (true) {
+        const n = c.read(in_fd, &buf, buf.len);
+        if (n <= 0) break;
+        var written: isize = 0;
+        while (written < n) {
+            const w = c.write(out_fd, @as([*]const u8, @ptrCast(&buf)) + @as(usize, @intCast(written)), @as(usize, @intCast(n - written)));
+            if (w <= 0) return;
+            written += w;
+        }
+    }
+}
+
+/// One-time migration from the old hardcoded /home/.config/lawh dir.
+/// Copies (never deletes) vault.db and the sync helper scripts into the
+/// XDG config dir if they exist there and not yet at the new location.
+fn migrateLegacyConfig() void {
+    var path_buf: [600]u8 = undefined;
+    var legacy_buf: [600]u8 = undefined;
+
+    const new_db = dbPathZ();
+    if (c.access(new_db, c.F_OK) != 0 and
+        c.access(LEGACY_CONFIG_DIR ++ "/vault.db", c.F_OK) == 0)
+    {
+        copyFileRaw(LEGACY_CONFIG_DIR ++ "/vault.db", new_db, 0o600);
+    }
+
+    const scripts = [_][]const u8{ "dropbox_sync.sh", "github_sync.sh" };
+    for (scripts) |name| {
+        const new_path = std.fmt.bufPrintZ(&path_buf, "{s}/{s}", .{ configDir(), name }) catch continue;
+        const old_path = std.fmt.bufPrintZ(&legacy_buf, "{s}/{s}", .{ LEGACY_CONFIG_DIR, name }) catch continue;
+        if (c.access(new_path.ptr, c.F_OK) != 0 and c.access(old_path.ptr, c.F_OK) == 0) {
+            copyFileRaw(old_path.ptr, new_path.ptr, 0o755);
+        }
+    }
+}
 
 comptime {
     std.testing.refAllDecls(sync);
@@ -17,6 +104,7 @@ const c = @cImport({
     @cInclude("fcntl.h");
     @cInclude("sqlite3.h");
     @cInclude("dirent.h");
+    @cInclude("stdlib.h");
 });
 
 extern fn run_gui(argc: c_int, argv: ?[*]? [*]const u8) c_int;
@@ -194,7 +282,7 @@ pub fn decryptWithMasterKey(allocator: std.mem.Allocator, key: [32]u8, blob: []c
 
 fn initMasterKey() void {
     var db: ?*c.sqlite3 = null;
-    if (c.sqlite3_open(DB_PATH, &db) != c.SQLITE_OK) {
+    if (c.sqlite3_open(dbPathZ(), &db) != c.SQLITE_OK) {
         if (db != null) _ = c.sqlite3_close(db);
         return;
     }
@@ -242,10 +330,23 @@ fn initMasterKey() void {
 }
 
 pub fn main(init: std.process.Init) !void {
-    // Ensure the config directory exists
-    _ = c.mkdir("/home", 0o755);
-    _ = c.mkdir("/home/.config", 0o755);
-    _ = c.mkdir("/home/.config/lawh", 0o755);
+    // Ensure the XDG config directory exists, then migrate any data from
+    // the old hardcoded /home/.config/lawh location (copy, never delete).
+    {
+        var dir_z_buf: [600]u8 = undefined;
+        if (std.fmt.bufPrintZ(&dir_z_buf, "{s}", .{configDir()})) |dir_z| {
+            // Parent (~/.config) exists on any normal system; create it
+            // defensively anyway, then our own dir.
+            if (std.mem.lastIndexOfScalar(u8, dir_z, '/')) |slash| {
+                var parent_buf: [600]u8 = undefined;
+                if (std.fmt.bufPrintZ(&parent_buf, "{s}", .{dir_z[0..slash]})) |parent_z| {
+                    _ = c.mkdir(parent_z.ptr, 0o755);
+                } else |_| {}
+            }
+            _ = c.mkdir(dir_z.ptr, 0o700);
+        } else |_| {}
+    }
+    migrateLegacyConfig();
 
     initMasterKey();
 
@@ -260,7 +361,7 @@ pub fn main(init: std.process.Init) !void {
         workspace_path = std.mem.span(init.minimal.args.vector[1]);
     } else {
         var db: ?*c.sqlite3 = null;
-        if (c.sqlite3_open(DB_PATH, &db) == c.SQLITE_OK) {
+        if (c.sqlite3_open(dbPathZ(), &db) == c.SQLITE_OK) {
             defer _ = c.sqlite3_close(db);
             _ = c.sqlite3_busy_timeout(db, 5000);
             
@@ -341,7 +442,7 @@ fn find_first_indexable_file_posix(out_buf: []u8) bool {
 pub export fn zig_on_gui_ready() callconv(.c) void {
     // Load saved session if exists
     var db: ?*c.sqlite3 = null;
-    if (c.sqlite3_open(DB_PATH, &db) != c.SQLITE_OK) {
+    if (c.sqlite3_open(dbPathZ(), &db) != c.SQLITE_OK) {
         if (db != null) _ = c.sqlite3_close(db);
     } else {
         defer _ = c.sqlite3_close(db);
@@ -535,7 +636,7 @@ pub export fn zig_open_file(filename_ptr: [*:0]const u8) callconv(.c) void {
 
 pub export fn zig_set_cursor_trail(enabled: c_int) callconv(.c) void {
     var db: ?*c.sqlite3 = null;
-    if (c.sqlite3_open(DB_PATH, &db) == c.SQLITE_OK) {
+    if (c.sqlite3_open(dbPathZ(), &db) == c.SQLITE_OK) {
         defer _ = c.sqlite3_close(db);
         _ = c.sqlite3_busy_timeout(db, 5000);
         _ = c.sqlite3_exec(db, "INSERT OR IGNORE INTO session_state (id) VALUES (1);", null, null, null);
@@ -552,7 +653,7 @@ pub export fn zig_set_cursor_trail(enabled: c_int) callconv(.c) void {
 pub export fn zig_get_cursor_trail() callconv(.c) c_int {
     var db: ?*c.sqlite3 = null;
     var enabled: c_int = 1; // default enabled
-    if (c.sqlite3_open(DB_PATH, &db) == c.SQLITE_OK) {
+    if (c.sqlite3_open(dbPathZ(), &db) == c.SQLITE_OK) {
         defer _ = c.sqlite3_close(db);
         _ = c.sqlite3_busy_timeout(db, 5000);
         _ = c.sqlite3_exec(db, "CREATE TABLE IF NOT EXISTS session_state (id INTEGER PRIMARY KEY CHECK (id = 1), active_file TEXT, cursor_line INTEGER, cursor_col INTEGER, vault_path TEXT, enable_cursor_trail INTEGER DEFAULT 1);", null, null, null);
@@ -574,7 +675,7 @@ pub export fn zig_get_cursor_trail() callconv(.c) c_int {
 
 pub export fn zig_set_layout_dividers(enabled: c_int) callconv(.c) void {
     var db: ?*c.sqlite3 = null;
-    if (c.sqlite3_open(DB_PATH, &db) == c.SQLITE_OK) {
+    if (c.sqlite3_open(dbPathZ(), &db) == c.SQLITE_OK) {
         defer _ = c.sqlite3_close(db);
         _ = c.sqlite3_busy_timeout(db, 5000);
         _ = c.sqlite3_exec(db, "INSERT OR IGNORE INTO session_state (id) VALUES (1);", null, null, null);
@@ -591,7 +692,7 @@ pub export fn zig_set_layout_dividers(enabled: c_int) callconv(.c) void {
 pub export fn zig_get_layout_dividers() callconv(.c) c_int {
     var db: ?*c.sqlite3 = null;
     var enabled: c_int = 0; // default disabled
-    if (c.sqlite3_open(DB_PATH, &db) == c.SQLITE_OK) {
+    if (c.sqlite3_open(dbPathZ(), &db) == c.SQLITE_OK) {
         defer _ = c.sqlite3_close(db);
         _ = c.sqlite3_busy_timeout(db, 5000);
         _ = c.sqlite3_exec(db, "CREATE TABLE IF NOT EXISTS session_state (id INTEGER PRIMARY KEY CHECK (id = 1), active_file TEXT, cursor_line INTEGER, cursor_col INTEGER, vault_path TEXT, enable_cursor_trail INTEGER DEFAULT 1, enable_layout_dividers INTEGER DEFAULT 0);", null, null, null);
@@ -613,7 +714,7 @@ pub export fn zig_get_layout_dividers() callconv(.c) c_int {
 
 pub export fn zig_set_bottom_margin(enabled: c_int) callconv(.c) void {
     var db: ?*c.sqlite3 = null;
-    if (c.sqlite3_open(DB_PATH, &db) == c.SQLITE_OK) {
+    if (c.sqlite3_open(dbPathZ(), &db) == c.SQLITE_OK) {
         defer _ = c.sqlite3_close(db);
         _ = c.sqlite3_busy_timeout(db, 5000);
         _ = c.sqlite3_exec(db, "INSERT OR IGNORE INTO session_state (id) VALUES (1);", null, null, null);
@@ -630,7 +731,7 @@ pub export fn zig_set_bottom_margin(enabled: c_int) callconv(.c) void {
 pub export fn zig_get_bottom_margin() callconv(.c) c_int {
     var db: ?*c.sqlite3 = null;
     var enabled: c_int = 0; // default disabled
-    if (c.sqlite3_open(DB_PATH, &db) == c.SQLITE_OK) {
+    if (c.sqlite3_open(dbPathZ(), &db) == c.SQLITE_OK) {
         defer _ = c.sqlite3_close(db);
         _ = c.sqlite3_busy_timeout(db, 5000);
         _ = c.sqlite3_exec(db, "CREATE TABLE IF NOT EXISTS session_state (id INTEGER PRIMARY KEY CHECK (id = 1), active_file TEXT, cursor_line INTEGER, cursor_col INTEGER, vault_path TEXT, enable_cursor_trail INTEGER DEFAULT 1, enable_layout_dividers INTEGER DEFAULT 0, enable_bottom_margin INTEGER DEFAULT 0);", null, null, null);
@@ -652,7 +753,7 @@ pub export fn zig_get_bottom_margin() callconv(.c) c_int {
 
 pub export fn zig_set_focus_mode(enabled: c_int) callconv(.c) void {
     var db: ?*c.sqlite3 = null;
-    if (c.sqlite3_open(DB_PATH, &db) == c.SQLITE_OK) {
+    if (c.sqlite3_open(dbPathZ(), &db) == c.SQLITE_OK) {
         defer _ = c.sqlite3_close(db);
         _ = c.sqlite3_busy_timeout(db, 5000);
         _ = c.sqlite3_exec(db, "INSERT OR IGNORE INTO session_state (id) VALUES (1);", null, null, null);
@@ -669,7 +770,7 @@ pub export fn zig_set_focus_mode(enabled: c_int) callconv(.c) void {
 pub export fn zig_get_focus_mode() callconv(.c) c_int {
     var db: ?*c.sqlite3 = null;
     var enabled: c_int = 0; // default disabled
-    if (c.sqlite3_open(DB_PATH, &db) == c.SQLITE_OK) {
+    if (c.sqlite3_open(dbPathZ(), &db) == c.SQLITE_OK) {
         defer _ = c.sqlite3_close(db);
         _ = c.sqlite3_busy_timeout(db, 5000);
         _ = c.sqlite3_exec(db, "CREATE TABLE IF NOT EXISTS session_state (id INTEGER PRIMARY KEY CHECK (id = 1), active_file TEXT, cursor_line INTEGER, cursor_col INTEGER, vault_path TEXT, enable_cursor_trail INTEGER DEFAULT 1, enable_layout_dividers INTEGER DEFAULT 0, enable_bottom_margin INTEGER DEFAULT 0, enable_focus_mode INTEGER DEFAULT 0, enable_editor_border INTEGER DEFAULT 1);", null, null, null);
@@ -692,7 +793,7 @@ pub export fn zig_get_focus_mode() callconv(.c) c_int {
 
 pub export fn zig_set_editor_border(enabled: c_int) callconv(.c) void {
     var db: ?*c.sqlite3 = null;
-    if (c.sqlite3_open(DB_PATH, &db) == c.SQLITE_OK) {
+    if (c.sqlite3_open(dbPathZ(), &db) == c.SQLITE_OK) {
         defer _ = c.sqlite3_close(db);
         _ = c.sqlite3_busy_timeout(db, 5000);
         _ = c.sqlite3_exec(db, "INSERT OR IGNORE INTO session_state (id) VALUES (1);", null, null, null);
@@ -709,7 +810,7 @@ pub export fn zig_set_editor_border(enabled: c_int) callconv(.c) void {
 pub export fn zig_get_editor_border() callconv(.c) c_int {
     var db: ?*c.sqlite3 = null;
     var enabled: c_int = 1; // default enabled
-    if (c.sqlite3_open(DB_PATH, &db) == c.SQLITE_OK) {
+    if (c.sqlite3_open(dbPathZ(), &db) == c.SQLITE_OK) {
         defer _ = c.sqlite3_close(db);
         _ = c.sqlite3_busy_timeout(db, 5000);
         _ = c.sqlite3_exec(db, "CREATE TABLE IF NOT EXISTS session_state (id INTEGER PRIMARY KEY CHECK (id = 1), active_file TEXT, cursor_line INTEGER, cursor_col INTEGER, vault_path TEXT, enable_cursor_trail INTEGER DEFAULT 1, enable_layout_dividers INTEGER DEFAULT 0, enable_bottom_margin INTEGER DEFAULT 0, enable_focus_mode INTEGER DEFAULT 0, enable_editor_border INTEGER DEFAULT 1);", null, null, null);
@@ -743,7 +844,7 @@ pub export fn zig_open_vault(dir_path_ptr: [*:0]const u8) callconv(.c) void {
 
     // 2. Clear database index tables for the old vault
     var db: ?*c.sqlite3 = null;
-    if (c.sqlite3_open(DB_PATH, &db) == c.SQLITE_OK) {
+    if (c.sqlite3_open(dbPathZ(), &db) == c.SQLITE_OK) {
         defer _ = c.sqlite3_close(db);
         _ = c.sqlite3_busy_timeout(db, 5000);
         _ = c.sqlite3_exec(db, "DELETE FROM file_metadata;", null, null, null);
@@ -1233,7 +1334,7 @@ fn reload_file_callback(user_data: ?*anyopaque) callconv(.c) void {
 
 fn save_session(file_path: []const u8, line: c_int, col: c_int) !void {
     var db: ?*c.sqlite3 = null;
-    if (c.sqlite3_open(DB_PATH, &db) != c.SQLITE_OK) {
+    if (c.sqlite3_open(dbPathZ(), &db) != c.SQLITE_OK) {
         if (db != null) _ = c.sqlite3_close(db);
         return error.DbOpenFailed;
     }
@@ -1309,7 +1410,7 @@ pub export fn zig_search_workspace(query_ptr: [*:0]const u8) callconv(.c) void {
     if (query.len == 0) return;
 
     var db: ?*c.sqlite3 = null;
-    if (c.sqlite3_open(DB_PATH, &db) != c.SQLITE_OK) {
+    if (c.sqlite3_open(dbPathZ(), &db) != c.SQLITE_OK) {
         if (db != null) _ = c.sqlite3_close(db);
         return;
     }

@@ -23,7 +23,9 @@ extern fn gui_trigger_autosave() void;
 // Active IO reference from main.zig
 const main = @import("main.zig");
 
-const DB_PATH = "/home/.config/lawh/vault.db";
+fn dbp() [*:0]const u8 {
+    return main.dbPathZ();
+}
 
 const TokenResponse = struct {
     access_token: []const u8,
@@ -61,7 +63,7 @@ const SyncCredentials = struct {
 
 fn get_credentials(allocator: std.mem.Allocator) !SyncCredentials {
     var db: ?*c.sqlite3 = null;
-    if (c.sqlite3_open(DB_PATH, &db) != c.SQLITE_OK) {
+    if (c.sqlite3_open(dbp(), &db) != c.SQLITE_OK) {
         if (db != null) _ = c.sqlite3_close(db);
         return error.DbOpenFailed;
     }
@@ -124,7 +126,7 @@ fn free_credentials(creds: *SyncCredentials, allocator: std.mem.Allocator) void 
 // FFI: Save credentials entered by user
 pub export fn zig_save_sync_credentials(client_id_ptr: [*:0]const u8, client_secret_ptr: [*:0]const u8) callconv(.c) void {
     var db: ?*c.sqlite3 = null;
-    if (c.sqlite3_open(DB_PATH, &db) != c.SQLITE_OK) {
+    if (c.sqlite3_open(dbp(), &db) != c.SQLITE_OK) {
         if (db != null) _ = c.sqlite3_close(db);
         return;
     }
@@ -171,7 +173,7 @@ pub export fn zig_sync_connect() callconv(.c) void {
     const allocator = std.heap.page_allocator;
     var creds = get_credentials(allocator) catch {
         var db: ?*c.sqlite3 = null;
-        if (c.sqlite3_open(DB_PATH, &db) == c.SQLITE_OK) {
+        if (c.sqlite3_open(dbp(), &db) == c.SQLITE_OK) {
             _ = c.sqlite3_busy_timeout(db, 5000);
             const create_table_sql = 
                 \\CREATE TABLE IF NOT EXISTS sync_tokens (
@@ -315,7 +317,7 @@ fn exchange_token_impl(allocator: std.mem.Allocator, code: []const u8, client_id
     const expiry = @as(i64, @intCast(c.time(null))) + parsed.value.expires_in;
 
     var db: ?*c.sqlite3 = null;
-    if (c.sqlite3_open(DB_PATH, &db) != c.SQLITE_OK) {
+    if (c.sqlite3_open(dbp(), &db) != c.SQLITE_OK) {
         if (db != null) _ = c.sqlite3_close(db);
         return error.DbOpenFailed;
     }
@@ -413,7 +415,7 @@ fn refresh_token_if_needed(allocator: std.mem.Allocator, creds: *SyncCredentials
     const new_expiry = @as(i64, @intCast(c.time(null))) + parsed.value.expires_in;
 
     var db: ?*c.sqlite3 = null;
-    if (c.sqlite3_open(DB_PATH, &db) != c.SQLITE_OK) {
+    if (c.sqlite3_open(dbp(), &db) != c.SQLITE_OK) {
         if (db != null) _ = c.sqlite3_close(db);
         return error.DbOpenFailed;
     }
@@ -898,7 +900,7 @@ fn get_file_modified_time_from_drive(allocator: std.mem.Allocator, access_token:
 
 fn update_local_metadata(allocator: std.mem.Allocator, filename: []const u8, drive_id: []const u8, last_modified: i64) !void {
     var db: ?*c.sqlite3 = null;
-    if (c.sqlite3_open(DB_PATH, &db) != c.SQLITE_OK) {
+    if (c.sqlite3_open(dbp(), &db) != c.SQLITE_OK) {
         if (db != null) _ = c.sqlite3_close(db);
         return error.DbOpenFailed;
     }
@@ -1220,7 +1222,7 @@ fn sync_now_impl(allocator: std.mem.Allocator) anyerror!void {
             
             {
                 var db: ?*c.sqlite3 = null;
-                if (c.sqlite3_open(DB_PATH, &db) == c.SQLITE_OK) {
+                if (c.sqlite3_open(dbp(), &db) == c.SQLITE_OK) {
                     _ = c.sqlite3_busy_timeout(db, 5000);
                     defer _ = c.sqlite3_close(db);
                     const sql_check = "SELECT last_modified, drive_file_id FROM file_metadata WHERE filepath = ?;";
@@ -1337,7 +1339,7 @@ pub export fn zig_sync_check_status() callconv(.c) c_int {
 // FFI: Disconnect account
 pub export fn zig_sync_disconnect() callconv(.c) void {
     var db: ?*c.sqlite3 = null;
-    if (c.sqlite3_open(DB_PATH, &db) != c.SQLITE_OK) {
+    if (c.sqlite3_open(dbp(), &db) != c.SQLITE_OK) {
         if (db != null) _ = c.sqlite3_close(db);
         return;
     }
@@ -1455,7 +1457,7 @@ pub fn decryptToken(allocator: std.mem.Allocator, hex_token: []const u8) ![]u8 {
 
 pub export fn zig_save_dropbox_credentials(client_id_ptr: [*:0]const u8, client_secret_ptr: [*:0]const u8) callconv(.c) void {
     var db: ?*c.sqlite3 = null;
-    if (c.sqlite3_open(DB_PATH, &db) != c.SQLITE_OK) {
+    if (c.sqlite3_open(dbp(), &db) != c.SQLITE_OK) {
         if (db != null) _ = c.sqlite3_close(db);
         return;
     }
@@ -1497,7 +1499,7 @@ const DropboxCredentials = struct {
 
 fn get_dropbox_credentials(allocator: std.mem.Allocator) !DropboxCredentials {
     var db: ?*c.sqlite3 = null;
-    if (c.sqlite3_open(DB_PATH, &db) != c.SQLITE_OK) {
+    if (c.sqlite3_open(dbp(), &db) != c.SQLITE_OK) {
         if (db != null) _ = c.sqlite3_close(db);
         return error.DbOpenFailed;
     }
@@ -1686,7 +1688,7 @@ fn exchange_dropbox_token_impl(allocator: std.mem.Allocator, code: []const u8, c
     const expiry = @as(i64, @intCast(c.time(null))) + parsed.value.expires_in;
 
     var db: ?*c.sqlite3 = null;
-    if (c.sqlite3_open(DB_PATH, &db) != c.SQLITE_OK) {
+    if (c.sqlite3_open(dbp(), &db) != c.SQLITE_OK) {
         if (db != null) _ = c.sqlite3_close(db);
         return error.DbOpenFailed;
     }
@@ -1778,7 +1780,7 @@ fn refresh_dropbox_token_if_needed(allocator: std.mem.Allocator, creds: *Dropbox
     const expiry = @as(i64, @intCast(c.time(null))) + parsed.value.expires_in;
 
     var db: ?*c.sqlite3 = null;
-    if (c.sqlite3_open(DB_PATH, &db) != c.SQLITE_OK) {
+    if (c.sqlite3_open(dbp(), &db) != c.SQLITE_OK) {
         if (db != null) _ = c.sqlite3_close(db);
         return error.DbOpenFailed;
     }
@@ -1804,7 +1806,7 @@ fn refresh_dropbox_token_if_needed(allocator: std.mem.Allocator, creds: *Dropbox
 
 pub export fn zig_dropbox_check_status() callconv(.c) c_int {
     var db: ?*c.sqlite3 = null;
-    if (c.sqlite3_open(DB_PATH, &db) != c.SQLITE_OK) {
+    if (c.sqlite3_open(dbp(), &db) != c.SQLITE_OK) {
         if (db != null) _ = c.sqlite3_close(db);
         return 0;
     }
@@ -1825,7 +1827,7 @@ pub export fn zig_dropbox_check_status() callconv(.c) c_int {
 
 pub export fn zig_dropbox_disconnect() callconv(.c) void {
     var db: ?*c.sqlite3 = null;
-    if (c.sqlite3_open(DB_PATH, &db) == c.SQLITE_OK) {
+    if (c.sqlite3_open(dbp(), &db) == c.SQLITE_OK) {
         defer _ = c.sqlite3_close(db);
         _ = c.sqlite3_busy_timeout(db, 5000);
         _ = c.sqlite3_exec(db, "UPDATE dropbox_sync_tokens SET access_token = NULL, refresh_token = NULL, expiry_time = 0 WHERE id = 1;", null, null, null);
@@ -1858,13 +1860,18 @@ fn dropbox_sync_worker() void {
         allocator.free(token);
     }
 
-    if (c.access("/home/.config/lawh/dropbox_sync.sh", c.X_OK) != 0) {
+    var script_buf: [600]u8 = undefined;
+    const script = std.fmt.bufPrintZ(&script_buf, "{s}/dropbox_sync.sh", .{main.configDir()}) catch {
+        gui_update_dropbox_status(1, "Error: Dropbox sync start failed.");
+        return;
+    };
+    if (c.access(script.ptr, c.X_OK) != 0) {
         gui_update_dropbox_status(1, "Error: dropbox_sync.sh missing.");
         return;
     }
 
     var child = std.process.spawn(main.global_io, .{
-        .argv = &[_][]const u8{ "/home/.config/lawh/dropbox_sync.sh", token, "." },
+        .argv = &[_][]const u8{ script, token, "." },
     }) catch {
         gui_update_dropbox_status(1, "Error: Dropbox sync start failed.");
         return;
@@ -1893,7 +1900,7 @@ fn dropbox_sync_worker() void {
 
 fn get_github_credentials(allocator: std.mem.Allocator) !struct { token: []const u8, repo: []const u8 } {
     var db: ?*c.sqlite3 = null;
-    if (c.sqlite3_open(DB_PATH, &db) != c.SQLITE_OK) {
+    if (c.sqlite3_open(dbp(), &db) != c.SQLITE_OK) {
         if (db != null) _ = c.sqlite3_close(db);
         return error.DbOpenFailed;
     }
@@ -1926,7 +1933,7 @@ fn get_github_credentials(allocator: std.mem.Allocator) !struct { token: []const
 
 pub export fn zig_save_github_credentials(token_ptr: [*:0]const u8, repo_ptr: [*:0]const u8) callconv(.c) void {
     var db: ?*c.sqlite3 = null;
-    if (c.sqlite3_open(DB_PATH, &db) != c.SQLITE_OK) {
+    if (c.sqlite3_open(dbp(), &db) != c.SQLITE_OK) {
         if (db != null) _ = c.sqlite3_close(db);
         return;
     }
@@ -1957,7 +1964,7 @@ pub export fn zig_save_github_credentials(token_ptr: [*:0]const u8, repo_ptr: [*
 
 pub export fn zig_github_connect() callconv(.c) void {
     var db: ?*c.sqlite3 = null;
-    if (c.sqlite3_open(DB_PATH, &db) == c.SQLITE_OK) {
+    if (c.sqlite3_open(dbp(), &db) == c.SQLITE_OK) {
         defer _ = c.sqlite3_close(db);
         _ = c.sqlite3_busy_timeout(db, 5000);
         _ = c.sqlite3_exec(db, "UPDATE github_sync_tokens SET access_token = 'mock-github-token' WHERE id = 1;", null, null, null);
@@ -1970,7 +1977,7 @@ pub export fn zig_github_connect() callconv(.c) void {
 
 pub export fn zig_github_check_status() callconv(.c) c_int {
     var db: ?*c.sqlite3 = null;
-    if (c.sqlite3_open(DB_PATH, &db) != c.SQLITE_OK) {
+    if (c.sqlite3_open(dbp(), &db) != c.SQLITE_OK) {
         if (db != null) _ = c.sqlite3_close(db);
         return 0;
     }
@@ -1991,7 +1998,7 @@ pub export fn zig_github_check_status() callconv(.c) c_int {
 
 pub export fn zig_github_disconnect() callconv(.c) void {
     var db: ?*c.sqlite3 = null;
-    if (c.sqlite3_open(DB_PATH, &db) == c.SQLITE_OK) {
+    if (c.sqlite3_open(dbp(), &db) == c.SQLITE_OK) {
         defer _ = c.sqlite3_close(db);
         _ = c.sqlite3_busy_timeout(db, 5000);
         _ = c.sqlite3_exec(db, "UPDATE github_sync_tokens SET personal_token = NULL WHERE id = 1;", null, null, null);
@@ -2019,13 +2026,18 @@ fn github_sync_worker() void {
         allocator.free(creds.repo);
     }
 
-    if (c.access("/home/.config/lawh/github_sync.sh", c.X_OK) != 0) {
+    var script_buf: [600]u8 = undefined;
+    const script = std.fmt.bufPrintZ(&script_buf, "{s}/github_sync.sh", .{main.configDir()}) catch {
+        gui_update_github_status(1, "Error: GitHub sync start failed.");
+        return;
+    };
+    if (c.access(script.ptr, c.X_OK) != 0) {
         gui_update_github_status(1, "Error: github_sync.sh missing.");
         return;
     }
 
     var child = std.process.spawn(main.global_io, .{
-        .argv = &[_][]const u8{ "/home/.config/lawh/github_sync.sh", creds.token, creds.repo, "." },
+        .argv = &[_][]const u8{ script, creds.token, creds.repo, "." },
     }) catch {
         gui_update_github_status(1, "Error: GitHub sync start failed.");
         return;
