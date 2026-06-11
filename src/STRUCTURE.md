@@ -115,9 +115,9 @@ Total Document Lines (e.g. 17,556 lines total, owned by Zig backend)
 ```
 
 1. **Active Range Boundaries (`viewport_set_range`)**: Configures active line boundaries (`active_page_start_line` / `active_page_end_line`) and manages 1px-minimum top and bottom layout spacers.
-2. **Viewport Request (`request_viewport_position`)**: Single decision point for scroll, cursor, and open-file requests. Reloads only when the target line is outside safe margins.
-3. **Adaptive Page Loading (`load_viewport_page` + `get_page_size`)**: Selects page size (400 / 300 / 250 lines) based on total document line count. Increments `buffer_generation` before swapping the buffer, causing all pending idle callbacks to self-cancel.
-4. **Scroll Debounce (`on_scroll_changed` → `fire_scroll`)**: 60ms `g_timeout_add` debounce. Tracks scroll direction; suppresses direction reversals within 200ms to prevent spacer-collapse feedback loops.
+2. **Viewport Request (`request_viewport_position`)**: Single decision point for scroll, cursor, and open-file requests. Logs current cursor/scroll state, then reloads only when target abs line is outside safe margins.
+3. **Adaptive Page Loading (`load_viewport_page` + `get_page_size`)**: Selects page size (400 / 300 / 250 lines) based on total document line count. Increments `buffer_generation` before swapping the buffer, snapshots current absolute cursor position locally, remaps it into the new viewport slice, and restores cursor after reload.
+4. **Scroll Debounce (`on_scroll_changed` → `fire_scroll`)**: 60ms `g_timeout_add` debounce. `get_line_at_y()` returns viewport-local line from pixel Y, and `fire_scroll()` converts it to absolute document line before calling `request_viewport_position()`.
 
 ### Buffer-Generation Guard Pattern
 
@@ -134,12 +134,12 @@ if (d->generation != d->gui->buffer_generation) {
 }
 ```
 
-Modules using this pattern: `gui_conceal.c` (global + local conceal), `gui_wiki.c` (global + local wiki tags), `gui_conceal.c` (`idle_scroll_to_cursor`), `gui_popover.c` (`idle_scroll_to_cursor`).
+Modules using this pattern: `gui_conceal.c` (global + local conceal), `gui_wiki.c` (global + local wiki tags), `gui_hr.c` (idle render hrs), `gui_conceal.c` (`idle_scroll_to_cursor`), `gui_popover.c` (`idle_scroll_to_cursor`).
 
 ## Document Ownership Model
 
 - **Backend (Zig)**: Owns the complete document state (Source of Truth). Maintains line offsets, file system updates, persistent state, and all document edits.
-- **Frontend (GTK/C)**: Owns only the visual viewport representation — a presentation layer displaying the active text slice.
+- **Frontend (GTK/C)**: Owns only the visual viewport representation — a presentation layer displaying the active text slice and the transient viewport-local cursor position used during reload remapping.
 
 > [!NOTE]
 > Live document reads come from Zig-side accessors: `zig_get_document_text()` and `zig_get_text_for_line_range()`. The GTK `GtkTextBuffer` is viewport-only and always refreshed from Zig-owned content.
@@ -167,14 +167,14 @@ Both C and Zig communicate via memory-mapped C linkage.
 
 ### C functions called from Zig (Declared in `gui_shared.h` / `main.zig` externs)
 
-- `void gui_set_text(const char *text, int len)`: Sets viewport slice, increments `buffer_generation`, updates layout.
+- `void gui_set_text(const char *text, int len)`: Sets viewport slice directly, renders horizontal rules, and updates layout.
 - `void gui_set_title(const char *title)`: Updates window title and selects active tab.
 - `void gui_set_sync_status(const char *status)`: Updates the sync status text pill.
 - `void gui_show_editor(void)`: Switches workspace view stack to the editor page.
 - `void gui_show_recovery_dialog(void)`: Opens the recovery modal when the backend cannot unlock the vault.
 - `void gui_get_cursor_position(int *line, int *col)`: Retrieves current cursor position.
 - `void gui_set_cursor_position(int line, int col)`: Restores cursor (clamped to line byte length) through shared viewport request path.
-- `void request_viewport_position(AppGui *gui, int abs_line)`: Single viewport request entry point; reloads only when outside safe margins.
+- `void request_viewport_position(AppGui *gui, int abs_line)`: Single viewport request entry point; reloads only when outside safe margins. Logs request context and chosen viewport window for cursor/scroll debugging.
 - `void gui_refresh_explorer(void)`: Refreshes directory tree explorer on idle.
 - `void gui_set_virtual_scroll_mode(int enabled, int total_lines)`: Configures virtual scrolling mode.
 - `void gui_init_virtual_document(int total_lines, int start_line, int end_line)`: Sets up virtual layout variables and spacer ranges.

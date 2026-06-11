@@ -45,9 +45,8 @@ gboolean idle_scroll_to_cursor(gpointer user_data) {
     GtkTextBuffer *buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(gui->source_view));
     GtkTextIter iter;
     gint char_count = gtk_text_buffer_get_char_count(buf);
-    if (offset < 0) offset = 0;
-    if (offset > char_count) offset = char_count;
-    gtk_text_buffer_get_iter_at_offset(buf, &iter, offset);
+    g_print("IDLE_CALLBACK_START idle_scroll_to_cursor offset=%d\n", offset);
+    debug_get_iter_at_offset(buf, &iter, offset, "idle_scroll_to_cursor");
 
     GdkRectangle rect;
     gtk_text_view_get_iter_location(GTK_TEXT_VIEW(gui->source_view), &iter, &rect);
@@ -97,6 +96,7 @@ gboolean idle_scroll_to_cursor(gpointer user_data) {
             gtk_adjustment_set_value(gui->vadjustment, target_value);
         }
     }
+    g_print("IDLE_CALLBACK_END idle_scroll_to_cursor SUCCESS\n");
     return G_SOURCE_REMOVE;
 }
 
@@ -174,12 +174,12 @@ static void apply_regex_conceal(GtkTextBuffer *buf, const gchar *text, const gch
             gboolean cursor_inside = (cursor_char >= start_char && cursor_char <= end_char);
             if (!cursor_inside) {
                 GtkTextIter start_iter, end_iter;
-                gtk_text_buffer_get_iter_at_offset(buf, &start_iter, start_char);
-                gtk_text_buffer_get_iter_at_offset(buf, &end_iter, start_char + delim_len);
+                debug_get_iter_at_offset(buf, &start_iter, start_char, "apply_regex_conceal_start");
+                debug_get_iter_at_offset(buf, &end_iter, start_char + delim_len, "apply_regex_conceal_end");
                 gtk_text_buffer_apply_tag(buf, conceal_tag, &start_iter, &end_iter);
 
-                gtk_text_buffer_get_iter_at_offset(buf, &start_iter, end_char - delim_len);
-                gtk_text_buffer_get_iter_at_offset(buf, &end_iter, end_char);
+                debug_get_iter_at_offset(buf, &start_iter, end_char - delim_len, "apply_regex_conceal_end_start");
+                debug_get_iter_at_offset(buf, &end_iter, end_char, "apply_regex_conceal_end_end");
                 gtk_text_buffer_apply_tag(buf, conceal_tag, &start_iter, &end_iter);
             }
         }
@@ -244,12 +244,12 @@ static void apply_regex_conceal_local(GtkTextBuffer *buf, const gchar *text, gin
                 if (c_end2 > total_chars) c_end2 = total_chars;
 
                 GtkTextIter start_iter, end_iter;
-                gtk_text_buffer_get_iter_at_offset(buf, &start_iter, c_start1);
-                gtk_text_buffer_get_iter_at_offset(buf, &end_iter, c_end1);
+                debug_get_iter_at_offset(buf, &start_iter, c_start1, "apply_regex_conceal_local_start");
+                debug_get_iter_at_offset(buf, &end_iter, c_end1, "apply_regex_conceal_local_end");
                 gtk_text_buffer_apply_tag(buf, conceal_tag, &start_iter, &end_iter);
 
-                gtk_text_buffer_get_iter_at_offset(buf, &start_iter, c_start2);
-                gtk_text_buffer_get_iter_at_offset(buf, &end_iter, c_end2);
+                debug_get_iter_at_offset(buf, &start_iter, c_start2, "apply_regex_conceal_local_end_start");
+                debug_get_iter_at_offset(buf, &end_iter, c_end2, "apply_regex_conceal_local_end_end");
                 gtk_text_buffer_apply_tag(buf, conceal_tag, &start_iter, &end_iter);
             }
         }
@@ -361,17 +361,21 @@ typedef struct {
 } ConcealData;
 
 static gboolean idle_global_conceal_cb(gpointer user_data) {
+    g_print("IDLE_CALLBACK_START idle_global_conceal_cb\n");
     ConcealData *d = user_data;
     global_conceal_queued = FALSE;
-    if (d->gui && d->generation != d->gui->buffer_generation) {
+    if (d->generation != d->gui->buffer_generation) {
+        g_print("IDLE_CALLBACK_CANCEL idle_global_conceal_cb (stale generation)\n");
         g_free(d);
         return G_SOURCE_REMOVE;
     }
     
-    if (d->gui && d->gui->text_buffer) {
-        update_conceal_markdown_all_impl(d->gui->text_buffer);
+    if (d->gui && global_source_view) {
+        GtkTextBuffer *buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(global_source_view));
+        update_conceal_markdown_all_impl(buf);
     }
     g_free(d);
+    g_print("IDLE_CALLBACK_END idle_global_conceal_cb SUCCESS\n");
     return G_SOURCE_REMOVE;
 }
 
@@ -500,17 +504,21 @@ static void update_conceal_markdown_impl(GtkTextBuffer *buf) {
 }
 
 static gboolean idle_local_conceal_cb(gpointer user_data) {
+    g_print("IDLE_CALLBACK_START idle_local_conceal_cb\n");
     ConcealData *d = user_data;
     local_conceal_queued = FALSE;
-    if (d->gui && d->generation != d->gui->buffer_generation) {
+    if (d->generation != d->gui->buffer_generation) {
+        g_print("IDLE_CALLBACK_CANCEL idle_local_conceal_cb (stale generation)\n");
         g_free(d);
         return G_SOURCE_REMOVE;
     }
     
-    if (d->gui && d->gui->text_buffer) {
-        update_conceal_markdown_impl(d->gui->text_buffer);
+    if (d->gui && global_source_view) {
+        GtkTextBuffer *buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(global_source_view));
+        update_conceal_markdown_impl(buf);
     }
     g_free(d);
+    g_print("IDLE_CALLBACK_END idle_local_conceal_cb SUCCESS\n");
     return G_SOURCE_REMOVE;
 }
 
@@ -541,7 +549,13 @@ void on_mark_set(GtkTextBuffer *buf, GtkTextIter *location, GtkTextMark *mark, g
     if (!gui->vadjustment || !gui->source_view || !gui->virtual_layout_box) return;
 
     GtkTextMark *insert_mark = gtk_text_buffer_get_insert(buf);
+    GtkTextMark *bound_mark = gtk_text_buffer_get_selection_bound(buf);
+    int line = gtk_text_iter_get_line(location);
+    int col = gtk_text_iter_get_line_offset(location);
+    int gen = gui ? (int)gui->buffer_generation : -1;
+
     if (mark == insert_mark) {
+        g_print("MARK_SET insert line=%d col=%d generation=%d\n", line, col, gen);
         /* Defer tag updates to idle so Pango layout is stable and doesn't get stale byte-index cache. */
         update_conceal_markdown(buf);
 
@@ -553,6 +567,8 @@ void on_mark_set(GtkTextBuffer *buf, GtkTextIter *location, GtkTextMark *mark, g
         d->offset = gtk_text_iter_get_offset(location);
         d->generation = gui->buffer_generation;
         g_idle_add(idle_scroll_to_cursor, d);
+    } else if (mark == bound_mark) {
+        g_print("MARK_SET selection_bound line=%d col=%d generation=%d\n", line, col, gen);
     }
 }
 

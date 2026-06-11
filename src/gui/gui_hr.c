@@ -52,7 +52,7 @@ void check_and_insert_hr(GtkTextBuffer *buf, AppGui *gui) {
     gtk_text_buffer_get_iter_at_mark(buf, &cursor, insert_mark);
 
     GtkTextIter line_start = cursor;
-    gtk_text_iter_set_line_offset(&line_start, 0);
+    debug_set_line_offset(&line_start, 0, "check_and_insert_hr_current");
 
     gchar *line_text = gtk_text_buffer_get_text(buf, &line_start, &cursor, TRUE);
     if (!line_text) return;
@@ -76,7 +76,7 @@ void check_and_insert_hr(GtkTextBuffer *buf, AppGui *gui) {
             gunichar c = gtk_text_iter_get_char(&prev_char);
             if (c == '\n') {
                 GtkTextIter prev_line_start = prev_char;
-                gtk_text_iter_set_line_offset(&prev_line_start, 0);
+                debug_set_line_offset(&prev_line_start, 0, "check_and_insert_hr_prev");
                 gchar *prev_line_text = gtk_text_buffer_get_text(buf, &prev_line_start, &prev_char, TRUE);
                 if (prev_line_text && strcmp(prev_line_text, "---") == 0) {
                     is_hr = TRUE;
@@ -120,4 +120,18 @@ void check_and_insert_hr(GtkTextBuffer *buf, AppGui *gui) {
         g_signal_handlers_unblock_by_func(buf, on_delete_range_after, gui);
         g_signal_handlers_unblock_by_func(buf, on_buffer_changed, gui);
     }
+}
+
+gboolean idle_render_hrs_cb(gpointer user_data) {
+    HrRenderData *d = user_data;
+    if (d->generation != d->gui->buffer_generation) {
+        g_free(d);
+        return G_SOURCE_REMOVE;
+    }
+    if (d->gui && d->gui->source_view) {
+        GtkTextBuffer *buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(d->gui->source_view));
+        parse_and_render_hrs(buf, d->gui);
+    }
+    g_free(d);
+    return G_SOURCE_REMOVE;
 }

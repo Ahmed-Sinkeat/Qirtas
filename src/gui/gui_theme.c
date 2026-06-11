@@ -71,6 +71,7 @@ void update_editor_font(AppGui *gui) {
         "}",
         gui->current_en_font, gui->current_ar_font, gui->current_font_size);
     gtk_css_provider_load_from_string(gui->font_provider, css);
+    gui_remeasure_line_height();
 }
 
 void on_font_size_changed(GtkSpinButton *spin, gpointer user_data) {
@@ -376,6 +377,7 @@ void apply_theme(AppGui *gui, const char *theme_name) {
         }
         gtk_source_buffer_set_style_scheme(src_buf, scheme);
     }
+    gui_remeasure_line_height();
 }
 
 static void on_custom_theme_dialog_response(GObject *source_object, GAsyncResult *res, gpointer user_data) {

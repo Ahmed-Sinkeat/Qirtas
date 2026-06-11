@@ -238,6 +238,48 @@ gboolean on_editor_key_pressed(GtkEventControllerKey *ctrl,
     gboolean ctrl_held  = (state & GDK_CONTROL_MASK) != 0;
     gboolean shift_held = (state & GDK_SHIFT_MASK)   != 0;
 
+    if (keyval == GDK_KEY_Up || keyval == GDK_KEY_KP_Up ||
+        keyval == GDK_KEY_Down || keyval == GDK_KEY_KP_Down ||
+        keyval == GDK_KEY_Home || keyval == GDK_KEY_KP_Home ||
+        keyval == GDK_KEY_End || keyval == GDK_KEY_KP_End ||
+        keyval == GDK_KEY_Page_Up || keyval == GDK_KEY_KP_Page_Up ||
+        keyval == GDK_KEY_Page_Down || keyval == GDK_KEY_KP_Page_Down) {
+        GtkTextIter cursor;
+        gtk_text_buffer_get_iter_at_mark(buf, &cursor, gtk_text_buffer_get_insert(buf));
+        int line = gtk_text_iter_get_line(&cursor);
+        int col = gtk_text_iter_get_line_offset(&cursor);
+        int gen = gui ? (int)gui->buffer_generation : -1;
+        const char *keyname = "Unknown";
+        if (keyval == GDK_KEY_Up || keyval == GDK_KEY_KP_Up) keyname = "Up";
+        else if (keyval == GDK_KEY_Down || keyval == GDK_KEY_KP_Down) keyname = "Down";
+        else if (keyval == GDK_KEY_Home || keyval == GDK_KEY_KP_Home) keyname = "Home";
+        else if (keyval == GDK_KEY_End || keyval == GDK_KEY_KP_End) keyname = "End";
+        else if (keyval == GDK_KEY_Page_Up || keyval == GDK_KEY_KP_Page_Up) keyname = "PageUp";
+        else if (keyval == GDK_KEY_Page_Down || keyval == GDK_KEY_KP_Page_Down) keyname = "PageDown";
+        g_print("KEY_NAVIGATION key=%s line=%d col=%d generation=%d\n", keyname, line, col, gen);
+
+        if ((keyval == GDK_KEY_Down || keyval == GDK_KEY_KP_Down) && gui && gui->source_view && global_gui) {
+            int line_count = gtk_text_buffer_get_line_count(buf);
+            if (line_count > 0 && line >= line_count - 1) {
+                int current_abs_line = global_gui->viewport_start_line + line;
+                if (current_abs_line < global_gui->total_virtual_lines - 1) {
+                    int next_start = global_gui->viewport_end_line;
+                    g_print(
+                        "BOUNDARY_DOWN line=%d line_count=%d viewport=%d-%d\n",
+                        line,
+                        line_count,
+                        global_gui->viewport_start_line,
+                        global_gui->viewport_end_line
+                    );
+                    gui->pending_line = next_start;
+                    gui->pending_col = col;
+                    load_viewport_page(global_gui, next_start);
+                    return TRUE;
+                }
+            }
+        }
+    }
+
     /* ── Bold ── */
     if (match_app_shortcut("bold", keyval, keycode, state)) {
         apply_format(buf, "**", "**");
@@ -458,7 +500,7 @@ gboolean on_editor_key_pressed(GtkEventControllerKey *ctrl,
     if (match_app_shortcut("move_line_start", keyval, keycode, state)) {
         GtkTextIter iter;
         gtk_text_buffer_get_iter_at_mark(buf, &iter, gtk_text_buffer_get_insert(buf));
-        gtk_text_iter_set_line_offset(&iter, 0);
+        debug_set_line_offset(&iter, 0, "move_line_start");
         gtk_text_buffer_place_cursor(buf, &iter);
         gtk_text_view_scroll_mark_onscreen(GTK_TEXT_VIEW(gui->source_view), gtk_text_buffer_get_insert(buf));
         return TRUE;

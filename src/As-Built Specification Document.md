@@ -5,10 +5,11 @@
 1. Zig owns canonical document content and all edit mutations.
 2. GTK renders only the visible viewport slice plus interaction surfaces.
 3. `request_viewport_position(gui, abs_line)` is the **single entry point** for all viewport requests (scroll, cursor, open-file). Nothing else initiates a page reload.
-4. `load_viewport_page(gui, start, end)` performs raw slice retrieval and viewport range update — no policy decisions inside.
+4. `load_viewport_page(gui, start, end)` performs raw slice retrieval and viewport range update, snapshots current absolute cursor position, and restores that cursor into the new slice before releasing `loading_viewport`.
 5. `loading_viewport` blocks re-entrant refresh while slice data is changing.
 6. `gui_set_cursor_position(line, col)` routes through `request_viewport_position` and clamps `col` to `gtk_text_iter_get_bytes_in_line()` before setting the iterator — preventing `Byte index N is off the end of the line` aborts.
-7. `gui_set_text()` increments `buffer_generation` before touching the `GtkTextBuffer`. Every deferred idle callback checks this counter and self-cancels if it has changed.
+7. `load_viewport_page()` increments `buffer_generation` before replacing viewport text. Every deferred idle callback checks this counter and self-cancels if it has changed.
+8. `fire_scroll()` converts viewport-local scroll line to absolute document line before calling `request_viewport_position()`.
 
 ---
 
@@ -18,17 +19,18 @@
 
 #### Bug: Stale `GtkTextIter` → `Byte index N is off the end of the line` crash
 
-**Root cause:** Modules (`gui_conceal.c`, `gui_wiki.c`, `gui_popover.c`) scheduled `g_idle_add` callbacks that captured a `GtkTextBuffer` pointer. Between schedule and execution, `load_viewport_page` could replace the buffer's text entirely via `gui_set_text`. The old iters then pointed into invalidated content — GTK's Pango renderer aborted.
+**Root cause:** Modules (`gui_conceal.c`, `gui_wiki.c`, `gui_popover.c`) scheduled `g_idle_add` callbacks that captured a `GtkTextBuffer` pointer. Between schedule and execution, `load_viewport_page` could replace the buffer's text entirely. The old iters then pointed into invalidated content — GTK's Pango renderer aborted.
 
 **Fix — `buffer_generation` counter:**
 - `gui_internal.h`: Added `guint buffer_generation` to `AppGui`.
-- `gui.c / gui_set_text`: Increments `buffer_generation` before every buffer text replacement.
-- All deferred idle callbacks (`ConcealData`, `WikiData`, `ScrollToCursorData`) now store the generation at schedule time. If `d->generation != d->gui->buffer_generation` when the callback fires, it frees itself and returns `G_SOURCE_REMOVE` silently.
+- `gui.c / load_viewport_page`: Increments `buffer_generation` before every buffer text replacement.
+- All deferred idle callbacks (`ConcealData`, `WikiData`, `ScrollToCursorData`, `HrRenderData`) now store the generation at schedule time. If `d->generation != d->gui->buffer_generation` when the callback fires, it frees itself and returns `G_SOURCE_REMOVE` silently.
 
 Affected call sites:
 - `gui_conceal.c` — `idle_global_conceal_cb`, `idle_local_conceal_cb`, `idle_scroll_to_cursor`
 - `gui_wiki.c` — `idle_wiki_global_cb`, `idle_wiki_local_cb`
 - `gui_popover.c` — `idle_scroll_to_cursor`
+- `gui_hr.c` — `idle_render_hrs_cb`
 
 #### Bug: Scroll jumps backward one page (2191 → 2075 regression)
 
@@ -37,6 +39,8 @@ Affected call sites:
 **Fix — direction reversal lock in `fire_scroll`:**
 - Added `last_load_direction` (+1 / -1) and `last_load_time_ms` static locals.
 - If an incoming scroll request contradicts the direction of the immediately preceding load AND less than 200ms have passed, the request is dropped.
+- The direction lock is only applied if `last_loaded_start >= 0` (indicating a valid previous load exists).
+- Added `gui_reset_scroll_direction_state()` to clear direction tracking upon document switch / title change (called in `gui_set_title`).
 - This prevents the spacer-collapse feedback loop from triggering useless reverse page fetches.
 
 #### Bug: `Segmentation fault at 0x100000018` — corrupted pointer crash
@@ -53,6 +57,15 @@ Affected call sites:
 
 **Fix — byte-clamped cursor restore:**
 - `gui_set_cursor_position` now calls `gtk_text_buffer_get_iter_at_line`, then reads `gtk_text_iter_get_bytes_in_line(&iter)` and clamps `safe_col` to that value before advancing.
+
+#### Bug: Cursor drift after viewport reload
+
+**Root cause:** Reload changed GTK slice without preserving absolute cursor position. The buffer insert mark could stay pinned to old viewport-local rows, so later navigation continued from already visited content.
+
+**Fix — transient absolute cursor snapshot during reload:**
+- `load_viewport_page()` stores `saved_abs_line` and `saved_abs_col` before buffer swap.
+- After new slice loads, it remaps that absolute position into new viewport and re-selects it before `loading_viewport` clears.
+- This keeps viewport-local cursor state aligned with document position without adding persistent cursor architecture.
 
 #### Optimization: Adaptive page size
 
@@ -87,10 +100,10 @@ request_viewport_position(gui, line)
   ▼
 load_viewport_page(gui, start, end)
   ├─ buffer_generation++
-  ├─ cancel pending conceal/highlight idles  (via generation counter)
+  ├─ cancel pending conceal/highlight/hr idles  (via generation counter)
   ├─ signal_handler_block(vadj)
   ├─ viewport_set_range(gui, start, end)    (spacers ≥ 1px)
-  ├─ gui_set_text(content, len)
+  ├─ gtk_text_buffer_set_text(buf, content, len)
   └─ g_timeout_add(10ms) → unblock vadj signal
 ```
 
@@ -102,7 +115,7 @@ load_viewport_page(gui, start, end)
 |---|---|
 | `gui_set_text` called off the main thread | Asserted via `g_assert(g_main_context_is_owner(...))` |
 | Spacer height set to 0 | GTK layout invalidation → corrupted widget pointer crash |
-| `GtkTextIter` used after `gui_set_text` returns | Undefined behaviour — use generation counter to cancel |
+| `GtkTextIter` used after buffer replacement | Undefined behaviour — use generation counter to cancel |
 | Any module calling `load_viewport_page` directly | Bypasses safe-margin guard and re-entrancy check |
 | Cursor col set without byte-clamping | `Byte index N is off the end of the line` abort |
 
@@ -111,5 +124,7 @@ load_viewport_page(gui, start, end)
 ## Notes
 
 1. Scroll, cursor, and open-file paths must not each decide viewport reload independently. All go through `request_viewport_position`.
-2. `request_viewport_position` is the only place that tunes safe margins and centering offsets.
-3. The `buffer_generation` pattern is the contract for all deferred buffer access — every new `g_idle_add` that touches the buffer must follow it.
+2. `request_viewport_position` is the only place that tunes safe margins and centering offsets. It also logs request context and chosen viewport window for cursor/scroll debugging.
+3. `get_line_at_y()` returns viewport-local line from pixel Y. `fire_scroll()` converts it to absolute document line before asking for reload.
+4. Edge `Down` navigation at last visible line bypasses scroll and directly requests next absolute line, then restores cursor after reload.
+5. The `buffer_generation` pattern is the contract for all deferred buffer access — every new `g_idle_add` that touches the buffer must follow it.

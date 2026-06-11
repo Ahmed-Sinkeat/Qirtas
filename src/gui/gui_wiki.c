@@ -70,8 +70,8 @@ static void apply_wiki_link_tags_local_impl(GtkTextBuffer *buf) {
         gtk_text_buffer_apply_tag(buf, tag, &match_start, &close_end);
 
         // Reacquire fresh GtkTextIter values from the buffer after tag modification
-        gtk_text_buffer_get_iter_at_offset(buf, &iter, close_end_offset);
-        gtk_text_buffer_get_iter_at_offset(buf, &end, end_offset);
+        debug_get_iter_at_offset(buf, &iter, close_end_offset, "apply_wiki_link_tags_local_close_end");
+        debug_get_iter_at_offset(buf, &end, end_offset, "apply_wiki_link_tags_local_end");
     }
 }
 
@@ -82,15 +82,19 @@ typedef struct {
 
 static gboolean idle_wiki_local_cb(gpointer user_data) {
     WikiData *d = user_data;
+    g_print("IDLE_CALLBACK_START idle_wiki_local_cb gen=%u\n", d->generation);
     wiki_local_queued = FALSE;
-    if (d->gui && d->generation != d->gui->buffer_generation) {
+    if (d->generation != d->gui->buffer_generation) {
+        g_print("IDLE_CALLBACK_CANCEL idle_wiki_local_cb (stale generation)\n");
         g_free(d);
         return G_SOURCE_REMOVE;
     }
-    if (d->gui && d->gui->text_buffer) {
-        apply_wiki_link_tags_local_impl(d->gui->text_buffer);
+    if (d->gui && global_source_view) {
+        GtkTextBuffer *buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(global_source_view));
+        apply_wiki_link_tags_local_impl(buf);
     }
     g_free(d);
+    g_print("IDLE_CALLBACK_END idle_wiki_local_cb SUCCESS\n");
     return G_SOURCE_REMOVE;
 }
 
@@ -140,15 +144,19 @@ static void apply_wiki_link_tags_impl(GtkTextBuffer *buf) {
 
 static gboolean idle_wiki_global_cb(gpointer user_data) {
     WikiData *d = user_data;
+    g_print("IDLE_CALLBACK_START idle_wiki_global_cb gen=%u\n", d->generation);
     wiki_global_queued = FALSE;
-    if (d->gui && d->generation != d->gui->buffer_generation) {
+    if (d->generation != d->gui->buffer_generation) {
+        g_print("IDLE_CALLBACK_CANCEL idle_wiki_global_cb (stale generation)\n");
         g_free(d);
         return G_SOURCE_REMOVE;
     }
-    if (d->gui && d->gui->text_buffer) {
-        apply_wiki_link_tags_impl(d->gui->text_buffer);
+    if (d->gui && global_source_view) {
+        GtkTextBuffer *buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(global_source_view));
+        apply_wiki_link_tags_impl(buf);
     }
     g_free(d);
+    g_print("IDLE_CALLBACK_END idle_wiki_global_cb SUCCESS\n");
     return G_SOURCE_REMOVE;
 }
 

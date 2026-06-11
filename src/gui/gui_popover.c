@@ -158,7 +158,7 @@ static void apply_format_with_saved(GtkTextBuffer *buf, const char *prefix, cons
     AppGui *gui = global_gui;
     if (!has_selection) {
         GtkTextIter cursor_iter;
-        gtk_text_buffer_get_iter_at_offset(buf, &cursor_iter, saved_start);
+        debug_get_iter_at_offset(buf, &cursor_iter, saved_start, "apply_format_with_saved_cursor");
         Position start_pos = iter_to_position(&cursor_iter);
         char *wrapped = g_strconcat(prefix, suffix, NULL);
         zig_insert_text(start_pos, wrapped);
@@ -169,8 +169,8 @@ static void apply_format_with_saved(GtkTextBuffer *buf, const char *prefix, cons
         g_free(wrapped);
     } else {
         GtkTextIter start, end;
-        gtk_text_buffer_get_iter_at_offset(buf, &start, saved_start);
-        gtk_text_buffer_get_iter_at_offset(buf, &end,   saved_end);
+        debug_get_iter_at_offset(buf, &start, saved_start, "apply_format_with_saved_start");
+        debug_get_iter_at_offset(buf, &end,   saved_end,   "apply_format_with_saved_end");
         gchar *text     = gtk_text_buffer_get_text(buf, &start, &end, TRUE);
         gchar *new_text = g_strconcat(prefix, text, suffix, NULL);
         Position start_pos = iter_to_position(&start);
@@ -223,8 +223,8 @@ static void apply_paragraph_format_core(GtkTextBuffer *buf, const char *prefix,
 static void apply_paragraph_format_with_saved(GtkTextBuffer *buf, const char *prefix,
                                               gint saved_start, gint saved_end) {
     GtkTextIter start, end;
-    gtk_text_buffer_get_iter_at_offset(buf, &start, saved_start);
-    gtk_text_buffer_get_iter_at_offset(buf, &end,   saved_end);
+    debug_get_iter_at_offset(buf, &start, saved_start, "apply_paragraph_format_with_saved_start");
+    debug_get_iter_at_offset(buf, &end,   saved_end,   "apply_paragraph_format_with_saved_end");
     gint start_line = gtk_text_iter_get_line(&start);
     gint end_line   = gtk_text_iter_get_line(&end);
     apply_paragraph_format_core(buf, prefix, start_line, end_line);
@@ -244,6 +244,8 @@ void apply_paragraph_format(GtkTextBuffer *buf, const char *prefix) {
 
 static gboolean do_idle_format(gpointer user_data) {
     IdleFormatData *ifd = (IdleFormatData *)user_data;
+    g_print("IDLE_CALLBACK_START do_idle_format paragraph=%d prefix=%s suffix=%s start=%d end=%d\n",
+            ifd->is_paragraph, ifd->prefix ? ifd->prefix : "null", ifd->suffix ? ifd->suffix : "null", ifd->saved_start, ifd->saved_end);
     GtkTextBuffer *buf = ifd->buf;
 
     if (global_gui) {
@@ -279,6 +281,7 @@ static gboolean do_idle_format(gpointer user_data) {
     g_free(ifd->prefix);
     g_free(ifd->suffix);
     g_free(ifd);
+    g_print("IDLE_CALLBACK_END do_idle_format SUCCESS\n");
     return G_SOURCE_REMOVE;
 }
 

@@ -1,0 +1,792 @@
+# Evidence Collection Report: Cursor Goal Column Corruption
+
+This report documents the evidence collected from the crash simulation and analyzes the exact path of the GTK crash.
+
+## Timeline of the Crash Simulation
+
+### STEP 1
+**Action:**
+Open large file (`main.zig`)
+
+**Log:**
+```
+ITER_DEBUG_SET_LINE_OFFSET before caller=check_and_insert_hr_current offset=0
+ITER_DEBUG_SET_LINE_OFFSET SUCCESS caller=check_and_insert_hr_current
+ITER_DEBUG_SET_LINE_OFFSET before caller=check_and_insert_hr_current offset=0
+ITER_DEBUG_SET_LINE_OFFSET SUCCESS caller=check_and_insert_hr_current
+ITER_DEBUG_OFFSET before caller=on_insert_text_after offset=0 generation=0
+ITER_DEBUG_OFFSET SUCCESS caller=on_insert_text_after
+IDLE_CALLBACK_START idle_wiki_local_cb gen=0
+IDLE_CALLBACK_END idle_wiki_local_cb SUCCESS
+IDLE_CALLBACK_START idle_global_conceal_cb
+IDLE_CALLBACK_END idle_global_conceal_cb SUCCESS
+UPDATE_TOTAL_LINES: 1729
+GET_RANGE start=0 end=400 start_off=0 end_off=14751
+IDLE_CALLBACK_START idle_wiki_global_cb gen=0
+IDLE_CALLBACK_END idle_wiki_global_cb SUCCESS
+```
+
+### STEP 2
+**Action:**
+Move cursor to long line (line 679 column 305)
+
+**Log:**
+```
+GET_RANGE start=478 end=878 start_off=17298 end_off=34864
+LOAD_VIEWPORT start=478 end=878
+ITER_DEBUG caller=gui_set_cursor_position
+line=200
+col=305
+line_bytes=409
+line_chars=409
+generation=1
+viewport=478-878
+ITER_DEBUG SUCCESS caller=gui_set_cursor_position
+CALL_SELECT_RANGE caller=gui_set_cursor_position ins_line=200 ins_col=305 bound_line=200 bound_col=305 generation=1
+MARK_SET insert line=200 col=305 generation=1
+MARK_SET selection_bound line=200 col=305 generation=1
+IDLE_CALLBACK_START idle_wiki_global_cb gen=1
+IDLE_CALLBACK_END idle_wiki_global_cb SUCCESS
+IDLE_CALLBACK_START idle_local_conceal_cb
+IDLE_CALLBACK_END idle_local_conceal_cb SUCCESS
+IDLE_CALLBACK_START idle_scroll_to_cursor offset=9338
+ITER_DEBUG_OFFSET before caller=idle_scroll_to_cursor offset=9338 generation=1
+ITER_DEBUG_OFFSET SUCCESS caller=idle_scroll_to_cursor
+IDLE_CALLBACK_END idle_scroll_to_cursor SUCCESS
+```
+
+### STEP 3
+**Action:**
+Scroll back to line 53 (reload viewport to page 0)
+
+**Log:**
+```
+GET_RANGE start=0 end=400 start_off=0 end_off=14751
+LOAD_VIEWPORT start=0 end=400
+IDLE_CALLBACK_START idle_wiki_global_cb gen=2
+IDLE_CALLBACK_END idle_wiki_global_cb SUCCESS
+```
+
+### STEP 4
+**Action:**
+Trigger vertical navigation Down key
+
+**Log:**
+```
+MARK_SET insert line=400 col=0 generation=2
+MARK_SET selection_bound line=400 col=0 generation=2
+IDLE_CALLBACK_START idle_local_conceal_cb
+IDLE_CALLBACK_END idle_local_conceal_cb SUCCESS
+IDLE_CALLBACK_START idle_scroll_to_cursor offset=14751
+ITER_DEBUG_OFFSET before caller=idle_scroll_to_cursor offset=14751 generation=2
+ITER_DEBUG_OFFSET SUCCESS caller=idle_scroll_to_cursor
+IDLE_CALLBACK_END idle_scroll_to_cursor SUCCESS
+GET_RANGE start=330 end=730 start_off=11833 end_off=29524
+LOAD_VIEWPORT start=330 end=730
+IDLE_CALLBACK_START idle_wiki_global_cb gen=3
+IDLE_CALLBACK_END idle_wiki_global_cb SUCCESS
+```
+
+### STEP 5
+**Action:**
+Done with steps (initial script simulation complete, program stays open)
+
+**Log:**
+```
+ITER_DEBUG_SET_LINE_OFFSET before caller=check_and_insert_hr_current offset=0
+ITER_DEBUG_SET_LINE_OFFSET SUCCESS caller=check_and_insert_hr_current
+ITER_DEBUG_SET_LINE_OFFSET before caller=check_and_insert_hr_current offset=0
+ITER_DEBUG_SET_LINE_OFFSET SUCCESS caller=check_and_insert_hr_current
+ITER_DEBUG_OFFSET before caller=on_insert_text_after offset=0 generation=3
+ITER_DEBUG_OFFSET SUCCESS caller=on_insert_text_after
+IDLE_CALLBACK_START idle_wiki_local_cb gen=3
+IDLE_CALLBACK_END idle_wiki_local_cb SUCCESS
+IDLE_CALLBACK_START idle_global_conceal_cb
+IDLE_CALLBACK_END idle_global_conceal_cb SUCCESS
+UPDATE_TOTAL_LINES: 5305
+GET_RANGE start=0 end=250 start_off=0 end_off=10937
+IDLE_CALLBACK_START idle_wiki_global_cb gen=3
+IDLE_CALLBACK_END idle_wiki_global_cb SUCCESS
+```
+
+### STEP 6
+**Action:**
+User switches to `src/gui.c` and scrolls deep, reloading viewport repeatedly until the end of the file.
+
+**Log (Last Successful Viewport Load):**
+```
+MARK_SET insert line=250 col=0 generation=29
+MARK_SET selection_bound line=250 col=0 generation=29
+IDLE_CALLBACK_START idle_local_conceal_cb
+IDLE_CALLBACK_END idle_local_conceal_cb SUCCESS
+IDLE_CALLBACK_START idle_scroll_to_cursor offset=9498
+ITER_DEBUG_OFFSET before caller=idle_scroll_to_cursor offset=9498 generation=29
+ITER_DEBUG_OFFSET SUCCESS caller=idle_scroll_to_cursor
+IDLE_CALLBACK_END idle_scroll_to_cursor SUCCESS
+GET_RANGE start=4905 end=5155 start_off=203952 end_off=213450
+LOAD_VIEWPORT start=4905 end=5155
+IDLE_CALLBACK_START idle_wiki_global_cb gen=30
+IDLE_CALLBACK_END idle_wiki_global_cb SUCCESS
+ITER_DEBUG_SET_LINE_OFFSET before caller=check_and_insert_hr_current offset=0
+ITER_DEBUG_SET_LINE_OFFSET SUCCESS caller=check_and_insert_hr_current
+ITER_DEBUG_SET_LINE_OFFSET before caller=check_and_insert_hr_current offset=0
+ITER_DEBUG_SET_LINE_OFFSET SUCCESS caller=check_and_insert_hr_current
+ITER_DEBUG_OFFSET before caller=on_insert_text_after offset=0 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=on_insert_text_after
+IDLE_CALLBACK_START idle_wiki_local_cb gen=30
+IDLE_CALLBACK_END idle_wiki_local_cb SUCCESS
+IDLE_CALLBACK_START idle_global_conceal_cb
+IDLE_CALLBACK_END idle_global_conceal_cb SUCCESS
+```
+
+### STEP 7
+**Action:**
+User switches from `src/gui.c` to `src/As-Built Specification Document.md` (119 lines).
+
+**Log:**
+```
+UPDATE_TOTAL_LINES: 119
+GET_RANGE start=0 end=119 start_off=0 end_off=6617
+IDLE_CALLBACK_START idle_wiki_global_cb gen=30
+IDLE_CALLBACK_END idle_wiki_global_cb SUCCESS
+MARK_SET insert line=2 col=18 generation=30
+MARK_SET selection_bound line=2 col=18 generation=30
+IDLE_CALLBACK_START idle_local_conceal_cb
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_start offset=42 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_start
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_end offset=45 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_end
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_end_start offset=42 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_end_start
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_end_end offset=45 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_end_end
+IDLE_CALLBACK_END idle_local_conceal_cb SUCCESS
+MARK_SET insert line=2 col=14 generation=30
+IDLE_CALLBACK_START idle_local_conceal_cb
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_start offset=42 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_start
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_end offset=45 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_end
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_end_start offset=42 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_end_start
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_end_end offset=45 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_end_end
+IDLE_CALLBACK_END idle_local_conceal_cb SUCCESS
+```
+
+### STEP 8 (Final Crash)
+**Action:**
+User navigates Down repeatedly. When navigating Down on the wrapped line 25 (1-indexed line 26), the next display line movement or transition to line 26 (empty line) triggers the crash.
+
+**Log (Complete Un-truncated Log to Crash):**
+```
+KEY_NAVIGATION key=Down line=2 col=14 generation=30
+MARK_SET insert line=3 col=0 generation=30
+MARK_SET selection_bound line=3 col=0 generation=30
+IDLE_CALLBACK_START idle_local_conceal_cb
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_start offset=42 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_start
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_end offset=45 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_end
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_end_start offset=42 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_end_start
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_end_end offset=45 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_end_end
+IDLE_CALLBACK_END idle_local_conceal_cb SUCCESS
+IDLE_CALLBACK_START idle_scroll_to_cursor offset=69
+ITER_DEBUG_OFFSET before caller=idle_scroll_to_cursor offset=69 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=idle_scroll_to_cursor
+IDLE_CALLBACK_END idle_scroll_to_cursor SUCCESS
+KEY_NAVIGATION key=Down line=3 col=0 generation=30
+MARK_SET insert line=4 col=32 generation=30
+MARK_SET selection_bound line=4 col=32 generation=30
+IDLE_CALLBACK_START idle_local_conceal_cb
+IDLE_CALLBACK_END idle_local_conceal_cb SUCCESS
+IDLE_CALLBACK_START idle_scroll_to_cursor offset=102
+ITER_DEBUG_OFFSET before caller=idle_scroll_to_cursor offset=102 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=idle_scroll_to_cursor
+IDLE_CALLBACK_END idle_scroll_to_cursor SUCCESS
+KEY_NAVIGATION key=Down line=4 col=32 generation=30
+MARK_SET insert line=5 col=34 generation=30
+MARK_SET selection_bound line=5 col=34 generation=30
+IDLE_CALLBACK_START idle_local_conceal_cb
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_start offset=260 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_start
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_end offset=262 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_end
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_end_start offset=280 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_end_start
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_end_end offset=282 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_end_end
+IDLE_CALLBACK_END idle_local_conceal_cb SUCCESS
+IDLE_CALLBACK_START idle_scroll_to_cursor offset=167
+ITER_DEBUG_OFFSET before caller=idle_scroll_to_cursor offset=167 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=idle_scroll_to_cursor
+IDLE_CALLBACK_END idle_scroll_to_cursor SUCCESS
+KEY_NAVIGATION key=Down line=5 col=34 generation=30
+MARK_SET insert line=6 col=34 generation=30
+MARK_SET selection_bound line=6 col=34 generation=30
+IDLE_CALLBACK_START idle_local_conceal_cb
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_start offset=260 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_start
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_end offset=262 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_end
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_end_start offset=280 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_end_start
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_end_end offset=282 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_end_end
+IDLE_CALLBACK_END idle_local_conceal_cb SUCCESS
+IDLE_CALLBACK_START idle_scroll_to_cursor offset=241
+ITER_DEBUG_OFFSET before caller=idle_scroll_to_cursor offset=241 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=idle_scroll_to_cursor
+IDLE_CALLBACK_END idle_scroll_to_cursor SUCCESS
+KEY_NAVIGATION key=Down line=6 col=34 generation=30
+MARK_SET insert line=6 col=131 generation=30
+MARK_SET selection_bound line=6 col=131 generation=30
+IDLE_CALLBACK_START idle_local_conceal_cb
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_start offset=260 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_start
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_end offset=262 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_end
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_end_start offset=280 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_end_start
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_end_end offset=282 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_end_end
+IDLE_CALLBACK_END idle_local_conceal_cb SUCCESS
+IDLE_CALLBACK_START idle_scroll_to_cursor offset=338
+ITER_DEBUG_OFFSET before caller=idle_scroll_to_cursor offset=338 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=idle_scroll_to_cursor
+IDLE_CALLBACK_END idle_scroll_to_cursor SUCCESS
+KEY_NAVIGATION key=Down line=6 col=131 generation=30
+MARK_SET insert line=7 col=35 generation=30
+MARK_SET selection_bound line=7 col=35 generation=30
+IDLE_CALLBACK_START idle_local_conceal_cb
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_start offset=260 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_start
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_end offset=262 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_end
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_end_start offset=280 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_end_start
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_end_end offset=282 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_end_end
+IDLE_CALLBACK_END idle_local_conceal_cb SUCCESS
+IDLE_CALLBACK_START idle_scroll_to_cursor offset=411
+ITER_DEBUG_OFFSET before caller=idle_scroll_to_cursor offset=411 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=idle_scroll_to_cursor
+IDLE_CALLBACK_END idle_scroll_to_cursor SUCCESS
+KEY_NAVIGATION key=Down line=7 col=35 generation=30
+MARK_SET insert line=7 col=123 generation=30
+MARK_SET selection_bound line=7 col=123 generation=30
+IDLE_CALLBACK_START idle_local_conceal_cb
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_start offset=260 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_start
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_end offset=262 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_end
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_end_start offset=280 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_end_start
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_end_end offset=282 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_end_end
+IDLE_CALLBACK_END idle_local_conceal_cb SUCCESS
+IDLE_CALLBACK_START idle_scroll_to_cursor offset=499
+ITER_DEBUG_OFFSET before caller=idle_scroll_to_cursor offset=499 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=idle_scroll_to_cursor
+IDLE_CALLBACK_END idle_scroll_to_cursor SUCCESS
+KEY_NAVIGATION key=Down line=7 col=123 generation=30
+MARK_SET insert line=8 col=34 generation=30
+MARK_SET selection_bound line=8 col=34 generation=30
+IDLE_CALLBACK_START idle_local_conceal_cb
+IDLE_CALLBACK_END idle_local_conceal_cb SUCCESS
+IDLE_CALLBACK_START idle_scroll_to_cursor offset=536
+ITER_DEBUG_OFFSET before caller=idle_scroll_to_cursor offset=536 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=idle_scroll_to_cursor
+IDLE_CALLBACK_END idle_scroll_to_cursor SUCCESS
+KEY_NAVIGATION key=Down line=8 col=34 generation=30
+MARK_SET insert line=9 col=35 generation=30
+MARK_SET selection_bound line=9 col=35 generation=30
+IDLE_CALLBACK_START idle_local_conceal_cb
+IDLE_CALLBACK_END idle_local_conceal_cb SUCCESS
+IDLE_CALLBACK_START idle_scroll_to_cursor offset=615
+ITER_DEBUG_OFFSET before caller=idle_scroll_to_cursor offset=615 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=idle_scroll_to_cursor
+IDLE_CALLBACK_END idle_scroll_to_cursor SUCCESS
+KEY_NAVIGATION key=Down line=9 col=35 generation=30
+MARK_SET insert line=9 col=122 generation=30
+MARK_SET selection_bound line=9 col=122 generation=30
+IDLE_CALLBACK_START idle_local_conceal_cb
+IDLE_CALLBACK_END idle_local_conceal_cb SUCCESS
+IDLE_CALLBACK_START idle_scroll_to_cursor offset=702
+ITER_DEBUG_OFFSET before caller=idle_scroll_to_cursor offset=702 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=idle_scroll_to_cursor
+IDLE_CALLBACK_END idle_scroll_to_cursor SUCCESS
+KEY_NAVIGATION key=Down line=9 col=122 generation=30
+MARK_SET insert line=9 col=204 generation=30
+MARK_SET selection_bound line=9 col=204 generation=30
+IDLE_CALLBACK_START idle_local_conceal_cb
+IDLE_CALLBACK_END idle_local_conceal_cb SUCCESS
+IDLE_CALLBACK_START idle_scroll_to_cursor offset=784
+ITER_DEBUG_OFFSET before caller=idle_scroll_to_cursor offset=784 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=idle_scroll_to_cursor
+IDLE_CALLBACK_END idle_scroll_to_cursor SUCCESS
+KEY_NAVIGATION key=Down line=9 col=204 generation=30
+MARK_SET insert line=10 col=33 generation=30
+MARK_SET selection_bound line=10 col=33 generation=30
+IDLE_CALLBACK_START idle_local_conceal_cb
+IDLE_CALLBACK_END idle_local_conceal_cb SUCCESS
+IDLE_CALLBACK_START idle_scroll_to_cursor offset=843
+ITER_DEBUG_OFFSET before caller=idle_scroll_to_cursor offset=843 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=idle_scroll_to_cursor
+IDLE_CALLBACK_END idle_scroll_to_cursor SUCCESS
+KEY_NAVIGATION key=Down line=10 col=33 generation=30
+MARK_SET insert line=10 col=123 generation=30
+MARK_SET selection_bound line=10 col=123 generation=30
+IDLE_CALLBACK_START idle_local_conceal_cb
+IDLE_CALLBACK_END idle_local_conceal_cb SUCCESS
+IDLE_CALLBACK_START idle_scroll_to_cursor offset=933
+ITER_DEBUG_OFFSET before caller=idle_scroll_to_cursor offset=933 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=idle_scroll_to_cursor
+IDLE_CALLBACK_END idle_scroll_to_cursor SUCCESS
+KEY_NAVIGATION key=Down line=10 col=123 generation=30
+MARK_SET insert line=11 col=0 generation=30
+MARK_SET selection_bound line=11 col=0 generation=30
+IDLE_CALLBACK_START idle_local_conceal_cb
+IDLE_CALLBACK_END idle_local_conceal_cb SUCCESS
+IDLE_CALLBACK_START idle_scroll_to_cursor offset=984
+ITER_DEBUG_OFFSET before caller=idle_scroll_to_cursor offset=984 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=idle_scroll_to_cursor
+IDLE_CALLBACK_END idle_scroll_to_cursor SUCCESS
+KEY_NAVIGATION key=Down line=11 col=0 generation=30
+MARK_SET insert line=12 col=1 generation=30
+MARK_SET selection_bound line=12 col=1 generation=30
+IDLE_CALLBACK_START idle_local_conceal_cb
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_start offset=987 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_start
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_end offset=990 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_end
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_end_start offset=987 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_end_start
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_end_end offset=990 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_end_end
+IDLE_CALLBACK_END idle_local_conceal_cb SUCCESS
+IDLE_CALLBACK_START idle_scroll_to_cursor offset=986
+ITER_DEBUG_OFFSET before caller=idle_scroll_to_cursor offset=986 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=idle_scroll_to_cursor
+IDLE_CALLBACK_END idle_scroll_to_cursor SUCCESS
+KEY_NAVIGATION key=Down line=12 col=1 generation=30
+MARK_SET insert line=14 col=26 generation=30
+MARK_SET selection_bound line=14 col=26 generation=30
+IDLE_CALLBACK_START idle_local_conceal_cb
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_start offset=988 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_start
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_end offset=991 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_end
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_end_start offset=988 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_end_start
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_end_end offset=991 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_end_end
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_start offset=1036 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_start
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_end offset=1040 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_end
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_end_start offset=1036 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_end_start
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_end_end offset=1040 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_end_end
+IDLE_CALLBACK_END idle_local_conceal_cb SUCCESS
+IDLE_CALLBACK_START idle_scroll_to_cursor offset=1014
+ITER_DEBUG_OFFSET before caller=idle_scroll_to_cursor offset=1014 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=idle_scroll_to_cursor
+IDLE_CALLBACK_END idle_scroll_to_cursor SUCCESS
+KEY_NAVIGATION key=Down line=14 col=26 generation=30
+MARK_SET insert line=14 col=46 generation=30
+MARK_SET selection_bound line=14 col=46 generation=30
+IDLE_CALLBACK_START idle_local_conceal_cb
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_start offset=988 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_start
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_end offset=991 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_end
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_end_start offset=988 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_end_start
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_end_end offset=991 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_end_end
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_start offset=1036 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_start
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_end offset=1040 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_end
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_end_start offset=1036 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_end_start
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_end_end offset=1040 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_end_end
+IDLE_CALLBACK_END idle_local_conceal_cb SUCCESS
+IDLE_CALLBACK_START idle_scroll_to_cursor offset=1034
+ITER_DEBUG_OFFSET before caller=idle_scroll_to_cursor offset=1034 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=idle_scroll_to_cursor
+IDLE_CALLBACK_END idle_scroll_to_cursor SUCCESS
+KEY_NAVIGATION key=Down line=14 col=46 generation=30
+MARK_SET insert line=15 col=0 generation=30
+MARK_SET selection_bound line=15 col=0 generation=30
+IDLE_CALLBACK_START idle_local_conceal_cb
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_start offset=988 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_start
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_end offset=991 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_end
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_end_start offset=988 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_end_start
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_end_end offset=991 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_end_end
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_start offset=1036 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_start
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_end offset=1040 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_end
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_end_start offset=1036 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_end_start
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_end_end offset=1040 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_end_end
+IDLE_CALLBACK_END idle_local_conceal_cb SUCCESS
+IDLE_CALLBACK_START idle_scroll_to_cursor offset=1035
+ITER_DEBUG_OFFSET before caller=idle_scroll_to_cursor offset=1035 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=idle_scroll_to_cursor
+IDLE_CALLBACK_END idle_scroll_to_cursor SUCCESS
+KEY_NAVIGATION key=Down line=15 col=0 generation=30
+MARK_SET insert line=16 col=23 generation=30
+MARK_SET selection_bound line=16 col=23 generation=30
+IDLE_CALLBACK_START idle_local_conceal_cb
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_start offset=1036 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_start
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_end offset=1040 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_end
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_end_start offset=1036 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_end_start
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_end_end offset=1040 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_end_end
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_start offset=1075 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_start
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_end offset=1080 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_end
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_end_start offset=1075 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_end_start
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_end_end offset=1080 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_end_end
+IDLE_CALLBACK_END idle_local_conceal_cb SUCCESS
+IDLE_CALLBACK_START idle_scroll_to_cursor offset=1059
+ITER_DEBUG_OFFSET before caller=idle_scroll_to_cursor offset=1059 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=idle_scroll_to_cursor
+IDLE_CALLBACK_END idle_scroll_to_cursor SUCCESS
+KEY_NAVIGATION key=Down line=16 col=23 generation=30
+MARK_SET insert line=17 col=0 generation=30
+MARK_SET selection_bound line=17 col=0 generation=30
+IDLE_CALLBACK_START idle_local_conceal_cb
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_start offset=1036 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_start
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_end offset=1040 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_end
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_end_start offset=1036 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_end_start
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_end_end offset=1040 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_end_end
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_start offset=1075 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_start
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_end offset=1080 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_end
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_end_start offset=1075 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_end_start
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_end_end offset=1080 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_end_end
+IDLE_CALLBACK_END idle_local_conceal_cb SUCCESS
+IDLE_CALLBACK_START idle_scroll_to_cursor offset=1074
+ITER_DEBUG_OFFSET before caller=idle_scroll_to_cursor offset=1074 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=idle_scroll_to_cursor
+IDLE_CALLBACK_END idle_scroll_to_cursor SUCCESS
+KEY_NAVIGATION key=Down line=17 col=0 generation=30
+MARK_SET insert line=18 col=34 generation=30
+MARK_SET selection_bound line=18 col=34 generation=30
+IDLE_CALLBACK_START idle_local_conceal_cb
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_start offset=1156 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_start
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_end offset=1158 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_end
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_end_start offset=1169 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_end_start
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_end_end offset=1171 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_end_end
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_start offset=1075 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_start
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_end offset=1080 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_end
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_end_start offset=1075 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_end_start
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_end_end offset=1080 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_end_end
+IDLE_CALLBACK_END idle_local_conceal_cb SUCCESS
+IDLE_CALLBACK_START idle_scroll_to_cursor offset=1109
+ITER_DEBUG_OFFSET before caller=idle_scroll_to_cursor offset=1109 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=idle_scroll_to_cursor
+IDLE_CALLBACK_END idle_scroll_to_cursor SUCCESS
+KEY_NAVIGATION key=Down line=18 col=34 generation=30
+MARK_SET insert line=19 col=0 generation=30
+MARK_SET selection_bound line=19 col=0 generation=30
+IDLE_CALLBACK_START idle_local_conceal_cb
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_start offset=1156 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_start
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_end offset=1158 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_end
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_end_start offset=1169 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_end_start
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_end_end offset=1171 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_end_end
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_start offset=1075 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_start
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_end offset=1080 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_end
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_end_start offset=1075 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_end_start
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_end_end offset=1080 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_end_end
+IDLE_CALLBACK_END idle_local_conceal_cb SUCCESS
+IDLE_CALLBACK_START idle_scroll_to_cursor offset=1155
+ITER_DEBUG_OFFSET before caller=idle_scroll_to_cursor offset=1155 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=idle_scroll_to_cursor
+IDLE_CALLBACK_END idle_scroll_to_cursor SUCCESS
+KEY_NAVIGATION key=Down line=19 col=0 generation=30
+MARK_SET insert line=20 col=36 generation=30
+MARK_SET selection_bound line=20 col=36 generation=30
+IDLE_CALLBACK_START idle_local_conceal_cb
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_start offset=1156 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_start
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_end offset=1158 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_end
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_end_start offset=1169 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_end_start
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_end_end offset=1171 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_end_end
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_start offset=1483 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_start
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_end offset=1485 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_end
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_end_start offset=1519 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_end_start
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_end_end offset=1521 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_end_end
+IDLE_CALLBACK_END idle_local_conceal_cb SUCCESS
+IDLE_CALLBACK_START idle_scroll_to_cursor offset=1192
+ITER_DEBUG_OFFSET before caller=idle_scroll_to_cursor offset=1192 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=idle_scroll_to_cursor
+IDLE_CALLBACK_END idle_scroll_to_cursor SUCCESS
+KEY_NAVIGATION key=Down line=20 col=36 generation=30
+MARK_SET insert line=20 col=118 generation=30
+MARK_SET selection_bound line=20 col=118 generation=30
+IDLE_CALLBACK_START idle_local_conceal_cb
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_start offset=1156 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_start
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_end offset=1158 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_end
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_end_start offset=1169 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_end_start
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_end_end offset=1171 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_end_end
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_start offset=1483 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_start
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_end offset=1485 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_end
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_end_start offset=1519 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_end_start
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_end_end offset=1521 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_end_end
+IDLE_CALLBACK_END idle_local_conceal_cb SUCCESS
+IDLE_CALLBACK_START idle_scroll_to_cursor offset=1274
+ITER_DEBUG_OFFSET before caller=idle_scroll_to_cursor offset=1274 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=idle_scroll_to_cursor
+IDLE_CALLBACK_END idle_scroll_to_cursor SUCCESS
+KEY_NAVIGATION key=Down line=20 col=118 generation=30
+MARK_SET insert line=20 col=201 generation=30
+MARK_SET selection_bound line=20 col=201 generation=30
+IDLE_CALLBACK_START idle_local_conceal_cb
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_start offset=1156 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_start
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_end offset=1158 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_end
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_end_start offset=1169 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_end_start
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_end_end offset=1171 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_end_end
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_start offset=1483 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_start
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_end offset=1485 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_end
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_end_start offset=1519 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_end_start
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_end_end offset=1521 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_end_end
+IDLE_CALLBACK_END idle_local_conceal_cb SUCCESS
+IDLE_CALLBACK_START idle_scroll_to_cursor offset=1357
+ITER_DEBUG_OFFSET before caller=idle_scroll_to_cursor offset=1357 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=idle_scroll_to_cursor
+IDLE_CALLBACK_END idle_scroll_to_cursor SUCCESS
+KEY_NAVIGATION key=Down line=20 col=201 generation=30
+MARK_SET insert line=20 col=290 generation=30
+MARK_SET selection_bound line=20 col=290 generation=30
+IDLE_CALLBACK_START idle_local_conceal_cb
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_start offset=1156 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_start
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_end offset=1158 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_end
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_end_start offset=1169 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_end_start
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_end_end offset=1171 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_end_end
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_start offset=1483 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_start
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_end offset=1485 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_end
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_end_start offset=1519 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_end_start
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_end_end offset=1521 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_end_end
+IDLE_CALLBACK_END idle_local_conceal_cb SUCCESS
+IDLE_CALLBACK_START idle_scroll_to_cursor offset=1446
+ITER_DEBUG_OFFSET before caller=idle_scroll_to_cursor offset=1446 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=idle_scroll_to_cursor
+IDLE_CALLBACK_END idle_scroll_to_cursor SUCCESS
+KEY_NAVIGATION key=Down line=20 col=290 generation=30
+MARK_SET insert line=21 col=0 generation=30
+MARK_SET selection_bound line=21 col=0 generation=30
+IDLE_CALLBACK_START idle_local_conceal_cb
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_start offset=1156 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_start
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_end offset=1158 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_end
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_end_start offset=1169 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_end_start
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_end_end offset=1171 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_end_end
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_start offset=1483 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_start
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_end offset=1485 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_end
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_end_start offset=1519 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_end_start
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_end_end offset=1521 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_end_end
+IDLE_CALLBACK_END idle_local_conceal_cb SUCCESS
+IDLE_CALLBACK_START idle_scroll_to_cursor offset=1482
+ITER_DEBUG_OFFSET before caller=idle_scroll_to_cursor offset=1482 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=idle_scroll_to_cursor
+IDLE_CALLBACK_END idle_scroll_to_cursor SUCCESS
+KEY_NAVIGATION key=Down line=21 col=0 generation=30
+MARK_SET insert line=22 col=33 generation=30
+MARK_SET selection_bound line=22 col=33 generation=30
+IDLE_CALLBACK_START idle_local_conceal_cb
+IDLE_CALLBACK_END idle_local_conceal_cb SUCCESS
+IDLE_CALLBACK_START idle_scroll_to_cursor offset=1516
+ITER_DEBUG_OFFSET before caller=idle_scroll_to_cursor offset=1516 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=idle_scroll_to_cursor
+IDLE_CALLBACK_END idle_scroll_to_cursor SUCCESS
+KEY_NAVIGATION key=Down line=22 col=33 generation=30
+MARK_SET insert line=23 col=35 generation=30
+MARK_SET selection_bound line=23 col=35 generation=30
+IDLE_CALLBACK_START idle_local_conceal_cb
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_start offset=1483 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_start
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_end offset=1485 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_end
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_end_start offset=1519 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_end_start
+ITER_DEBUG_OFFSET before caller=apply_regex_conceal_local_end_end offset=1521 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=apply_regex_conceal_local_end_end
+IDLE_CALLBACK_END idle_local_conceal_cb SUCCESS
+IDLE_CALLBACK_START idle_scroll_to_cursor offset=1557
+ITER_DEBUG_OFFSET before caller=idle_scroll_to_cursor offset=1557 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=idle_scroll_to_cursor
+IDLE_CALLBACK_END idle_scroll_to_cursor SUCCESS
+KEY_NAVIGATION key=Down line=23 col=35 generation=30
+MARK_SET insert line=24 col=35 generation=30
+MARK_SET selection_bound line=24 col=35 generation=30
+IDLE_CALLBACK_START idle_local_conceal_cb
+IDLE_CALLBACK_END idle_local_conceal_cb SUCCESS
+IDLE_CALLBACK_START idle_scroll_to_cursor offset=1622
+ITER_DEBUG_OFFSET before caller=idle_scroll_to_cursor offset=1622 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=idle_scroll_to_cursor
+IDLE_CALLBACK_END idle_scroll_to_cursor SUCCESS
+KEY_NAVIGATION key=Down line=24 col=35 generation=30
+MARK_SET insert line=24 col=100 generation=30
+MARK_SET selection_bound line=24 col=100 generation=30
+IDLE_CALLBACK_START idle_local_conceal_cb
+IDLE_CALLBACK_END idle_local_conceal_cb SUCCESS
+IDLE_CALLBACK_START idle_scroll_to_cursor offset=1687
+ITER_DEBUG_OFFSET before caller=idle_scroll_to_cursor offset=1687 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=idle_scroll_to_cursor
+IDLE_CALLBACK_END idle_scroll_to_cursor SUCCESS
+KEY_NAVIGATION key=Down line=24 col=100 generation=30
+MARK_SET insert line=25 col=36 generation=30
+MARK_SET selection_bound line=25 col=36 generation=30
+IDLE_CALLBACK_START idle_local_conceal_cb
+IDLE_CALLBACK_END idle_local_conceal_cb SUCCESS
+IDLE_CALLBACK_START idle_scroll_to_cursor offset=1724
+ITER_DEBUG_OFFSET before caller=idle_scroll_to_cursor offset=1724 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=idle_scroll_to_cursor
+IDLE_CALLBACK_END idle_scroll_to_cursor SUCCESS
+KEY_NAVIGATION key=Down line=25 col=36 generation=30
+MARK_SET insert line=25 col=112 generation=30
+MARK_SET selection_bound line=25 col=112 generation=30
+IDLE_CALLBACK_START idle_local_conceal_cb
+IDLE_CALLBACK_END idle_local_conceal_cb SUCCESS
+IDLE_CALLBACK_START idle_scroll_to_cursor offset=1800
+ITER_DEBUG_OFFSET before caller=idle_scroll_to_cursor offset=1800 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=idle_scroll_to_cursor
+IDLE_CALLBACK_END idle_scroll_to_cursor SUCCESS
+KEY_NAVIGATION key=Down line=25 col=112 generation=30
+MARK_SET insert line=25 col=201 generation=30
+MARK_SET selection_bound line=25 col=201 generation=30
+IDLE_CALLBACK_START idle_local_conceal_cb
+IDLE_CALLBACK_END idle_local_conceal_cb SUCCESS
+IDLE_CALLBACK_START idle_scroll_to_cursor offset=1889
+ITER_DEBUG_OFFSET before caller=idle_scroll_to_cursor offset=1889 generation=30
+ITER_DEBUG_OFFSET SUCCESS caller=idle_scroll_to_cursor
+IDLE_CALLBACK_END idle_scroll_to_cursor SUCCESS
+
+(qirtas:158286): Gtk-WARNING **: 19:36:39.729: ../gtk/gtk/gtktextbtree.c:4012: byte index off the end of the line
+
+(qirtas:158286): Gtk-ERROR **: 19:36:39.729: Byte index 334 is off the end of the line
+```
+
+---
+
+## Detailed Findings and Analysis
+
+### 1. Last Instrumentation and State Analysis
+*   **Last ITER_DEBUG entry:**
+    *   `ITER_DEBUG caller=gui_set_cursor_position line=200 col=305 line_bytes=409 line_chars=409 generation=1 viewport=478-878` (From Step 2, moving the cursor to line 679 col 305 of `main.zig`).
+*   **Last ITER_DEBUG_OFFSET entry:**
+    *   `ITER_DEBUG_OFFSET before caller=idle_scroll_to_cursor offset=1889 generation=30` followed by `ITER_DEBUG_OFFSET SUCCESS caller=idle_scroll_to_cursor`.
+*   **Last ITER_DEBUG_SET_LINE_OFFSET entry:**
+    *   `ITER_DEBUG_SET_LINE_OFFSET before caller=check_and_insert_hr_current offset=0` followed by `ITER_DEBUG_SET_LINE_OFFSET SUCCESS caller=check_and_insert_hr_current` (occurring during the file load in Step 7).
+*   **Last IDLE_CALLBACK_START:**
+    *   `IDLE_CALLBACK_START idle_scroll_to_cursor offset=1889`
+*   **Last IDLE_CALLBACK_END:**
+    *   `IDLE_CALLBACK_END idle_scroll_to_cursor SUCCESS`
+
+### 2. Diagnosis of Cursor Goal Column Corruption
+
+*   **A. Did the crashing path go through `gui_set_cursor_position`?**
+    *   **NO.** The crash happened directly during GTK's built-in key pressed/navigation event loop when handling the `Down` key event.
+*   **B. Was the column clamped before GTK received it?**
+    *   Not applicable, since it bypassed `gui_set_cursor_position`.
+*   **C. Which function bypassed `gui_set_cursor_position`?**
+    *   **`gtk_text_view_move_cursor`** (specifically the default signal handler for the `move-cursor` signal on `GtkTextView`).
+*   **D. Which source file contains the offending call?**
+    *   `gtktextview.c` (inside the GTK source library).
+*   **E. What exact line/column/offset values caused the crash?**
+    *   *User's reported run:* line `53`, column/byte index `305`.
+    *   *Simulation run (task-414):* line `25` (0-indexed), column/byte index `334`, character offset `1889`.
+*   **F. What was the active `buffer_generation`?**
+    *   `30`.
+
+### 3. Answering Goal Column Corruption Questions
+
+1.  **Where does column 305 first appear?**
+    *   In the user's workflow, it was set when navigating through a very long line of width ~305+ columns. In the simulator, this was programmatically forced in Step 2: `gui_set_cursor_position(679, 305)` on the large file `main.zig`.
+2.  **Which function stores it?**
+    *   It is stored internally by GTK inside `GtkTextView` (specifically, `priv->xcoord`, representing the preferred visual x-coordinate of the cursor). This value is updated whenever programmatic mark placement (e.g. `gtk_text_buffer_select_range`) or horizontal user navigation (Left/Right/Home/End) is performed.
+3.  **Which function later reuses it?**
+    *   It is reused by `gtk_text_view_move_cursor` (the `move-cursor` default signal handler of `GtkTextView`) during vertical navigation (Up/Down keys).
+4.  **Why does line 53 receive a request for column 305 when the visible cursor is around column 36?**
+    *   Because the internal preferred visual x-coordinate (`priv->xcoord` corresponding to visual column 305+) survives buffer changes (`gtk_text_buffer_set_text`) and vertical navigation. When navigating vertically through shorter lines, GTK clamps the visible cursor position to the line boundary (e.g., column 36) but **retains the preferred column 305/334 in memory** to restore it on subsequent lines. When the next vertical movement occurs, GTK attempts to position the cursor at the preferred coordinate. Under layout-masking conditions (such as markdown conceals), this calculated coordinate maps to an out-of-bounds byte index (e.g., index 305 or 334) on the target line, which GTK's layout engine attempts to load without clamping first, causing the fatal `Gtk-ERROR`.

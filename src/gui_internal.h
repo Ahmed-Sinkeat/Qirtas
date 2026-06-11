@@ -121,6 +121,7 @@ typedef struct {
     int            last_scroll_requested_line;
     guint          buffer_generation;
     int            pending_line;
+    int            pending_col;
 
     /* Cursor trail animation */
     GtkWidget *cursor_trail_area;
@@ -195,7 +196,38 @@ typedef struct {
 typedef struct {
     AppGui *gui;
     gint    offset;
+    guint   generation;
 } ScrollToCursorData;
+
+typedef struct {
+    AppGui *gui;
+    guint   generation;
+} HrRenderData;
+
+gboolean idle_render_hrs_cb(gpointer user_data);
+void gui_reset_scroll_direction_state(void);
+void gui_remeasure_line_height(void);
+
+gboolean debug_get_iter_at(
+    GtkTextBuffer *buf,
+    GtkTextIter *iter,
+    int rel_line,
+    int col,
+    const char *caller
+);
+
+void debug_get_iter_at_offset(
+    GtkTextBuffer *buf,
+    GtkTextIter *iter,
+    int char_offset,
+    const char *caller
+);
+
+void debug_set_line_offset(
+    GtkTextIter *iter,
+    int offset,
+    const char *caller
+);
 
 extern AppGui *global_gui;
 extern GtkWidget *main_window;
@@ -272,3 +304,20 @@ void trigger_save_as(AppGui *gui);
 void gui_manual_save(AppGui *gui);
 void toggle_comment_current_line(GtkTextBuffer *buf);
 void clear_selection_formatting(GtkTextBuffer *buf);
+
+void debug_place_cursor(GtkTextBuffer *buf, const GtkTextIter *iter, const char *caller);
+void debug_select_range(GtkTextBuffer *buf, const GtkTextIter *ins, const GtkTextIter *bound, const char *caller);
+void debug_scroll_to_mark(GtkTextView *text_view, GtkTextMark *mark, double within_margin, gboolean use_align, double xalign, double yalign, const char *caller);
+void debug_scroll_mark_onscreen(GtkTextView *text_view, GtkTextMark *mark, const char *caller);
+
+#define gtk_text_buffer_place_cursor(buf, iter) \
+    debug_place_cursor(buf, iter, __func__)
+
+#define gtk_text_buffer_select_range(buf, ins, bound) \
+    debug_select_range(buf, ins, bound, __func__)
+
+#define gtk_text_view_scroll_to_mark(tv, mark, margin, use_align, xalign, yalign) \
+    debug_scroll_to_mark(tv, mark, margin, use_align, xalign, yalign, __func__)
+
+#define gtk_text_view_scroll_mark_onscreen(tv, mark) \
+    debug_scroll_mark_onscreen(tv, mark, __func__)
