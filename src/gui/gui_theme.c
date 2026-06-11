@@ -64,7 +64,7 @@ void update_editor_font(AppGui *gui) {
         "    font-family: \"%s\", \"%s\", \"serif\";\n"
         "    font-size: %.0fpx;\n"
         "    line-height: 1.45;\n"
-        "    caret-color: #00E5FF;\n"
+        "    caret-color: var(--caret-color, var(--accent));\n"
         "}\n"
         "h1, h2, h3 {\n"
         "    font-family: \"Cairo\", \"Inter\", \"system-ui\", sans-serif;\n"
@@ -446,19 +446,7 @@ void on_theme_dropdown_changed(GObject *gobject, GParamSpec *pspec, gpointer use
 }
 
 void init_css(AppGui *gui) {
-    GtkCssProvider *file_provider = gtk_css_provider_new();
-    const char *resolved_style_path = resolve_resource_path("assets/style.css");
-    GFile *file = g_file_new_for_path(resolved_style_path);
-    if (g_file_query_exists(file, NULL)) {
-        gtk_css_provider_load_from_file(file_provider, file);
-    }
-    g_object_unref(file);
-    gtk_style_context_add_provider_for_display(
-        gdk_display_get_default(),
-        GTK_STYLE_PROVIDER(file_provider),
-        GTK_STYLE_PROVIDER_PRIORITY_APPLICATION
-    );
-    g_object_unref(file_provider);
+    (void)gui;
 
     GtkCssProvider *p = gtk_css_provider_new();
     gui->css_provider = p;

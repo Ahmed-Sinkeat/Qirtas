@@ -171,6 +171,9 @@ typedef struct {
     int num_tabs;
     int active_tab_index;
     GtkWidget *tab_bar_box;
+    GtkWidget *tab_bar_scroll;
+    GtkWidget *btn_tab_scroll_left;
+    GtkWidget *btn_tab_scroll_right;
 
     /* Re-entrancy guard */
     gboolean in_conceal_update;
@@ -234,6 +237,7 @@ void init_cursor_trail(AppGui *gui);
 void draw_cursor_trail(GtkDrawingArea *area, cairo_t *cr, int width, int height, gpointer user_data);
 gboolean on_cursor_tick(GtkWidget *widget, GdkFrameClock *frame_clock, gpointer user_data);
 void gui_tabs_refresh(AppGui *gui);
+void gui_tabs_setup_viewport(AppGui *gui);
 void qirtas_export_to_pdf(AppGui *gui);
 int gui_get_absolute_cursor_line(void);
 void on_font_size_changed(GtkSpinButton *spin, gpointer user_data);

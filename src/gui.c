@@ -3197,6 +3197,9 @@ static void activate(GtkApplication *app, gpointer user_data) {
     gui->btn_stats = NULL;
 
     gui->btn_settings = gtk_button_new();
+    gtk_accessible_update_property(GTK_ACCESSIBLE(gui->btn_settings),
+                                   GTK_ACCESSIBLE_PROPERTY_LABEL,
+                                   "Settings", -1);
     gtk_button_set_child(GTK_BUTTON(gui->btn_settings),
         gtk_image_new_from_icon_name("preferences-system-symbolic"));
     gtk_widget_add_css_class(gui->btn_settings, "nav-btn");
@@ -3258,16 +3261,25 @@ static void activate(GtkApplication *app, gpointer user_data) {
     gui->search_match_label = match_lbl;
 
     GtkWidget *btn_prev = gtk_button_new_from_icon_name("go-up-symbolic");
+    gtk_accessible_update_property(GTK_ACCESSIBLE(btn_prev),
+                                   GTK_ACCESSIBLE_PROPERTY_LABEL,
+                                   "Previous match", -1);
     gtk_widget_add_css_class(btn_prev, "search-nav-btn");
     gtk_widget_set_tooltip_text(btn_prev, "Previous match");
     gtk_box_append(GTK_BOX(sbar_box), btn_prev);
 
     GtkWidget *btn_next = gtk_button_new_from_icon_name("go-down-symbolic");
+    gtk_accessible_update_property(GTK_ACCESSIBLE(btn_next),
+                                   GTK_ACCESSIBLE_PROPERTY_LABEL,
+                                   "Next match", -1);
     gtk_widget_add_css_class(btn_next, "search-nav-btn");
     gtk_widget_set_tooltip_text(btn_next, "Next match");
     gtk_box_append(GTK_BOX(sbar_box), btn_next);
 
     GtkWidget *btn_close_s = gtk_button_new_from_icon_name("window-close-symbolic");
+    gtk_accessible_update_property(GTK_ACCESSIBLE(btn_close_s),
+                                   GTK_ACCESSIBLE_PROPERTY_LABEL,
+                                   "Close search bar", -1);
     gtk_widget_add_css_class(btn_close_s, "search-nav-btn");
     gtk_widget_set_tooltip_text(btn_close_s, "Close (Esc)");
     gtk_widget_set_hexpand(btn_close_s, TRUE);
@@ -3959,11 +3971,23 @@ static void activate(GtkApplication *app, gpointer user_data) {
     /* ============================================================
      * BOTTOM BAR
      * ============================================================ */
-    GtkWidget *bottom_bar = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
+    GtkWidget *bottom_bar = gtk_box_new(GTK_ORIENTATION_VERTICAL, 2);
     gtk_widget_add_css_class(bottom_bar, "bottom-bar");
+
+    GtkWidget *status_info_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
+    gtk_widget_add_css_class(status_info_row, "status-info-row");
+    gtk_widget_set_hexpand(status_info_row, TRUE);
+    gtk_widget_set_halign(status_info_row, GTK_ALIGN_FILL);
+
+    GtkWidget *bottom_spacer = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
+    gtk_widget_set_hexpand(bottom_spacer, TRUE);
+
 
     /* ── Far bottom-left: sidebar toggle icon button ── */
     gui->btn_sidebar_toggle = gtk_button_new();
+    gtk_accessible_update_property(GTK_ACCESSIBLE(gui->btn_sidebar_toggle),
+                                   GTK_ACCESSIBLE_PROPERTY_LABEL,
+                                   "Toggle sidebar", -1);
     gtk_button_set_child(GTK_BUTTON(gui->btn_sidebar_toggle),
         gtk_image_new_from_icon_name("sidebar-show-symbolic"));
     gtk_widget_add_css_class(gui->btn_sidebar_toggle, "bottom-icon-btn");
@@ -3974,11 +3998,13 @@ static void activate(GtkApplication *app, gpointer user_data) {
     gui->path_label = gtk_label_new("Economics_Notes.md");
     gtk_widget_add_css_class(gui->path_label, "bottom-path");
 
-    GtkWidget *bottom_spacer = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
-    gtk_widget_set_hexpand(bottom_spacer, TRUE);
+
 
     /* ── Bottom-right: Search icon button ── */
     gui->btn_search = gtk_button_new();
+    gtk_accessible_update_property(GTK_ACCESSIBLE(gui->btn_search),
+                                   GTK_ACCESSIBLE_PROPERTY_LABEL,
+                                   "Search in file", -1);
     gtk_button_set_child(GTK_BUTTON(gui->btn_search),
         gtk_image_new_from_icon_name("system-search-symbolic"));
     gtk_widget_add_css_class(gui->btn_search, "bottom-icon-btn");
@@ -3987,6 +4013,9 @@ static void activate(GtkApplication *app, gpointer user_data) {
 
     /* ── Bottom-right: Menu icon button for quick file actions ── */
     gui->btn_status_actions = gtk_menu_button_new();
+    gtk_accessible_update_property(GTK_ACCESSIBLE(gui->btn_status_actions),
+                                   GTK_ACCESSIBLE_PROPERTY_LABEL,
+                                   "Quick file actions", -1);
     gtk_menu_button_set_icon_name(GTK_MENU_BUTTON(gui->btn_status_actions), "document-new-symbolic");
     gtk_widget_add_css_class(gui->btn_status_actions, "bottom-icon-btn");
     gtk_widget_set_tooltip_text(gui->btn_status_actions, "Quick File Actions");
@@ -4061,6 +4090,9 @@ static void activate(GtkApplication *app, gpointer user_data) {
 
     /* ── Far bottom-right: sync status dot button ── */
     gui->btn_sync_icon_bottom = gtk_button_new();
+    gtk_accessible_update_property(GTK_ACCESSIBLE(gui->btn_sync_icon_bottom),
+                                   GTK_ACCESSIBLE_PROPERTY_LABEL,
+                                   "Sync document", -1);
     gui->sync_dot = gtk_label_new("●");
     gtk_widget_add_css_class(gui->sync_dot, "status-dot");
     gtk_widget_add_css_class(gui->sync_dot, "status-saved");
@@ -4070,19 +4102,56 @@ static void activate(GtkApplication *app, gpointer user_data) {
     g_signal_connect(gui->btn_sync_icon_bottom, "clicked",
                      G_CALLBACK(on_sync_now_clicked), gui);
 
+    GtkWidget *tab_strip = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
+    gtk_widget_add_css_class(tab_strip, "tab-strip");
+    gtk_widget_set_hexpand(tab_strip, TRUE);
+    gtk_widget_set_halign(tab_strip, GTK_ALIGN_FILL);
+
+    gui->btn_tab_scroll_left = gtk_button_new_from_icon_name("pan-start-symbolic");
+    gtk_accessible_update_property(GTK_ACCESSIBLE(gui->btn_tab_scroll_left),
+                                   GTK_ACCESSIBLE_PROPERTY_LABEL,
+                                   "Scroll tabs left", -1);
+    gtk_widget_add_css_class(gui->btn_tab_scroll_left, "tab-scroll-btn");
+    gtk_widget_set_tooltip_text(gui->btn_tab_scroll_left, "Scroll tabs left");
+
+    gui->tab_bar_scroll = gtk_scrolled_window_new();
+    gtk_widget_add_css_class(gui->tab_bar_scroll, "tab-bar-scroll");
+    gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(gui->tab_bar_scroll),
+                                   GTK_POLICY_AUTOMATIC, GTK_POLICY_NEVER);
+    gtk_scrolled_window_set_overlay_scrolling(GTK_SCROLLED_WINDOW(gui->tab_bar_scroll), TRUE);
+    gtk_widget_set_hexpand(gui->tab_bar_scroll, TRUE);
+    gtk_widget_set_hexpand_set(gui->tab_bar_scroll, TRUE);
+
     GtkWidget *tab_bar = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
     gtk_widget_add_css_class(tab_bar, "tab-bar");
     gtk_widget_set_valign(tab_bar, GTK_ALIGN_CENTER);
+    gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(gui->tab_bar_scroll), tab_bar);
     gui->tab_bar_box = tab_bar;
 
-    gtk_box_append(GTK_BOX(bottom_bar), gui->btn_sidebar_toggle);
-    gtk_box_append(GTK_BOX(bottom_bar), tab_bar);
-    gtk_box_append(GTK_BOX(bottom_bar), bottom_spacer);
-    gtk_box_append(GTK_BOX(bottom_bar), gui->btn_search);
-    gtk_box_append(GTK_BOX(bottom_bar), gui->btn_status_actions);
-    gtk_box_append(GTK_BOX(bottom_bar), gui->lbl_words);
-    gtk_box_append(GTK_BOX(bottom_bar), gui->lbl_chars);
-    gtk_box_append(GTK_BOX(bottom_bar), gui->btn_sync_icon_bottom);
+    gui->btn_tab_scroll_right = gtk_button_new_from_icon_name("pan-end-symbolic");
+    gtk_accessible_update_property(GTK_ACCESSIBLE(gui->btn_tab_scroll_right),
+                                   GTK_ACCESSIBLE_PROPERTY_LABEL,
+                                   "Scroll tabs right", -1);
+    gtk_widget_add_css_class(gui->btn_tab_scroll_right, "tab-scroll-btn");
+    gtk_widget_set_tooltip_text(gui->btn_tab_scroll_right, "Scroll tabs right");
+
+    gtk_box_append(GTK_BOX(tab_strip), gui->btn_tab_scroll_left);
+    gtk_box_append(GTK_BOX(tab_strip), gui->tab_bar_scroll);
+    gtk_box_append(GTK_BOX(tab_strip), gui->btn_tab_scroll_right);
+    gui_tabs_setup_viewport(gui);
+
+    gtk_box_append(GTK_BOX(status_info_row), gui->btn_sidebar_toggle);
+    gtk_box_append(GTK_BOX(status_info_row), gui->path_label);
+    gtk_box_append(GTK_BOX(status_info_row), bottom_spacer);
+    gtk_box_append(GTK_BOX(status_info_row), gui->btn_search);
+    gtk_box_append(GTK_BOX(status_info_row), gui->btn_status_actions);
+    gtk_box_append(GTK_BOX(status_info_row), gui->lbl_words);
+    gtk_box_append(GTK_BOX(status_info_row), gui->lbl_chars);
+    gtk_box_append(GTK_BOX(status_info_row), gui->btn_sync_icon_bottom);
+
+    gtk_box_append(GTK_BOX(bottom_bar), status_info_row);
+    gtk_box_append(GTK_BOX(bottom_bar), tab_strip);
+
 
     gui->bottom_bar_widget = bottom_bar;
     gtk_box_append(GTK_BOX(main_vertical_box), sidebar_editor_box);
