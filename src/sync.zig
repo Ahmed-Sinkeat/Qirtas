@@ -194,7 +194,7 @@ pub export fn zig_sync_connect() callconv(.c) void {
     defer free_credentials(&creds, allocator);
 
     const url = std.fmt.allocPrint(allocator, 
-       "https://accounts.google.com/o/oauth2/v2/auth?client_id={s}&redirect_uri=http://127.0.0.1:12345&response_type=code&scope=https://www.googleapis.com/auth/drive.appdata&access_type=offline&prompt=consent",
+       "https://accounts.google.com/o/oauth2/v2/auth?client_id={s}&redirect_uri=http://localhost:12345&response_type=code&scope=https://www.googleapis.com/auth/drive.appdata&access_type=offline&prompt=consent",
        .{creds.client_id}
      ) catch return;
     defer allocator.free(url);
@@ -275,12 +275,12 @@ fn exchange_token_impl(allocator: std.mem.Allocator, code: []const u8, client_id
 
     const body = if (client_secret.len > 0)
         try std.fmt.allocPrint(allocator,
-            "code={s}&client_id={s}&client_secret={s}&redirect_uri=http://127.0.0.1:12345&grant_type=authorization_code",
+            "code={s}&client_id={s}&client_secret={s}&redirect_uri=http://localhost:12345&grant_type=authorization_code",
             .{ code, client_id, client_secret },
         )
     else
         try std.fmt.allocPrint(allocator,
-            "code={s}&client_id={s}&redirect_uri=http://127.0.0.1:12345&grant_type=authorization_code",
+            "code={s}&client_id={s}&redirect_uri=http://localhost:12345&grant_type=authorization_code",
             .{ code, client_id },
         );
     defer allocator.free(body);
@@ -1858,6 +1858,11 @@ fn dropbox_sync_worker() void {
         allocator.free(token);
     }
 
+    if (c.access("/home/.config/lawh/dropbox_sync.sh", c.X_OK) != 0) {
+        gui_update_dropbox_status(1, "Error: dropbox_sync.sh missing.");
+        return;
+    }
+
     var child = std.process.spawn(main.global_io, .{
         .argv = &[_][]const u8{ "/home/.config/lawh/dropbox_sync.sh", token, "." },
     }) catch {
@@ -2012,6 +2017,11 @@ fn github_sync_worker() void {
         @memset(@constCast(creds.token), 0);
         allocator.free(creds.token);
         allocator.free(creds.repo);
+    }
+
+    if (c.access("/home/.config/lawh/github_sync.sh", c.X_OK) != 0) {
+        gui_update_github_status(1, "Error: github_sync.sh missing.");
+        return;
     }
 
     var child = std.process.spawn(main.global_io, .{

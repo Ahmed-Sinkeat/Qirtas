@@ -17,6 +17,19 @@ static gboolean provider_id_configured(const char *value, const char *placeholde
     return value && value[0] != '\0' && strcmp(value, placeholder) != 0;
 }
 
+/* Provider app IDs can be overridden at runtime so users don't have to
+ * rebuild to plug in their own OAuth app:
+ *   QIRTAS_GOOGLE_CLIENT_ID, QIRTAS_DROPBOX_APP_KEY */
+static const char *google_client_id(void) {
+    const char *env = g_getenv("QIRTAS_GOOGLE_CLIENT_ID");
+    return (env && env[0]) ? env : GOOGLE_CLIENT_ID;
+}
+
+static const char *dropbox_app_key(void) {
+    const char *env = g_getenv("QIRTAS_DROPBOX_APP_KEY");
+    return (env && env[0]) ? env : DROPBOX_APP_KEY;
+}
+
 /* Helper: parse simple JSON string value */
 static char *parse_json_value(const char *json, const char *key) {
     char search_key[128];
@@ -367,7 +380,7 @@ static gpointer loopback_thread_func(gpointer user_data) {
                         sqlite3_exec(db, "CREATE TABLE IF NOT EXISTS sync_tokens (id INTEGER PRIMARY KEY CHECK (id = 1), client_id TEXT NOT NULL, client_secret TEXT NOT NULL, access_token TEXT, refresh_token TEXT, expiry_time INTEGER DEFAULT 0);", NULL, NULL, NULL);
                         sqlite3_stmt *stmt = NULL;
                         if (sqlite3_prepare_v2(db, "INSERT OR REPLACE INTO sync_tokens (id, client_id, client_secret) VALUES (1, ?, '');", -1, &stmt, NULL) == SQLITE_OK) {
-                            sqlite3_bind_text(stmt, 1, GOOGLE_CLIENT_ID, -1, SQLITE_TRANSIENT);
+                            sqlite3_bind_text(stmt, 1, google_client_id(), -1, SQLITE_TRANSIENT);
                             sqlite3_step(stmt);
                             sqlite3_finalize(stmt);
                         }
@@ -380,7 +393,7 @@ static gpointer loopback_thread_func(gpointer user_data) {
                         sqlite3_exec(db, "CREATE TABLE IF NOT EXISTS dropbox_sync_tokens (id INTEGER PRIMARY KEY CHECK (id = 1), client_id TEXT NOT NULL, client_secret TEXT NOT NULL, access_token TEXT, refresh_token TEXT, expiry_time INTEGER DEFAULT 0);", NULL, NULL, NULL);
                         sqlite3_stmt *stmt = NULL;
                         if (sqlite3_prepare_v2(db, "INSERT OR REPLACE INTO dropbox_sync_tokens (id, client_id, client_secret) VALUES (1, ?, '');", -1, &stmt, NULL) == SQLITE_OK) {
-                            sqlite3_bind_text(stmt, 1, DROPBOX_APP_KEY, -1, SQLITE_TRANSIENT);
+                            sqlite3_bind_text(stmt, 1, dropbox_app_key(), -1, SQLITE_TRANSIENT);
                             sqlite3_step(stmt);
                             sqlite3_finalize(stmt);
                         }
@@ -458,19 +471,21 @@ void on_sync_connect_clicked(GtkButton *btn, gpointer user_data) {
     if (connected) {
         zig_sync_disconnect();
     } else {
-        if (!provider_id_configured(GOOGLE_CLIENT_ID, "YOUR_PUBLIC_GOOGLE_ID")) {
-            gui_update_sync_status(0, "Configure Google client ID");
+        if (!provider_id_configured(google_client_id(), "YOUR_PUBLIC_GOOGLE_ID")) {
+            gui_update_sync_status(0, "Set QIRTAS_GOOGLE_CLIENT_ID");
             return;
         }
         gui_update_sync_status(2, "Waiting for browser...");
-        const char *auth_url = "https://accounts.google.com/o/oauth2/v2/auth"
-                               "?client_id=" GOOGLE_CLIENT_ID
-                               "&redirect_uri=http://localhost:12345"
-                               "&response_type=code"
-                               "&scope=https://www.googleapis.com/auth/drive.appdata"
-                               "&access_type=offline"
-                               "&prompt=consent";
+        gchar *auth_url = g_strdup_printf(
+            "https://accounts.google.com/o/oauth2/v2/auth"
+            "?client_id=%s"
+            "&redirect_uri=http://localhost:12345"
+            "&response_type=code"
+            "&scope=https://www.googleapis.com/auth/drive.appdata"
+            "&access_type=offline"
+            "&prompt=consent", google_client_id());
         gtk_show_uri(NULL, auth_url, 0);
+        g_free(auth_url);
         start_loopback_listener(gui, 1, 12345);
     }
 }
@@ -482,17 +497,19 @@ void on_dropbox_connect_clicked(GtkButton *btn, gpointer user_data) {
     if (connected) {
         zig_dropbox_disconnect();
     } else {
-        if (!provider_id_configured(DROPBOX_APP_KEY, "YOUR_PUBLIC_DROPBOX_KEY")) {
-            gui_update_dropbox_status(0, "Configure Dropbox app key");
+        if (!provider_id_configured(dropbox_app_key(), "YOUR_PUBLIC_DROPBOX_KEY")) {
+            gui_update_dropbox_status(0, "Set QIRTAS_DROPBOX_APP_KEY");
             return;
         }
         gui_update_dropbox_status(2, "Waiting for browser...");
-        const char *auth_url = "https://www.dropbox.com/oauth2/authorize"
-                               "?client_id=" DROPBOX_APP_KEY
-                               "&token_access_type=offline"
-                               "&response_type=code"
-                               "&redirect_uri=http://localhost:5173";
+        gchar *auth_url = g_strdup_printf(
+            "https://www.dropbox.com/oauth2/authorize"
+            "?client_id=%s"
+            "&token_access_type=offline"
+            "&response_type=code"
+            "&redirect_uri=http://localhost:5173", dropbox_app_key());
         gtk_show_uri(NULL, auth_url, 0);
+        g_free(auth_url);
         start_loopback_listener(gui, 2, 5173);
     }
 }
