@@ -244,6 +244,10 @@ Qirtas/
 │       ├── icons/
 │       ├── qirtas_markdown.lang         ← GtkSourceView language definition
 │       └── qirtas*.style-scheme.xml     ← Editor colour schemes
+├── docs/
+│   ├── SYNC.md                          ← Sync setup, troubleshooting, conflict matrix
+│   └── SECURITY.md                      ← Crypto threat model + roadmap
+├── README.md                            ← Repo front door
 ├── scratch/                             ← Developer profiling and test scripts
 │   └── profile_cursor_movement.py      ← Cursor movement profiling harness
 ├── assets/
@@ -299,6 +303,11 @@ C and Zig communicate via C-linkage exports. The Zig backend is the source of tr
 | `zig_get_editor_border()` | Gets margin config |
 | `zig_dropbox_check_status()` | Checks Dropbox connection |
 | `zig_github_check_status()` | Checks GitHub connection |
+| `zig_db_path()` | Resolved XDG vault-DB path (single source of truth; `DB_PATH` macro in `gui_internal.h` expands to this) |
+| `zig_sync_now()` / `zig_local_sync_now()` / `zig_dropbox_now()` / `zig_github_now()` | Fire on-demand sync per provider |
+| `zig_sync_connect()` / `zig_sync_submit_code(code)` / `zig_sync_disconnect()` | Google Drive OAuth lifecycle (Dropbox/GitHub have equivalents) |
+| `zig_save_sync_credentials(id, secret)` (+ dropbox/github variants) | Persist provider credentials (secrets encrypted) |
+| `zig_get_github_credentials_decrypted(...)` / `zig_get_dropbox_credentials_decrypted(...)` | Decrypted credential readback for the C flows |
 
 ---
 
@@ -349,7 +358,7 @@ recovery round-trip; no fuzzing of `parse_json_value` in `gui_sync.c`.
 | Cursor position char/byte unit mismatch | **Fixed.** See §4.4. |
 | `Gtk-ERROR: Byte index N is off the end of the line` crash on mouse hover | **Fixed.** See §4.5 — `editor_get_iter_at_widget_point()` no longer calls the buggy `gtk_text_view_get_iter_at_position()`. |
 | `GET_RANGE` debug print in `main.zig` | **Removed.** |
-| `gui.c` size | Reduced from 5139 → 4155 lines by extracting PDF export to `gui/gui_pdf.c` and the keyboard shortcuts system to `gui/gui_shortcuts.c`, plus dead-code removal. Still above the 600-line-per-module guideline by design — `gui.c` remains the app entry point/window setup file and is exempted from the modular file size check in `build.zig`. |
+| `gui.c` size | Reduced from 5139 → 4155 lines by extracting PDF export and shortcuts; has since regrown to ~4700 with the prefs system, status menu, localization table, and icon table. Candidates for extraction: `tr_table`/`qirtas_tr`/`qirtas_icon` → `gui_i18n.c`, settings window construction → `gui_settings.c`. `gui.c` remains exempted from the modular file size check in `build.zig`. |
 | Crash-investigation harness (`simulate_crash_cb`, SIGUSR1 wiring) | **Removed.** |
 | `test_*.md` files in root | Temporary profiling files, still present — recommend gitignoring or deleting. |
 | `.bak` and `.step*` files in `src/` | Backup artifacts from the refactor, still present — recommend deleting once this branch is verified stable. |
