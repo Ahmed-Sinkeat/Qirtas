@@ -105,7 +105,44 @@ const c = @cImport({
     @cInclude("sqlite3.h");
     @cInclude("dirent.h");
     @cInclude("stdlib.h");
+    @cInclude("stdio.h");
 });
+
+/// Atomic file write: write to `<path>.qirtas-tmp` in the same directory,
+/// fsync, then rename() over the target. rename(2) is atomic on Linux, so a
+/// crash / full disk / power loss mid-write leaves the ORIGINAL file intact
+/// instead of a zero-byte ruin. Every save path MUST go through this — never
+/// truncate-then-write a user's note.
+pub fn atomicWriteFile(path: []const u8, content: []const u8) !void {
+    var tmp_buf: [1024]u8 = undefined;
+    var path_buf: [1024]u8 = undefined;
+    const tmp_z = try std.fmt.bufPrintZ(&tmp_buf, "{s}.qirtas-tmp", .{path});
+    const path_z = try std.fmt.bufPrintZ(&path_buf, "{s}", .{path});
+
+    const fd = c.open(tmp_z.ptr, c.O_WRONLY | c.O_CREAT | c.O_TRUNC, @as(c.mode_t, 0o644));
+    if (fd < 0) return error.CreateTmpFailed;
+
+    var ok = true;
+    var written: usize = 0;
+    while (written < content.len) {
+        const w = c.write(fd, content.ptr + written, content.len - written);
+        if (w <= 0) {
+            ok = false;
+            break;
+        }
+        written += @intCast(w);
+    }
+    if (ok and c.fsync(fd) != 0) ok = false;
+    if (c.close(fd) != 0) ok = false;
+    if (!ok) {
+        _ = c.unlink(tmp_z.ptr);
+        return error.WriteTmpFailed;
+    }
+    if (c.rename(tmp_z.ptr, path_z.ptr) != 0) {
+        _ = c.unlink(tmp_z.ptr);
+        return error.RenameFailed;
+    }
+}
 
 extern fn run_gui(argc: c_int, argv: ?[*]? [*]const u8) c_int;
 extern fn gui_set_text(text: [*]const u8, len: c_int) void;
@@ -116,6 +153,7 @@ extern fn gui_get_cursor_position(line: *c_int, col: *c_int) void;
 extern fn gui_set_cursor_position(line: c_int, col: c_int) void;
 extern fn gui_reload_full_buffer() void;
 extern fn gui_set_buffer_modified(modified: c_int) void;
+extern fn gui_get_buffer_modified() c_int;
 extern fn gui_refresh_explorer() void;
 extern fn gui_index_all_files() void;
 extern fn gui_index_file(filename: [*:0]const u8) void;
@@ -166,7 +204,7 @@ var redo_top: usize = 0;
 var undo_push_pending: bool = false;
 var undo_pending_line: c_int = 0;
 var undo_pending_col: c_int = 0;
-var file_open_in_progress: bool = false;
+var file_open_in_progress: std.atomic.Value(bool) = .init(false);
 
 pub export fn zig_has_active_master_key() callconv(.c) c_int {
     return if (active_master_key != null) 1 else 0;
@@ -217,12 +255,27 @@ fn clearUndoStack(stack: *[UNDO_CAPACITY]UndoEntry, top: *usize) void {
     }
 }
 
+/// Cap each stack by TOTAL BYTES, not just entry count — snapshots are full
+/// heap copies of the document, so 100 entries of a 5 MB file would be
+/// 500 MB. Oldest entries are evicted first.
+const UNDO_MAX_TOTAL_BYTES: usize = 64 * 1024 * 1024;
+
+fn stackTotalBytes(stack: *[UNDO_CAPACITY]UndoEntry, top: usize) usize {
+    var sum: usize = 0;
+    var i: usize = 0;
+    while (i < top) : (i += 1) sum += stack[i].text.len;
+    return sum;
+}
+
 fn pushUndoEntry(stack: *[UNDO_CAPACITY]UndoEntry, top: *usize, entry: UndoEntry) void {
     if (top.* == UNDO_CAPACITY) {
         dropOldestEntry(stack, top);
     }
     stack[top.*] = entry;
     top.* += 1;
+    while (top.* > 1 and stackTotalBytes(stack, top.*) > UNDO_MAX_TOTAL_BYTES) {
+        dropOldestEntry(stack, top);
+    }
 }
 
 fn captureUndoEntry(cursor_line: c_int, cursor_col: c_int) !UndoEntry {
@@ -507,8 +560,8 @@ pub export fn zig_on_gui_ready() callconv(.c) void {
         }
     }
 
-    file_open_in_progress = true;
-    defer file_open_in_progress = false;
+    file_open_in_progress.store(true, .release);
+    defer file_open_in_progress.store(false, .release);
     load_file_and_update_gui(file_to_load) catch |err| {
         std.debug.print("Failed to load active notes: {}\n", .{err});
     };
@@ -517,10 +570,11 @@ pub export fn zig_on_gui_ready() callconv(.c) void {
     gui_set_cursor_position(initial_cursor_line, initial_cursor_col);
     zig_undo_push(initial_cursor_line, initial_cursor_col);
 
-    // Spawn Asynchronous Autosave Thread
-    // _ = std.Thread.spawn(.{}, autosave_thread_loop, .{}) catch |err| {
-    //     std.debug.print("Failed to spawn autosave thread: {}\n", .{err});
-    // };
+    // Spawn Asynchronous Autosave Thread (30 s; safe now that all save
+    // paths are atomic tmp+fsync+rename writes)
+    _ = std.Thread.spawn(.{}, autosave_thread_loop, .{}) catch |err| {
+        std.debug.print("Failed to spawn autosave thread: {}\n", .{err});
+    };
 
     // Spawn File System Watcher Thread
     _ = std.Thread.spawn(.{}, file_watcher_thread_loop, .{}) catch |err| {
@@ -545,9 +599,9 @@ fn isSupported(filename: []const u8) bool {
 }
 
 pub export fn zig_open_file(filename_ptr: [*:0]const u8) callconv(.c) void {
-    if (file_open_in_progress) return;
-    file_open_in_progress = true;
-    defer file_open_in_progress = false;
+    if (file_open_in_progress.load(.acquire)) return;
+    file_open_in_progress.store(true, .release);
+    defer file_open_in_progress.store(false, .release);
 
     gui_tabs_save_active_to_cache();
     gui_prepare_tab_switch();
@@ -889,8 +943,8 @@ pub export fn zig_open_vault(dir_path_ptr: [*:0]const u8) callconv(.c) void {
     register_file_watch(file_to_open);
 
     // 7. Load file contents
-    file_open_in_progress = true;
-    defer file_open_in_progress = false;
+    file_open_in_progress.store(true, .release);
+    defer file_open_in_progress.store(false, .release);
     load_file_and_update_gui(file_to_open) catch |err| {
         std.debug.print("Failed to open file {s}: {}\n", .{file_to_open, err});
     };
@@ -1059,7 +1113,7 @@ fn populate_line_offsets(content: []const u8) !void {
 }
 
 fn remap_active_file() !void {
-    if (!file_open_in_progress) return error.RemapWithoutGuard;
+    if (!file_open_in_progress.load(.acquire)) return error.RemapWithoutGuard;
     const gpa = std.heap.page_allocator;
     const path = active_file_path[0..active_file_path_len];
     const path_z = try gpa.dupeZ(u8, path);
@@ -1178,11 +1232,6 @@ pub export fn zig_get_text_for_line_range(start_line: c_int, end_line: c_int, ou
 }
 
 pub export fn zig_save_active_page(start_line: c_int, end_line: c_int, text: [*:0]const u8) callconv(.c) c_int {
-    
-    std.debug.print(
-    "SAVE_PAGE start={} end={} text_len={}\n",
-    .{ start_line, end_line, std.mem.len(text) }
- ); 
     if (start_line < 0 or end_line < 0) return 1;
     if (active_file_is_encrypted and active_master_key == null) return 1;
 
@@ -1217,23 +1266,14 @@ pub export fn zig_save_active_page(start_line: c_int, end_line: c_int, text: [*:
     }
     
     const path = active_file_path[0..active_file_path_len];
-    var file = Io.Dir.cwd().createFile(global_io, path, .{}) catch return 1;
-    defer file.close(global_io);
-
     if (active_file_is_encrypted) {
         const key = active_master_key.?;
         const enc_blob = encryptWithMasterKey(gpa, key, new_content) catch return 1;
         defer gpa.free(enc_blob);
-        file.writeStreamingAll(global_io, enc_blob) catch return 1;
+        atomicWriteFile(path, enc_blob) catch return 1;
     } else {
-        file.writeStreamingAll(global_io, new_content) catch return 1;
+        atomicWriteFile(path, new_content) catch return 1;
     }
-    
-    
-    std.debug.print(
-        "SAVE_PAGE start={} end={} new_text_len={} new_size={}\n",
-        .{ start_idx, end_idx, new_text_slice.len, new_size }
-    );
 
     remap_active_file() catch return 1;
     
@@ -1267,7 +1307,7 @@ fn file_watcher_thread_loop() void {
             const g_wd = global_wd.load(.monotonic);
             const d_wd = directory_wd.load(.monotonic);
             if (event.wd == g_wd) {
-                if (file_open_in_progress) continue;
+                if (file_open_in_progress.load(.acquire)) continue;
                 gui_run_on_main_thread(&reload_file_callback, null);
             } else if (event.wd == d_wd) {
                 if (event.len > 0) {
@@ -1302,11 +1342,14 @@ fn refresh_explorer_callback(user_data: ?*anyopaque) callconv(.c) void {
 // GUI-Thread callback: reloads file only if content has changed (prevents self-reload loops)
 fn reload_file_callback(user_data: ?*anyopaque) callconv(.c) void {
     _ = user_data;
-    if (file_open_in_progress) return;
+    if (file_open_in_progress.load(.acquire)) return;
 
-    std.debug.print("RELOAD_BLOCKED_TEST\n", .{});
-
-    if (true) return;
+    // Never clobber unsaved edits: if the GTK buffer is dirty, surface the
+    // situation instead of reloading over the user's work.
+    if (gui_get_buffer_modified() != 0) {
+        gui_set_sync_status("File changed on disk (unsaved edits kept)");
+        return;
+    }
 
     const local_path = active_file_path[0..active_file_path_len];
     const gpa = std.heap.page_allocator;
@@ -1510,9 +1553,9 @@ fn positionToOffset(pos: Position) usize {
 
 fn write_document_content_and_remap(new_content: []const u8) !void {
     if (active_file_path_len == 0) return error.NoActiveFile;
-    if (file_open_in_progress) return error.RemapWithoutGuard;
-    file_open_in_progress = true;
-    defer file_open_in_progress = false;
+    if (file_open_in_progress.load(.acquire)) return error.RemapWithoutGuard;
+    file_open_in_progress.store(true, .release);
+    defer file_open_in_progress.store(false, .release);
     const path = active_file_path[0..active_file_path_len];
     const gpa = std.heap.page_allocator;
 
@@ -1544,8 +1587,8 @@ fn write_document_content_and_remap(new_content: []const u8) !void {
 }
 
 fn restoreSnapshot(entry: UndoEntry) void {
-    file_open_in_progress = true;
-    defer file_open_in_progress = false;
+    file_open_in_progress.store(true, .release);
+    defer file_open_in_progress.store(false, .release);
     write_document_content_and_remap(entry.text) catch return;
     gui_reload_full_buffer();
     gui_set_buffer_modified(1);
@@ -1670,16 +1713,13 @@ pub export fn zig_save_document() callconv(.c) c_int {
 
     const content = if (active_mmap_ptr) |ptr| ptr[0..active_mmap_size] else "";
 
-    var file = Io.Dir.cwd().createFile(global_io, path, .{}) catch return 1;
-    defer file.close(global_io);
-
     if (active_file_is_encrypted) {
         const key = active_master_key orelse return 1;
         const enc_blob = encryptWithMasterKey(gpa, key, content) catch return 1;
         defer gpa.free(enc_blob);
-        file.writeStreamingAll(global_io, enc_blob) catch return 1;
+        atomicWriteFile(path, enc_blob) catch return 1;
     } else {
-        file.writeStreamingAll(global_io, content) catch return 1;
+        atomicWriteFile(path, content) catch return 1;
     }
     return 0;
 }
@@ -1701,6 +1741,24 @@ pub export fn zig_free_document_text(ptr: ?[*:0]const u8) void {
 
 pub fn alert_file_updated() void {
     gui_run_on_main_thread(&reload_file_callback, null);
+}
+
+test "atomicWriteFile round-trip leaves no tmp file" {
+    const path = "/tmp/qirtas-atomic-test.txt";
+    defer _ = c.unlink(path);
+    const payload = "hello atomic قرطاس";
+    try atomicWriteFile(path, payload);
+
+    const fd = c.open(path, c.O_RDONLY);
+    try std.testing.expect(fd >= 0);
+    defer _ = c.close(fd);
+    var buf: [64]u8 = undefined;
+    const n = c.read(fd, &buf, buf.len);
+    try std.testing.expect(n > 0);
+    try std.testing.expectEqualStrings(payload, buf[0..@intCast(n)]);
+
+    // tmp must be gone after the rename
+    try std.testing.expect(c.access("/tmp/qirtas-atomic-test.txt.qirtas-tmp", c.F_OK) != 0);
 }
 
 test "file encryption/decryption" {
