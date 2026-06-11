@@ -198,14 +198,46 @@ static char *transform_paragraph_block(const char *block, const char *prefix, gi
     return g_string_free(result, FALSE);
 }
 
+/* gtk_text_view_get_iter_at_position() can hit a GTK4 bug
+ * (gtk_text_iter_set_visible_line_index() -> "Byte index N is off the end
+ * of the line" -> Gtk-ERROR/abort) on lines that contain both an
+ * "invisible" tag (our markdown conceal tag) and multi-byte UTF-8
+ * characters. Avoid it entirely: find the line under the pointer with
+ * gtk_text_view_get_line_at_y() (always returns byte 0 of a line, never
+ * crashes), then walk forward comparing per-character pixel locations
+ * with gtk_text_view_get_iter_location() (iter -> pixel, also safe). */
 static gboolean editor_get_iter_at_widget_point(AppGui *gui, gdouble x, gdouble y, GtkTextIter *iter) {
     if (!gui || !gui->source_view || !iter) return FALSE;
     int bx, by;
     gtk_text_view_window_to_buffer_coords(GTK_TEXT_VIEW(gui->source_view),
                                          GTK_TEXT_WINDOW_WIDGET,
                                          (int)x, (int)y, &bx, &by);
-    int trailing = 0;
-    return gtk_text_view_get_iter_at_position(GTK_TEXT_VIEW(gui->source_view), iter, &trailing, bx, by);
+
+    GtkTextView *view = GTK_TEXT_VIEW(gui->source_view);
+    GtkTextIter line_iter;
+    int line_top = 0;
+    gtk_text_view_get_line_at_y(view, &line_iter, by, &line_top);
+    gtk_text_iter_set_line_offset(&line_iter, 0);
+
+    GtkTextIter line_end = line_iter;
+    if (!gtk_text_iter_ends_line(&line_end)) {
+        gtk_text_iter_forward_to_line_end(&line_end);
+    }
+
+    int chars_in_line = gtk_text_iter_get_chars_in_line(&line_iter);
+    GdkRectangle rect;
+    for (int col = 0; col < chars_in_line; col++) {
+        GtkTextIter test = line_iter;
+        gtk_text_iter_forward_chars(&test, col);
+        gtk_text_view_get_iter_location(view, &test, &rect);
+        if (bx < rect.x + rect.width) {
+            *iter = test;
+            return TRUE;
+        }
+    }
+
+    *iter = line_end;
+    return TRUE;
 }
 
 static void apply_format_with_saved(GtkTextBuffer *buf, const char *prefix, const char *suffix,

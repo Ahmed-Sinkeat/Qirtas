@@ -142,9 +142,30 @@ Test: hold Down Arrow ~100 presses over 5 seconds.
 - `gui_get_cursor_position()` reads `gtk_text_iter_get_line_offset()` (char-based), matching `iter_to_position()` used everywhere else.
 - `gui_set_cursor_position()` clamps the incoming `col` to `gtk_text_iter_get_chars_in_line()` (char count) before calling `gtk_text_buffer_get_iter_at_line_offset()` (char-based), instead of clamping to byte length and/or mixing in a byte-based iter call.
 
-This matters most for Arabic/RTL and any multi-byte UTF-8 content, where `chars_in_line != bytes_in_line`. A previous mismatch here could pass an out-of-range byte index into a char-based iter call (or vice versa).
+This matters most for Arabic/RTL and any multi-byte UTF-8 content, where `chars_in_line != bytes_in_line`. A previous mismatch here could pass an out-of-range byte index into a char-based iter call (or vice versa). This was a real correctness bug, but **not** the cause of the `"Byte index N is off the end of the line"` crash — see §4.5 for the actual root cause and fix.
 
-**Relation to the `"Byte index N is off the end of the line"` GTK warning:** this fix closes a real correctness bug in the cursor FFI bridge, but the original crash logs (see `idle_scroll_to_cursor` / `apply_regex_conceal_local*` traces in earlier debug runs) showed the GTK error firing from byte-index iterator calls *during scroll-triggered relayout*, not directly from `gui_set_cursor_position`. Those byte-index call sites (`debug_get_iter_at_offset`, `debug_set_line_offset`) have all been replaced with their non-debug, already-correct equivalents (`gtk_text_buffer_get_iter_at_offset`, `gtk_text_iter_set_line_offset`) as part of the debug-instrumentation removal. Re-test the original crash scenario (large file, hold Down Arrow / fast scroll near a long Arabic line) after this change — if it still reproduces, the next suspect is `gtk_text_iter_get_chars_in_line()` vs an internal cached line-length value going stale across an edit.
+### 4.5 Root Cause and Fix: `Gtk-ERROR: Byte index N is off the end of the line` (2026-06-11)
+
+**Confirmed via gdb backtrace** (reproduced by opening a doc with box-drawing/arrow characters — e.g. this file's repository-layout block — and moving the mouse over the editor):
+
+```
+#5  gtk_text_iter_set_visible_line_index () from libgtk-4.so.1
+#6  ?? () from libgtk-4.so.1
+#7  ?? () from libgtk-4.so.1
+#8  editor_get_iter_at_widget_point (...) at src/gui/gui_wiki.c:13
+#9  on_editor_motion (...) at src/gui/gui_wiki.c:219
+```
+
+**Root cause:** `editor_get_iter_at_widget_point()` (three copies existed: `gui.c`, `gui_wiki.c`, `gui_popover.c`) called `gtk_text_view_get_iter_at_position()` on every mouse-motion event over the editor (used for wiki-link hover detection and formatting-popover placement). That GTK4 function internally calls `gtk_text_iter_set_visible_line_index()`, which has a bug: on a line that has both an `invisible`-tagged range (our markdown `conceal` tag, used to hide `**`, `==`, `#`, `[[`/`]]`, etc.) **and** multi-byte UTF-8 characters, the "visible byte index" GTK computes from the Pango layout overshoots the real line's byte length. GTK hits its internal assertion in `gtktextbtree.c:4012` and calls `g_error()`, which is fatal — `Gtk-ERROR **: Byte index N is off the end of the line` aborts the whole process (SIGABRT).
+
+This matches the user's hypothesis: it **is** a real iterator out-of-bounds bug from a GTK iterator API being handed a value larger than the line's byte length — just one level removed (inside `gtk_text_view_get_iter_at_position`'s internal `set_visible_line_index` call, not a direct call we wrote to `get_iter_at_line_offset`/`set_line_offset`).
+
+**Fix:** rewrote `editor_get_iter_at_widget_point()` in `gui_wiki.c` and `gui_popover.c` (the two live copies; the dead third copy in `gui.c` was deleted) to never call `gtk_text_view_get_iter_at_position()`. Instead:
+
+1. `gtk_text_view_get_line_at_y()` finds the line under the pointer — always returns byte 0 of a line, can't overshoot.
+2. Walk forward character-by-character with `gtk_text_iter_forward_chars()`, calling `gtk_text_view_get_iter_location()` (iter → pixel, the safe direction — never triggers `set_visible_line_index`) until the target x-coordinate falls within a character's rectangle.
+
+**Verified:** rebuilt, ran under gdb with a scripted mouse sweep over a doc containing the repository-layout box-drawing block (the exact reproduction case) — no crash, no `Gtk-ERROR`, process stayed alive.
 
 ---
 
@@ -276,6 +297,8 @@ Default typography: **Inter** (premium writing experience). Tabs are consolidate
 | `idle_scroll_to_cursor` accumulation | **Fixed.** `scroll_queued` flag added to `AppGui`; `on_mark_set` only schedules `idle_scroll_to_cursor` if not already queued, and the callback clears the flag on entry. |
 | Dead duplicate code in `gui.c` | **Removed.** Three copies of `apply_paragraph_alignment` and a dead duplicate `on_paste_plain_text_received` existed across `gui.c`/`gui_editor.c`/`gui_popover.c`; `gui.c`'s copies were unused and deleted, the live copies kept in `gui_editor.c` (paste handler) and `gui_popover.c` (alignment helper, now exported via `gui_internal.h`). Also removed unused duplicate `apply_regex_conceal`/`apply_regex_conceal_local`/`replace_anchors_with_hrs` from `gui.c` (live copies remain in `gui_conceal.c`). |
 | Cursor position char/byte unit mismatch | **Fixed.** See §4.4. |
+| `Gtk-ERROR: Byte index N is off the end of the line` crash on mouse hover | **Fixed.** See §4.5 — `editor_get_iter_at_widget_point()` no longer calls the buggy `gtk_text_view_get_iter_at_position()`. |
+| `GET_RANGE` debug print in `main.zig` | **Removed.** |
 | `gui.c` size | Reduced from 5139 → 4155 lines by extracting PDF export to `gui/gui_pdf.c` and the keyboard shortcuts system to `gui/gui_shortcuts.c`, plus dead-code removal. Still above the 600-line-per-module guideline by design — `gui.c` remains the app entry point/window setup file and is exempted from the modular file size check in `build.zig`. |
 | Crash-investigation harness (`simulate_crash_cb`, SIGUSR1 wiring) | **Removed.** |
 | `test_*.md` files in root | Temporary profiling files, still present — recommend gitignoring or deleting. |

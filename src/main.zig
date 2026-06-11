@@ -1046,20 +1046,10 @@ pub export fn zig_get_text_for_line_range(start_line: c_int, end_line: c_int, ou
     }
     
     const start_offset = line_offsets.items[start_idx];
-    const end_offset = if (end_idx >= line_offsets.items.len) 
-
+    const end_offset = if (end_idx >= line_offsets.items.len)
         active_mmap_size
-    else 
+    else
         line_offsets.items[end_idx];
-    std.debug.print(
-    "GET_RANGE start={} end={} start_off={} end_off={}\n",
-    .{
-        start_line,
-        end_line,
-        start_offset,
-        end_offset,
-    },
-);        
 
     if (active_mmap_ptr) |ptr| {
         var s = start_offset;

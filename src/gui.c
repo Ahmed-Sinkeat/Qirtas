@@ -775,18 +775,6 @@ static void on_editor_popover_closed(GtkPopover *popover, gpointer user_data) {
 
 
 
-static gboolean editor_get_iter_at_widget_point(AppGui *gui, gdouble x, gdouble y, GtkTextIter *iter) {
-    if (!gui || !gui->source_view || !iter) return FALSE;
-
-    int bx, by;
-    gtk_text_view_window_to_buffer_coords(GTK_TEXT_VIEW(gui->source_view),
-                                         GTK_TEXT_WINDOW_WIDGET,
-                                         (int)x, (int)y, &bx, &by);
-    int trailing = 0;
-    return gtk_text_view_get_iter_at_position(GTK_TEXT_VIEW(gui->source_view), iter, &trailing, bx, by);
-}
-
-
 
 static gboolean on_editor_mouse_event(GtkEventControllerLegacy *controller,
                                       GdkEvent *event,
