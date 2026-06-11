@@ -70,8 +70,8 @@ static void apply_wiki_link_tags_local_impl(GtkTextBuffer *buf) {
         gtk_text_buffer_apply_tag(buf, tag, &match_start, &close_end);
 
         // Reacquire fresh GtkTextIter values from the buffer after tag modification
-        debug_get_iter_at_offset(buf, &iter, close_end_offset, "apply_wiki_link_tags_local_close_end");
-        debug_get_iter_at_offset(buf, &end, end_offset, "apply_wiki_link_tags_local_end");
+        gtk_text_buffer_get_iter_at_offset(buf, &iter, close_end_offset);
+        gtk_text_buffer_get_iter_at_offset(buf, &end, end_offset);
     }
 }
 
@@ -80,22 +80,10 @@ typedef struct {
     guint generation;
 } WikiData;
 
-typedef struct {
-    uint64_t count;
-    double total_ms;
-    double max_ms;
-} CallbackMetric;
-
-CallbackMetric metric_wiki_local = {0, 0.0, 0.0};
-CallbackMetric metric_wiki_global = {0, 0.0, 0.0};
-
 static gboolean idle_wiki_local_cb(gpointer user_data) {
-    gint64 start_time = g_get_monotonic_time();
     WikiData *d = user_data;
-    g_print("IDLE_CALLBACK_START idle_wiki_local_cb gen=%u\n", d->generation);
     wiki_local_queued = FALSE;
     if (d->generation != d->gui->buffer_generation) {
-        g_print("IDLE_CALLBACK_CANCEL idle_wiki_local_cb (stale generation)\n");
         g_free(d);
         return G_SOURCE_REMOVE;
     }
@@ -104,13 +92,6 @@ static gboolean idle_wiki_local_cb(gpointer user_data) {
         apply_wiki_link_tags_local_impl(buf);
     }
     g_free(d);
-    g_print("IDLE_CALLBACK_END idle_wiki_local_cb SUCCESS\n");
-    
-    double elapsed = (double)(g_get_monotonic_time() - start_time) / 1000.0;
-    metric_wiki_local.count++;
-    metric_wiki_local.total_ms += elapsed;
-    if (elapsed > metric_wiki_local.max_ms) metric_wiki_local.max_ms = elapsed;
-
     return G_SOURCE_REMOVE;
 }
 
@@ -159,12 +140,9 @@ static void apply_wiki_link_tags_impl(GtkTextBuffer *buf) {
 }
 
 static gboolean idle_wiki_global_cb(gpointer user_data) {
-    gint64 start_time = g_get_monotonic_time();
     WikiData *d = user_data;
-    g_print("IDLE_CALLBACK_START idle_wiki_global_cb gen=%u\n", d->generation);
     wiki_global_queued = FALSE;
     if (d->generation != d->gui->buffer_generation) {
-        g_print("IDLE_CALLBACK_CANCEL idle_wiki_global_cb (stale generation)\n");
         g_free(d);
         return G_SOURCE_REMOVE;
     }
@@ -173,13 +151,6 @@ static gboolean idle_wiki_global_cb(gpointer user_data) {
         apply_wiki_link_tags_impl(buf);
     }
     g_free(d);
-    g_print("IDLE_CALLBACK_END idle_wiki_global_cb SUCCESS\n");
-
-    double elapsed = (double)(g_get_monotonic_time() - start_time) / 1000.0;
-    metric_wiki_global.count++;
-    metric_wiki_global.total_ms += elapsed;
-    if (elapsed > metric_wiki_global.max_ms) metric_wiki_global.max_ms = elapsed;
-
     return G_SOURCE_REMOVE;
 }
 

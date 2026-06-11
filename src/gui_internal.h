@@ -110,6 +110,7 @@ typedef struct {
     GtkWidget     *bottom_spacer;
     GtkAdjustment *vadjustment;
     gboolean       in_scroll_update;
+    gboolean       scroll_queued;
     gboolean       loading_viewport;
     gboolean       mouse_dragging;
     gboolean       primary_button_down;
@@ -203,27 +204,6 @@ gboolean idle_render_hrs_cb(gpointer user_data);
 
 void gui_remeasure_line_height(void);
 
-gboolean debug_get_iter_at(
-    GtkTextBuffer *buf,
-    GtkTextIter *iter,
-    int rel_line,
-    int col,
-    const char *caller
-);
-
-void debug_get_iter_at_offset(
-    GtkTextBuffer *buf,
-    GtkTextIter *iter,
-    int char_offset,
-    const char *caller
-);
-
-void debug_set_line_offset(
-    GtkTextIter *iter,
-    int offset,
-    const char *caller
-);
-
 extern AppGui *global_gui;
 extern GtkWidget *main_window;
 extern GtkWidget *global_window;
@@ -265,6 +245,7 @@ void apply_wiki_link_tags_local(GtkTextBuffer *buf);
 void on_editor_right_click(GtkGestureClick *gesture, gint n_press, gdouble x, gdouble y, gpointer user_data);
 void apply_format(GtkTextBuffer *buf, const char *prefix, const char *suffix);
 void apply_paragraph_format(GtkTextBuffer *buf, const char *prefix);
+void apply_paragraph_alignment(GtkTextBuffer *buf, GtkJustification justification);
 void on_editor_left_click(GtkGestureClick *gesture, gint n_press, gdouble x, gdouble y, gpointer user_data);
 void on_editor_motion(GtkEventControllerMotion *controller, gdouble x, gdouble y, gpointer user_data);
 void update_conceal_markdown(GtkTextBuffer *buf);
@@ -287,6 +268,9 @@ gboolean idle_scroll_to_cursor(gpointer user_data);
 gboolean match_app_shortcut(const char *action_id, guint keyval, guint keycode, GdkModifierType state);
 gboolean keycode_matches_latin_keyval(guint keycode, guint target_keyval);
 gboolean keypress_has_text_modifier(GdkModifierType state);
+void init_app_shortcuts(void);
+void show_keybindings_window(AppGui *gui);
+void shortcuts_cancel_listening(void);
 void insert_text_pair(GtkTextBuffer *buf, const char *open, const char *close);
 gboolean maybe_skip_closing_pair(GtkTextBuffer *buf, const char *close);
 gboolean maybe_delete_empty_pair(GtkTextBuffer *buf);
@@ -299,19 +283,3 @@ void gui_manual_save(AppGui *gui);
 void toggle_comment_current_line(GtkTextBuffer *buf);
 void clear_selection_formatting(GtkTextBuffer *buf);
 
-void debug_place_cursor(GtkTextBuffer *buf, const GtkTextIter *iter, const char *caller);
-void debug_select_range(GtkTextBuffer *buf, const GtkTextIter *ins, const GtkTextIter *bound, const char *caller);
-void debug_scroll_to_mark(GtkTextView *text_view, GtkTextMark *mark, double within_margin, gboolean use_align, double xalign, double yalign, const char *caller);
-void debug_scroll_mark_onscreen(GtkTextView *text_view, GtkTextMark *mark, const char *caller);
-
-#define gtk_text_buffer_place_cursor(buf, iter) \
-    debug_place_cursor(buf, iter, __func__)
-
-#define gtk_text_buffer_select_range(buf, ins, bound) \
-    debug_select_range(buf, ins, bound, __func__)
-
-#define gtk_text_view_scroll_to_mark(tv, mark, margin, use_align, xalign, yalign) \
-    debug_scroll_to_mark(tv, mark, margin, use_align, xalign, yalign, __func__)
-
-#define gtk_text_view_scroll_mark_onscreen(tv, mark) \
-    debug_scroll_mark_onscreen(tv, mark, __func__)

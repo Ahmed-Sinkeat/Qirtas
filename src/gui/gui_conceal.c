@@ -27,6 +27,7 @@ static int get_line_height(GtkWidget *text_view) {
 
 gboolean idle_scroll_to_cursor(gpointer user_data) {
     ScrollToCursorData *d = (ScrollToCursorData *)user_data;
+    if (d->gui) d->gui->scroll_queued = FALSE;
     if (d->gui && d->generation != d->gui->buffer_generation) {
         g_free(d);
         return G_SOURCE_REMOVE;
@@ -44,9 +45,7 @@ gboolean idle_scroll_to_cursor(gpointer user_data) {
 
     GtkTextBuffer *buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(gui->source_view));
     GtkTextIter iter;
-    gint char_count = gtk_text_buffer_get_char_count(buf);
-    g_print("IDLE_CALLBACK_START idle_scroll_to_cursor offset=%d\n", offset);
-    debug_get_iter_at_offset(buf, &iter, offset, "idle_scroll_to_cursor");
+    gtk_text_buffer_get_iter_at_offset(buf, &iter, offset);
 
     GdkRectangle rect;
     gtk_text_view_get_iter_location(GTK_TEXT_VIEW(gui->source_view), &iter, &rect);
@@ -96,7 +95,6 @@ gboolean idle_scroll_to_cursor(gpointer user_data) {
             gtk_adjustment_set_value(gui->vadjustment, target_value);
         }
     }
-    g_print("IDLE_CALLBACK_END idle_scroll_to_cursor SUCCESS\n");
     return G_SOURCE_REMOVE;
 }
 
@@ -174,12 +172,12 @@ static void apply_regex_conceal(GtkTextBuffer *buf, const gchar *text, const gch
             gboolean cursor_inside = (cursor_char >= start_char && cursor_char <= end_char);
             if (!cursor_inside) {
                 GtkTextIter start_iter, end_iter;
-                debug_get_iter_at_offset(buf, &start_iter, start_char, "apply_regex_conceal_start");
-                debug_get_iter_at_offset(buf, &end_iter, start_char + delim_len, "apply_regex_conceal_end");
+                gtk_text_buffer_get_iter_at_offset(buf, &start_iter, start_char);
+                gtk_text_buffer_get_iter_at_offset(buf, &end_iter, start_char + delim_len);
                 gtk_text_buffer_apply_tag(buf, conceal_tag, &start_iter, &end_iter);
 
-                debug_get_iter_at_offset(buf, &start_iter, end_char - delim_len, "apply_regex_conceal_end_start");
-                debug_get_iter_at_offset(buf, &end_iter, end_char, "apply_regex_conceal_end_end");
+                gtk_text_buffer_get_iter_at_offset(buf, &start_iter, end_char - delim_len);
+                gtk_text_buffer_get_iter_at_offset(buf, &end_iter, end_char);
                 gtk_text_buffer_apply_tag(buf, conceal_tag, &start_iter, &end_iter);
             }
         }
@@ -244,12 +242,12 @@ static void apply_regex_conceal_local(GtkTextBuffer *buf, const gchar *text, gin
                 if (c_end2 > total_chars) c_end2 = total_chars;
 
                 GtkTextIter start_iter, end_iter;
-                debug_get_iter_at_offset(buf, &start_iter, c_start1, "apply_regex_conceal_local_start");
-                debug_get_iter_at_offset(buf, &end_iter, c_end1, "apply_regex_conceal_local_end");
+                gtk_text_buffer_get_iter_at_offset(buf, &start_iter, c_start1);
+                gtk_text_buffer_get_iter_at_offset(buf, &end_iter, c_end1);
                 gtk_text_buffer_apply_tag(buf, conceal_tag, &start_iter, &end_iter);
 
-                debug_get_iter_at_offset(buf, &start_iter, c_start2, "apply_regex_conceal_local_end_start");
-                debug_get_iter_at_offset(buf, &end_iter, c_end2, "apply_regex_conceal_local_end_end");
+                gtk_text_buffer_get_iter_at_offset(buf, &start_iter, c_start2);
+                gtk_text_buffer_get_iter_at_offset(buf, &end_iter, c_end2);
                 gtk_text_buffer_apply_tag(buf, conceal_tag, &start_iter, &end_iter);
             }
         }
@@ -360,38 +358,19 @@ typedef struct {
     guint generation;
 } ConcealData;
 
-typedef struct {
-    uint64_t count;
-    double total_ms;
-    double max_ms;
-} CallbackMetric;
-
-CallbackMetric metric_on_mark_set = {0, 0.0, 0.0};
-CallbackMetric metric_local_conceal = {0, 0.0, 0.0};
-CallbackMetric metric_global_conceal = {0, 0.0, 0.0};
-
 static gboolean idle_global_conceal_cb(gpointer user_data) {
-    gint64 start_time = g_get_monotonic_time();
-    g_print("IDLE_CALLBACK_START idle_global_conceal_cb\n");
     ConcealData *d = user_data;
     global_conceal_queued = FALSE;
     if (d->generation != d->gui->buffer_generation) {
-        g_print("IDLE_CALLBACK_CANCEL idle_global_conceal_cb (stale generation)\n");
         g_free(d);
         return G_SOURCE_REMOVE;
     }
-    
+
     if (d->gui && global_source_view) {
         GtkTextBuffer *buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(global_source_view));
         update_conceal_markdown_all_impl(buf);
     }
     g_free(d);
-    g_print("IDLE_CALLBACK_END idle_global_conceal_cb SUCCESS\n");
-
-    double elapsed = (double)(g_get_monotonic_time() - start_time) / 1000.0;
-    metric_global_conceal.count++;
-    metric_global_conceal.total_ms += elapsed;
-    if (elapsed > metric_global_conceal.max_ms) metric_global_conceal.max_ms = elapsed;
 
     return G_SOURCE_REMOVE;
 }
@@ -521,27 +500,18 @@ static void update_conceal_markdown_impl(GtkTextBuffer *buf) {
 }
 
 static gboolean idle_local_conceal_cb(gpointer user_data) {
-    gint64 start_time = g_get_monotonic_time();
-    g_print("IDLE_CALLBACK_START idle_local_conceal_cb\n");
     ConcealData *d = user_data;
     local_conceal_queued = FALSE;
     if (d->generation != d->gui->buffer_generation) {
-        g_print("IDLE_CALLBACK_CANCEL idle_local_conceal_cb (stale generation)\n");
         g_free(d);
         return G_SOURCE_REMOVE;
     }
-    
+
     if (d->gui && global_source_view) {
         GtkTextBuffer *buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(global_source_view));
         update_conceal_markdown_impl(buf);
     }
     g_free(d);
-    g_print("IDLE_CALLBACK_END idle_local_conceal_cb SUCCESS\n");
-
-    double elapsed = (double)(g_get_monotonic_time() - start_time) / 1000.0;
-    metric_local_conceal.count++;
-    metric_local_conceal.total_ms += elapsed;
-    if (elapsed > metric_local_conceal.max_ms) metric_local_conceal.max_ms = elapsed;
 
     return G_SOURCE_REMOVE;
 }
@@ -568,38 +538,27 @@ void on_buffer_modified_changed(GtkTextBuffer *buf, gpointer user_data) {
 }
 
 void on_mark_set(GtkTextBuffer *buf, GtkTextIter *location, GtkTextMark *mark, gpointer user_data) {
-    gint64 start_time = g_get_monotonic_time();
     AppGui *gui = (AppGui *)user_data;
     if (gui->in_scroll_update) return;
     if (!gui->vadjustment || !gui->source_view || !gui->virtual_layout_box) return;
 
     GtkTextMark *insert_mark = gtk_text_buffer_get_insert(buf);
-    GtkTextMark *bound_mark = gtk_text_buffer_get_selection_bound(buf);
-    int line = gtk_text_iter_get_line(location);
-    int col = gtk_text_iter_get_line_offset(location);
-    int gen = gui ? (int)gui->buffer_generation : -1;
 
     if (mark == insert_mark) {
-        g_print("MARK_SET insert line=%d col=%d generation=%d\n", line, col, gen);
         /* Defer tag updates to idle so Pango layout is stable and doesn't get stale byte-index cache. */
         update_conceal_markdown(buf);
 
         if (!gtk_widget_get_realized(gui->source_view)) return;
         if (gui->primary_button_down && !gui->mouse_dragging) return;
+        if (gui->scroll_queued) return;
 
+        gui->scroll_queued = TRUE;
         ScrollToCursorData *d = g_new(ScrollToCursorData, 1);
         d->gui = gui;
         d->offset = gtk_text_iter_get_offset(location);
         d->generation = gui->buffer_generation;
         g_idle_add(idle_scroll_to_cursor, d);
-    } else if (mark == bound_mark) {
-        g_print("MARK_SET selection_bound line=%d col=%d generation=%d\n", line, col, gen);
     }
-
-    double elapsed = (double)(g_get_monotonic_time() - start_time) / 1000.0;
-    metric_on_mark_set.count++;
-    metric_on_mark_set.total_ms += elapsed;
-    if (elapsed > metric_on_mark_set.max_ms) metric_on_mark_set.max_ms = elapsed;
 }
 
 void on_cursor_position_changed(GObject *object, GParamSpec *pspec, gpointer user_data) {

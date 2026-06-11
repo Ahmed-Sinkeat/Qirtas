@@ -1,7 +1,7 @@
 # Qirtas — As-Built Specification Document
 
-**Version:** 0.9.2-dev
-**Branch:** measure-cursor-v3
+**Version:** 0.9.3-dev
+**Branch:** full-buffer-editor-v2
 **Updated:** 2026-06-11
 
 ---
@@ -102,9 +102,11 @@ Every cursor movement fires `on_mark_set` for both `insert` and `selection_bound
 | `idle_wiki_local_cb` | Cursor move | Current paragraph |
 | `idle_wiki_global_cb` | File open | Entire buffer |
 
-### 4.3 Profiling Results (2026-06-11)
+### 4.3 Profiling Results (historical, 2026-06-11)
 
-Measured on `measure-cursor-v3` branch. Test: hold Down Arrow ~100 presses over 5 seconds. Metrics written via SIGUSR1 signal handler.
+Measured on the `measure-cursor-v3` branch using a temporary SIGUSR1-based metrics harness. **That harness, all `g_print` debug instrumentation, and the SIGUSR1 handler have since been removed from `gui.c` and the `gui/*.c` modules** — the numbers below are kept as a historical baseline only and cannot be reproduced without re-adding the harness.
+
+Test: hold Down Arrow ~100 presses over 5 seconds.
 
 **1000-line file:**
 
@@ -133,6 +135,17 @@ Measured on `measure-cursor-v3` branch. Test: hold Down Arrow ~100 presses over 
 - Total cursor-movement overhead per keypress: **< 0.35 ms** at 5000 lines. Not a bottleneck.
 - Low idle_local call count (1–3) for ~100 key presses indicates the virtual-scroll viewport residual code was limiting cursor travel. Full-buffer mode should see higher counts.
 
+### 4.4 Cursor Position Char/Byte Unit Fix (2026-06-11)
+
+`gui_get_cursor_position()` / `gui_set_cursor_position()` previously mixed char and byte units in places. They now consistently use **character offsets** end to end:
+
+- `gui_get_cursor_position()` reads `gtk_text_iter_get_line_offset()` (char-based), matching `iter_to_position()` used everywhere else.
+- `gui_set_cursor_position()` clamps the incoming `col` to `gtk_text_iter_get_chars_in_line()` (char count) before calling `gtk_text_buffer_get_iter_at_line_offset()` (char-based), instead of clamping to byte length and/or mixing in a byte-based iter call.
+
+This matters most for Arabic/RTL and any multi-byte UTF-8 content, where `chars_in_line != bytes_in_line`. A previous mismatch here could pass an out-of-range byte index into a char-based iter call (or vice versa).
+
+**Relation to the `"Byte index N is off the end of the line"` GTK warning:** this fix closes a real correctness bug in the cursor FFI bridge, but the original crash logs (see `idle_scroll_to_cursor` / `apply_regex_conceal_local*` traces in earlier debug runs) showed the GTK error firing from byte-index iterator calls *during scroll-triggered relayout*, not directly from `gui_set_cursor_position`. Those byte-index call sites (`debug_get_iter_at_offset`, `debug_set_line_offset`) have all been replaced with their non-debug, already-correct equivalents (`gtk_text_buffer_get_iter_at_offset`, `gtk_text_iter_set_line_offset`) as part of the debug-instrumentation removal. Re-test the original crash scenario (large file, hold Down Arrow / fast scroll near a long Arabic line) after this change — if it still reproduces, the next suspect is `gtk_text_iter_get_chars_in_line()` vs an internal cached line-length value going stale across an edit.
+
 ---
 
 ## 5. Repository Layout
@@ -154,14 +167,16 @@ Qirtas/
 │   └── gui/
 │       ├── gui_theme.c                  ← CSS loading, theme switching, font selection
 │       ├── gui_cursor.c                 ← Cursor trail animations
-│       ├── gui_editor.c                 ← Editing, buffer events, gestures, shortcuts
-│       ├── gui_popover.c                ← Markdown formatting popup, undo sealing
+│       ├── gui_editor.c                 ← Editing, buffer events, gestures, paragraph alignment, paste handling
+│       ├── gui_popover.c                ← Markdown formatting popup, undo sealing, paragraph alignment helper
 │       ├── gui_conceal.c                ← Markdown concealment passes, heading tags, idle guard
 │       ├── gui_wiki.c                   ← Wiki-link parsing and navigation, idle guard
 │       ├── gui_hr.c                     ← Horizontal rule renderer
 │       ├── gui_search.c                 ← Inline search bar overlay
 │       ├── gui_explorer.c               ← Directory tree and active files drawer
 │       ├── gui_tabs.c                   ← Document tab controls in status bar
+│       ├── gui_pdf.c                    ← PDF export (print pagination, draw, save dialog)
+│       ├── gui_shortcuts.c              ← Keyboard shortcuts table, keybindings window
 │       └── gui_sync.c                   ← Cloud credentials and sync event UI
 │   └── ui/
 │       ├── themes/
@@ -257,8 +272,11 @@ Default typography: **Inter** (premium writing experience). Tabs are consolidate
 
 | Item | Status |
 |---|---|
-| Debug instrumentation (ITER_DEBUG, MARK_SET, etc.) | Partially removed — some log lines remain from profiling session |
-| `idle_scroll_to_cursor` accumulation | Investigated — multiple callbacks can queue per cursor move; needs dedup |
-| Virtual scroll residuals in `gui.c` | Some virtual-scroll functions may remain; audit needed |
-| `test_*.md` files in root | Temporary profiling files, should be gitignored |
-| `.bak` and `.step*` files in `src/` | Backup artifacts, should be cleaned up |
+| Debug instrumentation (ITER_DEBUG, MARK_SET, IDLE_CALLBACK_*, CallbackMetric, etc.) | **Removed.** All `g_print`/`debug_*` helpers and the SIGUSR1 metrics handler are gone from `gui.c` and `gui/*.c`. `g_printerr` error logging in `gui_theme.c` is unaffected (legitimate error reporting, not debug instrumentation). |
+| `idle_scroll_to_cursor` accumulation | **Fixed.** `scroll_queued` flag added to `AppGui`; `on_mark_set` only schedules `idle_scroll_to_cursor` if not already queued, and the callback clears the flag on entry. |
+| Dead duplicate code in `gui.c` | **Removed.** Three copies of `apply_paragraph_alignment` and a dead duplicate `on_paste_plain_text_received` existed across `gui.c`/`gui_editor.c`/`gui_popover.c`; `gui.c`'s copies were unused and deleted, the live copies kept in `gui_editor.c` (paste handler) and `gui_popover.c` (alignment helper, now exported via `gui_internal.h`). Also removed unused duplicate `apply_regex_conceal`/`apply_regex_conceal_local`/`replace_anchors_with_hrs` from `gui.c` (live copies remain in `gui_conceal.c`). |
+| Cursor position char/byte unit mismatch | **Fixed.** See §4.4. |
+| `gui.c` size | Reduced from 5139 → 4155 lines by extracting PDF export to `gui/gui_pdf.c` and the keyboard shortcuts system to `gui/gui_shortcuts.c`, plus dead-code removal. Still above the 600-line-per-module guideline by design — `gui.c` remains the app entry point/window setup file and is exempted from the modular file size check in `build.zig`. |
+| Crash-investigation harness (`simulate_crash_cb`, SIGUSR1 wiring) | **Removed.** |
+| `test_*.md` files in root | Temporary profiling files, still present — recommend gitignoring or deleting. |
+| `.bak` and `.step*` files in `src/` | Backup artifacts from the refactor, still present — recommend deleting once this branch is verified stable. |

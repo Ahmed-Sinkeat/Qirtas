@@ -12,6 +12,8 @@ pub fn build(b: *std.Build) void {
         "src/gui/gui_explorer.c",
         "src/gui/gui_tabs.c",
         "src/gui/gui_editor.c",
+        "src/gui/gui_pdf.c",
+        "src/gui/gui_shortcuts.c",
     };
 
 

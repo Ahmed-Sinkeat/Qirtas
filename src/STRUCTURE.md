@@ -18,14 +18,16 @@ Qirtas/
 │   └── gui/
 │       ├── gui_theme.c                  ← CSS loading, theme switching, font selection
 │       ├── gui_cursor.c                 ← Cursor trail animations
-│       ├── gui_editor.c                 ← Editing, buffer events, gestures, shortcuts
-│       ├── gui_popover.c                ← Markdown formatting popup, undo sealing
+│       ├── gui_editor.c                 ← Editing, buffer events, gestures, paragraph alignment, paste handling
+│       ├── gui_popover.c                ← Markdown formatting popup, undo sealing, paragraph alignment helper
 │       ├── gui_conceal.c                ← Markdown concealment passes, heading tags, idle guard
 │       ├── gui_wiki.c                   ← Wiki-link parsing and navigation, idle guard
 │       ├── gui_hr.c                     ← Horizontal rule renderer
 │       ├── gui_search.c                 ← Inline search bar overlay
 │       ├── gui_explorer.c               ← Directory tree and active files drawer
 │       ├── gui_tabs.c                   ← Document tab controls in status bar
+│       ├── gui_pdf.c                    ← PDF export (print pagination, draw, save dialog)
+│       ├── gui_shortcuts.c              ← Keyboard shortcuts table, keybindings window
 │       └── gui_sync.c                   ← Cloud credentials and sync event UI
 │   └── ui/
 │       ├── themes/
@@ -70,6 +72,8 @@ Qirtas/
 | Formatting popovers and post-edit undo sealing | `src/gui/gui_popover.c` |
 | Markdown concealment, heading tags, buffer-generation guards | `src/gui/gui_conceal.c` |
 | Wiki-link parsing and idle guards | `src/gui/gui_wiki.c` |
+| PDF export (printing, pagination, save dialog) | `src/gui/gui_pdf.c` |
+| Keyboard shortcuts table and keybindings window | `src/gui/gui_shortcuts.c` |
 | UI-only shared state, window pointers, and module hooks | `src/gui_internal.h` |
 | Zig-facing FFI declarations | `src/gui_shared.h` |
 | App theme variables | `src/ui/themes/theme-<name>.css` |
@@ -94,6 +98,8 @@ Qirtas/
 | `gui_search` | Editor inline query search bar overlay | `src/gui/gui_search.c` |
 | `gui_explorer` | Directory trees and active files drawer | `src/gui/gui_explorer.c` |
 | `gui_tabs` | Document tab controls (inside the status bar) and active buffer management | `src/gui/gui_tabs.c` |
+| `gui_pdf` | PDF export (print pagination, page drawing, save dialog) | `src/gui/gui_pdf.c` |
+| `gui_shortcuts` | Keyboard shortcuts table, keybindings settings window | `src/gui/gui_shortcuts.c` |
 | `gui_sync` | Cloud credentials and synchronization event UI | `src/gui/gui_sync.c` |
 
 ## Buffer Model
@@ -152,8 +158,8 @@ Both C and Zig communicate via memory-mapped C linkage.
 - `void gui_set_sync_status(const char *status)`: Updates the sync status text pill.
 - `void gui_show_editor(void)`: Switches workspace view stack to the editor page.
 - `void gui_show_recovery_dialog(void)`: Opens the recovery modal.
-- `void gui_get_cursor_position(int *line, int *col)`: Retrieves current cursor position.
-- `void gui_set_cursor_position(int line, int col)`: Restores cursor (clamped to line byte length).
+- `void gui_get_cursor_position(int *line, int *col)`: Retrieves current cursor position. `col` is a **character** offset (`gtk_text_iter_get_line_offset`), matching `Position.col` everywhere else in the codebase.
+- `void gui_set_cursor_position(int line, int col)`: Restores cursor. `col` is clamped to `gtk_text_iter_get_chars_in_line()` (character count, not byte count) before calling `gtk_text_buffer_get_iter_at_line_offset`.
 - `void gui_refresh_explorer(void)`: Refreshes directory tree explorer on idle.
 - `void gui_trigger_autosave(void)`: Invokes active page save logic in Zig backend.
 - `void gui_run_on_main_thread(void (*callback)(void *), void *user_data)`: Runs C functions safely from Zig threads.

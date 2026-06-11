@@ -3,7 +3,9 @@ import os
 def generate_file(filename, lines_count):
     with open(filename, "w") as f:
         for i in range(1, lines_count + 1):
-            if i % 100 == 1:
+            if i == 200:
+                f.write("a" * 400 + "\n")
+            elif i % 100 == 1:
                 f.write(f"# Heading {i}\n")
             elif i % 100 == 50:
                 f.write("Some text with a [[WikiLink]] inside it.\n")

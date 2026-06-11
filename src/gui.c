@@ -10,7 +10,6 @@
 #include <unistd.h>
 #include <libgen.h>
 #include <limits.h>
-#include <signal.h>
 #include "gui_internal.h"
 #include "gui_shared.h"
 
@@ -677,111 +676,6 @@ static void on_pointer_color_changed(GObject *object, GParamSpec *pspec, gpointe
 }
 
 
-static gboolean on_print_paginate(GtkPrintOperation *operation, GtkPrintContext *context, gpointer user_data) {
-    GtkSourcePrintCompositor *compositor = GTK_SOURCE_PRINT_COMPOSITOR(user_data);
-    if (gtk_source_print_compositor_paginate(compositor, context)) {
-        int n_pages = gtk_source_print_compositor_get_n_pages(compositor);
-        gtk_print_operation_set_n_pages(operation, n_pages);
-        return TRUE;
-    }
-    return FALSE;
-}
-
-static void on_print_draw_page(GtkPrintOperation *operation, GtkPrintContext *context, gint page_nr, gpointer user_data) {
-    (void)operation;
-    GtkSourcePrintCompositor *compositor = GTK_SOURCE_PRINT_COMPOSITOR(user_data);
-    gtk_source_print_compositor_draw_page(compositor, context, page_nr);
-}
-
-static void on_print_end(GtkPrintOperation *operation, GtkPrintContext *context, gpointer user_data) {
-    (void)operation;
-    (void)context;
-    GtkSourcePrintCompositor *compositor = GTK_SOURCE_PRINT_COMPOSITOR(user_data);
-    g_object_unref(compositor);
-}
-
-static void do_pdf_export(AppGui *gui, const char *pdf_path) {
-    if (!gui || !gui->source_view) return;
-
-    GtkSourceView *source_view = GTK_SOURCE_VIEW(gui->source_view);
-    GtkSourcePrintCompositor *compositor = gtk_source_print_compositor_new_from_view(source_view);
-    
-    // Retain wrap mode and highlight syntax settings
-    GtkWrapMode wrap_mode = gtk_text_view_get_wrap_mode(GTK_TEXT_VIEW(source_view));
-    gtk_source_print_compositor_set_wrap_mode(compositor, wrap_mode);
-    gtk_source_print_compositor_set_highlight_syntax(compositor, TRUE);
-    
-    // Configure header / footer
-    gtk_source_print_compositor_set_print_header(compositor, TRUE);
-    gtk_source_print_compositor_set_print_footer(compositor, TRUE);
-    
-    GtkPrintOperation *operation = gtk_print_operation_new();
-    gtk_print_operation_set_export_filename(operation, pdf_path);
-    
-    g_signal_connect(operation, "paginate", G_CALLBACK(on_print_paginate), compositor);
-    g_signal_connect(operation, "draw-page", G_CALLBACK(on_print_draw_page), compositor);
-    g_signal_connect(operation, "end-print", G_CALLBACK(on_print_end), compositor);
-    
-    GError *error = NULL;
-    GtkPrintOperationResult result = gtk_print_operation_run(operation, 
-                                                            GTK_PRINT_OPERATION_ACTION_EXPORT, 
-                                                            GTK_WINDOW(gui->window), 
-                                                            &error);
-    
-    if (result == GTK_PRINT_OPERATION_RESULT_ERROR) {
-        g_warning("PDF Export Error: %s", error ? error->message : "Unknown error");
-        g_clear_error(&error);
-    }
-    
-    g_object_unref(operation);
-}
-
-static void on_pdf_save_response(GObject *source_object, GAsyncResult *res, gpointer user_data) {
-    GtkFileDialog *dialog = GTK_FILE_DIALOG(source_object);
-    AppGui *gui = (AppGui *)user_data;
-    GError *error = NULL;
-    GFile *file = gtk_file_dialog_save_finish(dialog, res, &error);
-    if (file) {
-        char *path = g_file_get_path(file);
-        if (path) {
-            do_pdf_export(gui, path);
-            g_free(path);
-        }
-        g_object_unref(file);
-    } else if (error) {
-        g_clear_error(&error);
-    }
-}
-
-void qirtas_export_to_pdf(AppGui *gui) {
-    if (!gui || !gui->window) return;
-
-    GtkFileDialog *dialog = gtk_file_dialog_new();
-    gtk_file_dialog_set_title(dialog, "Export to PDF");
-    gtk_file_dialog_set_initial_name(dialog, "document.pdf");
-    
-    GtkFileFilter *filter = gtk_file_filter_new();
-    gtk_file_filter_set_name(filter, "PDF Documents");
-    gtk_file_filter_add_pattern(filter, "*.pdf");
-    gtk_file_filter_add_mime_type(filter, "application/pdf");
-    
-    GListStore *filters = g_list_store_new(GTK_TYPE_FILE_FILTER);
-    g_list_store_append(filters, filter);
-    g_object_unref(filter);
-    
-    gtk_file_dialog_set_filters(dialog, G_LIST_MODEL(filters));
-    g_object_unref(filters);
-
-    gtk_file_dialog_save(dialog, GTK_WINDOW(gui->window), NULL, on_pdf_save_response, gui);
-}
-
-static void on_export_pdf_clicked(GtkButton *btn, gpointer user_data) {
-    AppGui *gui = (AppGui *)user_data;
-    GtkWidget *pop = gtk_widget_get_ancestor(GTK_WIDGET(btn), GTK_TYPE_POPOVER);
-    if (pop) gtk_popover_popdown(GTK_POPOVER(pop));
-    qirtas_export_to_pdf(gui);
-}
-
 static void on_open_existing_clicked(GtkButton *btn, gpointer user_data) {
     AppGui *gui = (AppGui *)user_data;
     GtkFileDialog *dialog = gtk_file_dialog_new();
@@ -852,90 +746,9 @@ static void on_popover_closed(GtkPopover *popover, gpointer user_data) {
     gtk_editable_set_text(GTK_EDITABLE(w->entry_name), "");
 }
 
-typedef struct {
-    uint64_t count;
-    double total_ms;
-    double max_ms;
-} CallbackMetric;
-
-extern CallbackMetric metric_on_mark_set;
-extern CallbackMetric metric_local_conceal;
-extern CallbackMetric metric_global_conceal;
-extern CallbackMetric metric_wiki_local;
-extern CallbackMetric metric_wiki_global;
-
-static void sigusr1_handler(int sig) {
-    (void)sig;
-    FILE *f = fopen("/tmp/qirtas_profile.txt", "w");
-    if (!f) return;
-    fprintf(f, "=== CURSOR MOVEMENT PROFILING REPORT ===\n");
-    fprintf(f, "on_mark_set:\n");
-    fprintf(f, "  call count: %lu\n", (unsigned long)metric_on_mark_set.count);
-    fprintf(f, "  total time: %.3f ms\n", metric_on_mark_set.total_ms);
-    fprintf(f, "  avg time  : %.3f ms\n", metric_on_mark_set.count ? (metric_on_mark_set.total_ms / metric_on_mark_set.count) : 0.0);
-    fprintf(f, "  max time  : %.3f ms\n", metric_on_mark_set.max_ms);
-    fprintf(f, "idle_local_conceal_cb:\n");
-    fprintf(f, "  call count: %lu\n", (unsigned long)metric_local_conceal.count);
-    fprintf(f, "  total time: %.3f ms\n", metric_local_conceal.total_ms);
-    fprintf(f, "  avg time  : %.3f ms\n", metric_local_conceal.count ? (metric_local_conceal.total_ms / metric_local_conceal.count) : 0.0);
-    fprintf(f, "  max time  : %.3f ms\n", metric_local_conceal.max_ms);
-    fprintf(f, "idle_global_conceal_cb:\n");
-    fprintf(f, "  call count: %lu\n", (unsigned long)metric_global_conceal.count);
-    fprintf(f, "  total time: %.3f ms\n", metric_global_conceal.total_ms);
-    fprintf(f, "  avg time  : %.3f ms\n", metric_global_conceal.count ? (metric_global_conceal.total_ms / metric_global_conceal.count) : 0.0);
-    fprintf(f, "  max time  : %.3f ms\n", metric_global_conceal.max_ms);
-    fprintf(f, "idle_wiki_local_cb:\n");
-    fprintf(f, "  call count: %lu\n", (unsigned long)metric_wiki_local.count);
-    fprintf(f, "  total time: %.3f ms\n", metric_wiki_local.total_ms);
-    fprintf(f, "  avg time  : %.3f ms\n", metric_wiki_local.count ? (metric_wiki_local.total_ms / metric_wiki_local.count) : 0.0);
-    fprintf(f, "  max time  : %.3f ms\n", metric_wiki_local.max_ms);
-    fprintf(f, "idle_wiki_global_cb:\n");
-    fprintf(f, "  call count: %lu\n", (unsigned long)metric_wiki_global.count);
-    fprintf(f, "  total time: %.3f ms\n", metric_wiki_global.total_ms);
-    fprintf(f, "  avg time  : %.3f ms\n", metric_wiki_global.count ? (metric_wiki_global.total_ms / metric_wiki_global.count) : 0.0);
-    fprintf(f, "  max time  : %.3f ms\n", metric_wiki_global.max_ms);
-    fprintf(f, "========================================\n");
-    fclose(f);
-}
-
-static void print_profiling_report(void) {
-    g_print("\n=== CURSOR MOVEMENT PROFILING REPORT ===\n");
-    g_print("on_mark_set:\n");
-    g_print("  call count: %lu\n", (unsigned long)metric_on_mark_set.count);
-    g_print("  total time: %.3f ms\n", metric_on_mark_set.total_ms);
-    g_print("  avg time  : %.3f ms\n", metric_on_mark_set.count ? (metric_on_mark_set.total_ms / metric_on_mark_set.count) : 0.0);
-    g_print("  max time  : %.3f ms\n", metric_on_mark_set.max_ms);
-
-    g_print("idle_local_conceal_cb:\n");
-    g_print("  call count: %lu\n", (unsigned long)metric_local_conceal.count);
-    g_print("  total time: %.3f ms\n", metric_local_conceal.total_ms);
-    g_print("  avg time  : %.3f ms\n", metric_local_conceal.count ? (metric_local_conceal.total_ms / metric_local_conceal.count) : 0.0);
-    g_print("  max time  : %.3f ms\n", metric_local_conceal.max_ms);
-
-    g_print("idle_global_conceal_cb:\n");
-    g_print("  call count: %lu\n", (unsigned long)metric_global_conceal.count);
-    g_print("  total time: %.3f ms\n", metric_global_conceal.total_ms);
-    g_print("  avg time  : %.3f ms\n", metric_global_conceal.count ? (metric_global_conceal.total_ms / metric_global_conceal.count) : 0.0);
-    g_print("  max time  : %.3f ms\n", metric_global_conceal.max_ms);
-
-    g_print("idle_wiki_local_cb:\n");
-    g_print("  call count: %lu\n", (unsigned long)metric_wiki_local.count);
-    g_print("  total time: %.3f ms\n", metric_wiki_local.total_ms);
-    g_print("  avg time  : %.3f ms\n", metric_wiki_local.count ? (metric_wiki_local.total_ms / metric_wiki_local.count) : 0.0);
-    g_print("  max time  : %.3f ms\n", metric_wiki_local.max_ms);
-
-    g_print("idle_wiki_global_cb:\n");
-    g_print("  call count: %lu\n", (unsigned long)metric_wiki_global.count);
-    g_print("  total time: %.3f ms\n", metric_wiki_global.total_ms);
-    g_print("  avg time  : %.3f ms\n", metric_wiki_global.count ? (metric_wiki_global.total_ms / metric_wiki_global.count) : 0.0);
-    g_print("  max time  : %.3f ms\n", metric_wiki_global.max_ms);
-    g_print("========================================\n\n");
-}
-
 static void on_app_shutdown(GApplication *app, gpointer user_data) {
     (void)app;
     (void)user_data;
-    print_profiling_report();
     zig_on_shutdown();
 }
 
@@ -1091,134 +904,6 @@ static void on_workspace_click(GtkGestureClick *gesture, gint n_press, gdouble x
     }
 }
 
-static void apply_regex_conceal(GtkTextBuffer *buf, const gchar *text, const gchar *pattern, gint cursor_char, gint delim_len, GtkTextTag *conceal_tag) {
-    GError *error = NULL;
-    static GRegex *regex_bold = NULL;
-    static GRegex *regex_highlight = NULL;
-    static GRegex *regex_italic = NULL;
-    
-    GRegex *regex = NULL;
-    if (strcmp(pattern, "\\*\\*([^\\n]+?)\\*\\*") == 0) {
-        if (!regex_bold) regex_bold = g_regex_new(pattern, G_REGEX_DEFAULT, 0, NULL);
-        regex = regex_bold;
-    } else if (strcmp(pattern, "==([^\\n]+?)==") == 0) {
-        if (!regex_highlight) regex_highlight = g_regex_new(pattern, G_REGEX_DEFAULT, 0, NULL);
-        regex = regex_highlight;
-    } else if (strcmp(pattern, "(?<!\\*)\\*([^\\n\\*]+?)\\*(?!\\*)") == 0) {
-        if (!regex_italic) regex_italic = g_regex_new(pattern, G_REGEX_DEFAULT, 0, NULL);
-        regex = regex_italic;
-    } else {
-        regex = g_regex_new(pattern, G_REGEX_DEFAULT, 0, NULL);
-    }
-    
-    if (!regex) return;
-
-    GMatchInfo *match_info = NULL;
-    gboolean has_match = g_regex_match(regex, text, 0, &match_info);
-    while (has_match) {
-        gint start_byte = 0;
-        gint end_byte = 0;
-        if (g_match_info_fetch_pos(match_info, 0, &start_byte, &end_byte)) {
-            gint start_char = g_utf8_pointer_to_offset(text, text + start_byte);
-            gint end_char = g_utf8_pointer_to_offset(text, text + end_byte);
-            
-            gboolean cursor_inside = (cursor_char >= start_char && cursor_char <= end_char);
-            
-            if (!cursor_inside) {
-                GtkTextIter start_iter, end_iter;
-                debug_get_iter_at_offset(buf, &start_iter, start_char, "apply_regex_conceal_start");
-                debug_get_iter_at_offset(buf, &end_iter, start_char + delim_len, "apply_regex_conceal_end");
-                gtk_text_buffer_apply_tag(buf, conceal_tag, &start_iter, &end_iter);
-                
-                debug_get_iter_at_offset(buf, &start_iter, end_char - delim_len, "apply_regex_conceal_end_start");
-                debug_get_iter_at_offset(buf, &end_iter, end_char, "apply_regex_conceal_end_end");
-                gtk_text_buffer_apply_tag(buf, conceal_tag, &start_iter, &end_iter);
-            }
-        }
-        has_match = g_match_info_next(match_info, &error);
-    }
-    g_match_info_free(match_info);
-    if (regex != regex_bold && regex != regex_highlight && regex != regex_italic) {
-        g_regex_unref(regex);
-    }
-}
-
-static void apply_regex_conceal_local(GtkTextBuffer *buf, const gchar *text, gint range_start_offset, const gchar *pattern, gint cursor_char, gint delim_len, GtkTextTag *conceal_tag) {
-    GError *error = NULL;
-    static GRegex *regex_bold = NULL;
-    static GRegex *regex_highlight = NULL;
-    static GRegex *regex_italic = NULL;
-    
-    GRegex *regex = NULL;
-    if (strcmp(pattern, "\\*\\*([^\\n]+?)\\*\\*") == 0) {
-        if (!regex_bold) regex_bold = g_regex_new(pattern, G_REGEX_DEFAULT, 0, NULL);
-        regex = regex_bold;
-    } else if (strcmp(pattern, "==([^\\n]+?)==") == 0) {
-        if (!regex_highlight) regex_highlight = g_regex_new(pattern, G_REGEX_DEFAULT, 0, NULL);
-        regex = regex_highlight;
-    } else if (strcmp(pattern, "(?<!\\*)\\*([^\\n\\*]+?)\\*(?!\\*)") == 0) {
-        if (!regex_italic) regex_italic = g_regex_new(pattern, G_REGEX_DEFAULT, 0, NULL);
-        regex = regex_italic;
-    } else {
-        regex = g_regex_new(pattern, G_REGEX_DEFAULT, 0, NULL);
-    }
-    
-    if (!regex) return;
-
-    GMatchInfo *match_info = NULL;
-    gboolean has_match = g_regex_match(regex, text, 0, &match_info);
-    while (has_match) {
-        gint start_byte = 0;
-        gint end_byte = 0;
-        if (g_match_info_fetch_pos(match_info, 0, &start_byte, &end_byte)) {
-            gint start_char_local = g_utf8_pointer_to_offset(text, text + start_byte);
-            gint end_char_local = g_utf8_pointer_to_offset(text, text + end_byte);
-            
-            gint start_char = range_start_offset + start_char_local;
-            gint end_char = range_start_offset + end_char_local;
-            
-            gboolean cursor_inside = (cursor_char >= start_char && cursor_char <= end_char);
-            
-            if (!cursor_inside) {
-                GtkTextIter start_iter, end_iter;
-                debug_get_iter_at_offset(buf, &start_iter, start_char, "apply_regex_conceal_local_start");
-                debug_get_iter_at_offset(buf, &end_iter, start_char + delim_len, "apply_regex_conceal_local_end");
-                gtk_text_buffer_apply_tag(buf, conceal_tag, &start_iter, &end_iter);
-                
-                debug_get_iter_at_offset(buf, &start_iter, end_char - delim_len, "apply_regex_conceal_local_end_start");
-                debug_get_iter_at_offset(buf, &end_iter, end_char, "apply_regex_conceal_local_end_end");
-                gtk_text_buffer_apply_tag(buf, conceal_tag, &start_iter, &end_iter);
-            }
-        }
-        has_match = g_match_info_next(match_info, &error);
-    }
-    g_match_info_free(match_info);
-    if (regex != regex_bold && regex != regex_highlight && regex != regex_italic) {
-        g_regex_unref(regex);
-    }
-}
-
-
-
-static char *replace_anchors_with_hrs(const char *src) {
-    if (!src) return NULL;
-
-    GString *str = g_string_new("");
-    const char *p = src;
-    while (*p) {
-        if ((unsigned char)p[0] == 0xEF && (unsigned char)p[1] == 0xBF && (unsigned char)p[2] == 0xBC) {
-            g_string_append(str, "---");
-            p += 3;
-        } else {
-            g_string_append_c(str, *p);
-            p++;
-        }
-    }
-    return g_string_free(str, FALSE);
-}
-
-
-
 void gui_push_undo_snapshot(void) {
     if (!global_gui || global_gui->loading_viewport) return;
 
@@ -1345,92 +1030,6 @@ void on_insert_text_before(GtkTextBuffer *buf, GtkTextIter *location, gchar *tex
             g_signal_stop_emission_by_name(buf, "insert-text");
             return;
         }
-    }
-}
-
-static void apply_paragraph_alignment(GtkTextBuffer *buf, GtkJustification justification) {
-    GtkTextTagTable *table = gtk_text_buffer_get_tag_table(buf);
-    GtkTextTag *tag_left = gtk_text_tag_table_lookup(table, "align-left");
-    if (!tag_left) {
-        tag_left = gtk_text_buffer_create_tag(buf, "align-left", "justification", GTK_JUSTIFY_LEFT, NULL);
-    }
-    GtkTextTag *tag_center = gtk_text_tag_table_lookup(table, "align-center");
-    if (!tag_center) {
-        tag_center = gtk_text_buffer_create_tag(buf, "align-center", "justification", GTK_JUSTIFY_CENTER, NULL);
-    }
-    GtkTextTag *tag_right = gtk_text_tag_table_lookup(table, "align-right");
-    if (!tag_right) {
-        tag_right = gtk_text_buffer_create_tag(buf, "align-right", "justification", GTK_JUSTIFY_RIGHT, NULL);
-    }
-    GtkTextTag *tag_justify = gtk_text_tag_table_lookup(table, "align-justify");
-    if (!tag_justify) {
-        tag_justify = gtk_text_buffer_create_tag(buf, "align-justify", "justification", GTK_JUSTIFY_FILL, NULL);
-    }
-
-    GtkTextTag *target_tag = NULL;
-    switch (justification) {
-        case GTK_JUSTIFY_LEFT:   target_tag = tag_left; break;
-        case GTK_JUSTIFY_CENTER: target_tag = tag_center; break;
-        case GTK_JUSTIFY_RIGHT:  target_tag = tag_right; break;
-        case GTK_JUSTIFY_FILL:   target_tag = tag_justify; break;
-        default: return;
-    }
-
-    GtkTextIter start, end;
-    if (!gtk_text_buffer_get_selection_bounds(buf, &start, &end)) {
-        gtk_text_buffer_get_iter_at_mark(buf, &start, gtk_text_buffer_get_insert(buf));
-        end = start;
-    }
-
-    gint start_line = gtk_text_iter_get_line(&start);
-    gint end_line = gtk_text_iter_get_line(&end);
-
-    gtk_text_buffer_begin_user_action(buf);
-
-    for (gint l = start_line; l <= end_line; l++) {
-        GtkTextIter line_start, line_end;
-        gtk_text_buffer_get_iter_at_line(buf, &line_start, l);
-        line_end = line_start;
-        gtk_text_iter_forward_to_line_end(&line_end);
-
-        gtk_text_buffer_remove_tag(buf, tag_left, &line_start, &line_end);
-        gtk_text_buffer_remove_tag(buf, tag_center, &line_start, &line_end);
-        gtk_text_buffer_remove_tag(buf, tag_right, &line_start, &line_end);
-        gtk_text_buffer_remove_tag(buf, tag_justify, &line_start, &line_end);
-
-        gtk_text_buffer_apply_tag(buf, target_tag, &line_start, &line_end);
-    }
-
-    gtk_text_buffer_end_user_action(buf);
-}
-
-static void on_paste_plain_text_received(GObject *source_object, GAsyncResult *res, gpointer user_data) {
-    GdkClipboard *clipboard = GDK_CLIPBOARD(source_object);
-    GError *error = NULL;
-    char *text = gdk_clipboard_read_text_finish(clipboard, res, &error);
-    if (error) {
-        g_warning("Failed to read text from clipboard: %s", error->message);
-        g_clear_error(&error);
-        return;
-    }
-    if (text) {
-        AppGui *gui = (AppGui *)user_data;
-        GtkTextBuffer *buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(gui->source_view));
-        GtkTextIter start, end;
-        if (!gtk_text_buffer_get_selection_bounds(buf, &start, &end)) {
-            gtk_text_buffer_get_iter_at_mark(buf, &start, gtk_text_buffer_get_insert(buf));
-            end = start;
-        }
-
-        Position start_pos = iter_to_position(&start);
-        Position end_pos = iter_to_position(&end);
-        zig_replace_range(start_pos, end_pos, text);
-        gui_reload_full_buffer();
-
-        Position cursor_pos = advance_position(start_pos, text);
-        gui_set_cursor_position(cursor_pos.line + 1, cursor_pos.col);
-        zig_undo_commit();
-        g_free(text);
     }
 }
 
@@ -1578,440 +1177,6 @@ void clear_selection_formatting(GtkTextBuffer *buf) {
     g_free(text);
 }
 
-static AppShortcut app_shortcuts[] = {
-    { "bold", "Bold text", "<Control>b", 0, 0 },
-    { "italic", "Italic text", "<Control>i", 0, 0 },
-    { "underline", "Underline text", "<Control>u", 0, 0 },
-    { "strikethrough", "Strikethrough text", "<Control><Shift>x", 0, 0 },
-    { "left_align", "Left align text", "<Control><Shift>l", 0, 0 },
-    { "center_align", "Center align text", "<Control><Shift>e", 0, 0 },
-    { "right_align", "Right align text", "<Control><Shift>r", 0, 0 },
-    { "justify", "Justify text", "<Control><Shift>j", 0, 0 },
-    { "clear_format", "Clear formatting", "<Control>backslash", 0, 0 },
-    { "zoom_in", "Zoom In", "<Control>equal", 0, 0 },
-    { "zoom_out", "Zoom Out", "<Control>minus", 0, 0 },
-    { "reset_zoom", "Reset Zoom", "<Control>0", 0, 0 },
-    { "fullscreen", "Fullscreen / Focus Mode", "F11", 0, 0 },
-    { "copy", "Copy selected text", "<Control>c", 0, 0 },
-    { "cut", "Cut selected text", "<Control>x", 0, 0 },
-    { "paste", "Paste text", "<Control>v", 0, 0 },
-    { "paste_plain", "Paste plain text", "<Control><Shift>v", 0, 0 },
-    { "undo", "Undo last action", "<Control>z", 0, 0 },
-    { "redo", "Redo last action", "<Control>y", 0, 0 },
-    { "select_all", "Select all text", "<Control>a", 0, 0 },
-    { "duplicate_line", "Duplicate current line", "<Control>d", 0, 0 },
-    { "move_line_up", "Move line up", "<Alt>Up", 0, 0 },
-    { "move_line_down", "Move line down", "<Alt>Down", 0, 0 },
-    { "toggle_comment", "Toggle comment", "<Control>slash", 0, 0 },
-    { "delete_prev_word", "Delete previous word", "<Control>BackSpace", 0, 0 },
-    { "delete_next_word", "Delete next word", "<Control>Delete", 0, 0 },
-    { "delete_line", "Delete current line", "<Control><Shift>k", 0, 0 },
-    { "move_word_left", "Move word left", "<Control>Left", 0, 0 },
-    { "move_word_right", "Move word right", "<Control>Right", 0, 0 },
-    { "move_line_start", "Move to start of line", "Home", 0, 0 },
-    { "move_line_end", "Move to end of line", "End", 0, 0 },
-    { "move_doc_start", "Move to start of document", "<Control>Home", 0, 0 },
-    { "move_doc_end", "Move to end of document", "<Control>End", 0, 0 },
-    { "new_file", "Create new file", "<Control>n", 0, 0 },
-    { "open_file", "Open existing file", "<Control>o", 0, 0 },
-    { "save_file", "Save file", "<Control>s", 0, 0 },
-    { "save_file_as", "Save file as...", "<Control><Shift>s", 0, 0 },
-    { "export_pdf", "Print / Export PDF", "<Control>p", 0, 0 },
-    { "toggle_search", "Toggle search bar", "<Control>f", 0, 0 },
-    { "replace_text", "Replace text", "<Control>h", 0, 0 },
-    { "close_tab", "Close file / tab", "<Control>w", 0, 0 },
-    { "open_settings", "Open settings", "<Control>comma", 0, 0 },
-    { "shortcuts_ref", "Shortcuts reference", "<Control>question", 0, 0 },
-    { "toggle_sidebar", "Toggle Sidebar", "<Control><Shift>backslash", 0, 0 },
-    { "inline_code", "Inline code", "<Control>k", 0, 0 },
-    { "highlight", "Highlight", "<Control><Shift>h", 0, 0 },
-    { "blockquote", "Blockquote", "<Control>q", 0, 0 },
-    { "math", "Math", "<Control>m", 0, 0 },
-    { "ordered_list", "Ordered list", "<Control><Shift>o", 0, 0 },
-    { "task_list", "Task list", "<Control><Shift>t", 0, 0 }
-};
-#define NUM_APP_SHORTCUTS (sizeof(app_shortcuts)/sizeof(app_shortcuts[0]))
-
-static int shortcut_listening_index = -1;
-static GtkWidget *shortcut_value_labels[NUM_APP_SHORTCUTS] = { NULL };
-static GtkWidget *shortcut_edit_buttons[NUM_APP_SHORTCUTS] = { NULL };
-
-static gboolean parse_shortcut_string(const char *str, guint *out_keyval, GdkModifierType *out_state) {
-    if (!str || strlen(str) == 0) return FALSE;
-
-    GdkModifierType state = 0;
-    const char *p = str;
-
-    while (*p == '<') {
-        const char *end = strchr(p, '>');
-        if (!end) break;
-        
-        size_t len = end - p - 1;
-        if (g_ascii_strncasecmp(p + 1, "Control", len) == 0) {
-            state |= GDK_CONTROL_MASK;
-        } else if (g_ascii_strncasecmp(p + 1, "Shift", len) == 0) {
-            state |= GDK_SHIFT_MASK;
-        } else if (g_ascii_strncasecmp(p + 1, "Alt", len) == 0) {
-            state |= GDK_ALT_MASK;
-        } else if (g_ascii_strncasecmp(p + 1, "Meta", len) == 0 || g_ascii_strncasecmp(p + 1, "Super", len) == 0) {
-            state |= GDK_SUPER_MASK;
-        }
-        p = end + 1;
-    }
-
-    guint keyval = gdk_keyval_from_name(p);
-    if (keyval == GDK_KEY_VoidSymbol) {
-        if (strcmp(p, "+") == 0) keyval = GDK_KEY_plus;
-        else if (strcmp(p, "=") == 0) keyval = GDK_KEY_equal;
-        else if (strcmp(p, "-") == 0) keyval = GDK_KEY_minus;
-        else if (strcmp(p, "\\") == 0) keyval = GDK_KEY_backslash;
-        else return FALSE;
-    }
-
-    *out_keyval = keyval;
-    *out_state = state;
-    return TRUE;
-}
-
-static void init_app_shortcuts(void) {
-    sqlite3 *db = NULL;
-    if (sqlite3_open(DB_PATH, &db) == SQLITE_OK) {
-        const char *create_sql = "CREATE TABLE IF NOT EXISTS keyboard_shortcuts ("
-                                 "action_name TEXT PRIMARY KEY, "
-                                 "shortcut_val TEXT NOT NULL);";
-        sqlite3_exec(db, create_sql, NULL, NULL, NULL);
-
-        for (size_t i = 0; i < NUM_APP_SHORTCUTS; i++) {
-            sqlite3_stmt *stmt = NULL;
-            const char *select_sql = "SELECT shortcut_val FROM keyboard_shortcuts WHERE action_name = ?;";
-            if (sqlite3_prepare_v2(db, select_sql, -1, &stmt, NULL) == SQLITE_OK) {
-                sqlite3_bind_text(stmt, 1, app_shortcuts[i].action_id, -1, SQLITE_STATIC);
-                if (sqlite3_step(stmt) == SQLITE_ROW) {
-                    const char *val = (const char *)sqlite3_column_text(stmt, 0);
-                    if (val && strlen(val) > 0) {
-                        strncpy(app_shortcuts[i].shortcut_str, val, sizeof(app_shortcuts[i].shortcut_str) - 1);
-                        app_shortcuts[i].shortcut_str[sizeof(app_shortcuts[i].shortcut_str) - 1] = '\0';
-                    }
-                }
-                sqlite3_finalize(stmt);
-            }
-        }
-        sqlite3_close(db);
-    }
-
-    for (size_t i = 0; i < NUM_APP_SHORTCUTS; i++) {
-        parse_shortcut_string(app_shortcuts[i].shortcut_str, &app_shortcuts[i].keyval, &app_shortcuts[i].state);
-    }
-}
-
-gboolean keycode_matches_latin_keyval(guint keycode, guint target_keyval) {
-    GdkDisplay *display = gdk_display_get_default();
-    if (!display) return FALSE;
-
-    guint target_lower = gdk_keyval_to_lower(target_keyval);
-
-    /* Try modifier groups: no mod, shift, alt (AltGr), shift+alt */
-    static const GdkModifierType groups[] = {
-        0,
-        GDK_SHIFT_MASK,
-        GDK_ALT_MASK,
-        GDK_SHIFT_MASK | GDK_ALT_MASK
-    };
-
-    for (gint g = 0; g < 4; g++) {
-        guint kv = 0;
-        gint effective_group = 0;
-        gint level = 0;
-        GdkModifierType consumed = 0;
-        if (gdk_display_translate_key(display, keycode, groups[g], 0,
-                                      &kv, &effective_group, &level, &consumed)) {
-            if (gdk_keyval_to_lower(kv) == target_lower)
-                return TRUE;
-        }
-    }
-    return FALSE;
-}
-
-
-gboolean match_app_shortcut(const char *action_id, guint keyval, guint keycode, GdkModifierType state) {
-    for (size_t i = 0; i < NUM_APP_SHORTCUTS; i++) {
-        if (strcmp(app_shortcuts[i].action_id, action_id) == 0) {
-            GdkModifierType clean_state = state & (GDK_CONTROL_MASK | GDK_SHIFT_MASK | GDK_ALT_MASK | GDK_SUPER_MASK);
-            if (clean_state == app_shortcuts[i].state) {
-                if (keyval == app_shortcuts[i].keyval || keycode_matches_latin_keyval(keycode, app_shortcuts[i].keyval)) {
-                    return TRUE;
-                }
-            }
-            break;
-        }
-    }
-    return FALSE;
-}
-
-static gboolean is_modifier_key(guint keyval) {
-    return (keyval == GDK_KEY_Shift_L || keyval == GDK_KEY_Shift_R ||
-            keyval == GDK_KEY_Control_L || keyval == GDK_KEY_Control_R ||
-            keyval == GDK_KEY_Alt_L || keyval == GDK_KEY_Alt_R ||
-            keyval == GDK_KEY_Meta_L || keyval == GDK_KEY_Meta_R ||
-            keyval == GDK_KEY_Super_L || keyval == GDK_KEY_Super_R ||
-            keyval == GDK_KEY_Hyper_L || keyval == GDK_KEY_Hyper_R ||
-            keyval == GDK_KEY_Caps_Lock || keyval == GDK_KEY_Num_Lock ||
-            keyval == GDK_KEY_Scroll_Lock);
-}
-
-static gchar* get_pretty_shortcut_string(const char *shortcut_str) {
-    GString *pretty = g_string_new("");
-    const char *p = shortcut_str;
-    while (*p) {
-        if (strncmp(p, "<Control>", 9) == 0) {
-            g_string_append(pretty, "Ctrl + ");
-            p += 9;
-        } else if (strncmp(p, "<Shift>", 7) == 0) {
-            g_string_append(pretty, "Shift + ");
-            p += 7;
-        } else if (strncmp(p, "<Alt>", 5) == 0) {
-            g_string_append(pretty, "Alt + ");
-            p += 5;
-        } else if (strncmp(p, "<Super>", 7) == 0) {
-            g_string_append(pretty, "Super + ");
-            p += 7;
-        } else {
-            if (strlen(p) == 1 && *p >= 'a' && *p <= 'z') {
-                g_string_append_c(pretty, *p - 32);
-            } else {
-                g_string_append(pretty, p);
-            }
-            break;
-        }
-    }
-    return g_string_free(pretty, FALSE);
-}
-
-static gboolean on_settings_key_pressed(GtkEventControllerKey *ctrl,
-                                        guint keyval, guint keycode,
-                                        GdkModifierType state, gpointer user_data) {
-    (void)ctrl;
-    (void)keycode;
-    (void)user_data;
-
-    if (shortcut_listening_index < 0) return FALSE;
-
-    if (is_modifier_key(keyval)) {
-        return TRUE;
-    }
-
-    int idx = shortcut_listening_index;
-    shortcut_listening_index = -1;
-
-    GString *gstr = g_string_new("");
-    if (state & GDK_CONTROL_MASK) g_string_append(gstr, "<Control>");
-    if (state & GDK_SHIFT_MASK)   g_string_append(gstr, "<Shift>");
-    if (state & GDK_ALT_MASK)     g_string_append(gstr, "<Alt>");
-    if (state & GDK_SUPER_MASK)   g_string_append(gstr, "<Super>");
-
-    const char *key_name = gdk_keyval_name(keyval);
-    if (!key_name) {
-        key_name = "void";
-    }
-    g_string_append(gstr, key_name);
-
-    strncpy(app_shortcuts[idx].shortcut_str, gstr->str, sizeof(app_shortcuts[idx].shortcut_str) - 1);
-    app_shortcuts[idx].shortcut_str[sizeof(app_shortcuts[idx].shortcut_str) - 1] = '\0';
-    app_shortcuts[idx].keyval = keyval;
-    app_shortcuts[idx].state = state & (GDK_CONTROL_MASK | GDK_SHIFT_MASK | GDK_ALT_MASK | GDK_SUPER_MASK);
-
-    sqlite3 *db = NULL;
-    if (sqlite3_open(DB_PATH, &db) == SQLITE_OK) {
-        const char *insert_sql = "INSERT OR REPLACE INTO keyboard_shortcuts (action_name, shortcut_val) VALUES (?, ?);";
-        sqlite3_stmt *stmt = NULL;
-        if (sqlite3_prepare_v2(db, insert_sql, -1, &stmt, NULL) == SQLITE_OK) {
-            sqlite3_bind_text(stmt, 1, app_shortcuts[idx].action_id, -1, SQLITE_STATIC);
-            sqlite3_bind_text(stmt, 2, app_shortcuts[idx].shortcut_str, -1, SQLITE_STATIC);
-            sqlite3_step(stmt);
-            sqlite3_finalize(stmt);
-        }
-        sqlite3_close(db);
-    }
-
-    if (shortcut_value_labels[idx]) {
-        gchar *pretty_str = get_pretty_shortcut_string(app_shortcuts[idx].shortcut_str);
-        gtk_label_set_text(GTK_LABEL(shortcut_value_labels[idx]), pretty_str);
-        g_free(pretty_str);
-    }
-
-    if (shortcut_edit_buttons[idx]) {
-        gtk_button_set_label(GTK_BUTTON(shortcut_edit_buttons[idx]), "Edit");
-    }
-
-    g_string_free(gstr, TRUE);
-
-    return TRUE;
-}
-
-static void on_edit_shortcut_clicked(GtkButton *btn, gpointer user_data) {
-    int idx = GPOINTER_TO_INT(user_data);
-
-    if (shortcut_listening_index >= 0 && shortcut_listening_index != idx) {
-        int old_idx = shortcut_listening_index;
-        if (shortcut_edit_buttons[old_idx]) {
-            gtk_button_set_label(GTK_BUTTON(shortcut_edit_buttons[old_idx]), "Edit");
-        }
-    }
-
-    shortcut_listening_index = idx;
-    gtk_button_set_label(btn, "Press keys...");
-}
-
-static void on_kb_window_destroy(GtkWidget *widget, gpointer user_data) {
-    (void)widget;
-    (void)user_data;
-    if (shortcut_listening_index >= 0) {
-        shortcut_listening_index = -1;
-    }
-    for (size_t i = 0; i < NUM_APP_SHORTCUTS; i++) {
-        shortcut_value_labels[i] = NULL;
-        shortcut_edit_buttons[i] = NULL;
-    }
-}
-
-static void show_keybindings_window(AppGui *gui) {
-    GtkWidget *dialog = gtk_window_new();
-    gtk_window_set_title(GTK_WINDOW(dialog), "Keyboard Shortcuts");
-    gtk_window_set_default_size(GTK_WINDOW(dialog), 550, 600);
-    gtk_window_set_transient_for(GTK_WINDOW(dialog), GTK_WINDOW(gui->window));
-    gtk_window_set_modal(GTK_WINDOW(dialog), TRUE);
-    gtk_window_set_destroy_with_parent(GTK_WINDOW(dialog), TRUE);
-    gtk_widget_add_css_class(dialog, "kb-dialog");
-
-    GtkWidget *scroll = gtk_scrolled_window_new();
-    gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scroll),
-                                   GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
-    gtk_window_set_child(GTK_WINDOW(dialog), scroll);
-
-    GtkWidget *vbox = gtk_box_new(GTK_ORIENTATION_VERTICAL, 6);
-    gtk_widget_set_margin_start(vbox, 24);
-    gtk_widget_set_margin_end(vbox, 24);
-    gtk_widget_set_margin_top(vbox, 20);
-    gtk_widget_set_margin_bottom(vbox, 20);
-    gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(scroll), vbox);
-
-    /* Helper: add section header */
-    #define KB_SECTION(label_text) { \
-        GtkWidget *_s = gtk_label_new(label_text); \
-        gtk_widget_add_css_class(_s, "kb-section-label"); \
-        gtk_widget_set_halign(_s, GTK_ALIGN_START); \
-        gtk_box_append(GTK_BOX(vbox), _s); \
-    }
-    /* Helper: add keybinding row */
-    #define KB_ROW(shortcut, description, act_id) { \
-        GtkWidget *_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12); \
-        gchar *_curr_shortcut = NULL; \
-        int _idx = -1; \
-        if (act_id && strlen(act_id) > 0) { \
-            for (int i = 0; i < (int)NUM_APP_SHORTCUTS; i++) { \
-                if (strcmp(app_shortcuts[i].action_id, act_id) == 0) { \
-                    _idx = i; \
-                    _curr_shortcut = get_pretty_shortcut_string(app_shortcuts[i].shortcut_str); \
-                    break; \
-                } \
-            } \
-        } \
-        GtkWidget *_k = gtk_label_new(_curr_shortcut ? _curr_shortcut : shortcut); \
-        gtk_widget_add_css_class(_k, "kb-key"); \
-        gtk_widget_set_halign(_k, GTK_ALIGN_START); \
-        if (_curr_shortcut) g_free(_curr_shortcut); \
-        GtkWidget *_d = gtk_label_new(description); \
-        gtk_widget_add_css_class(_d, "kb-desc"); \
-        gtk_widget_set_halign(_d, GTK_ALIGN_START); \
-        gtk_widget_set_hexpand(_d, TRUE); \
-        gtk_box_append(GTK_BOX(_row), _k); \
-        gtk_box_append(GTK_BOX(_row), _d); \
-        if (_idx >= 0) { \
-            shortcut_value_labels[_idx] = _k; \
-            GtkWidget *_edit_btn = gtk_button_new_with_label("Edit"); \
-            gtk_widget_add_css_class(_edit_btn, "pop-btn"); \
-            g_signal_connect(_edit_btn, "clicked", G_CALLBACK(on_edit_shortcut_clicked), GINT_TO_POINTER(_idx)); \
-            shortcut_edit_buttons[_idx] = _edit_btn; \
-            gtk_box_append(GTK_BOX(_row), _edit_btn); \
-        } \
-        gtk_box_append(GTK_BOX(vbox), _row); \
-    }
-
-    KB_SECTION("1. TEXT FORMATTING & ALIGNMENT")
-    KB_ROW("Ctrl + B",       "Bold text", "bold");
-    KB_ROW("Ctrl + I",       "Italic text", "italic");
-    KB_ROW("Ctrl + U",       "Underline text", "underline");
-    KB_ROW("Ctrl + Shift+X", "Strikethrough text", "strikethrough");
-    KB_ROW("Ctrl + Shift+L", "Left align text", "left_align");
-    KB_ROW("Ctrl + Shift+E", "Center align text", "center_align");
-    KB_ROW("Ctrl + Shift+R", "Right align text", "right_align");
-    KB_ROW("Ctrl + Shift+J", "Justify text", "justify");
-    KB_ROW("Ctrl + \\",      "Clear formatting", "clear_format");
-    KB_ROW("Ctrl + K",       "Inline code", "inline_code");
-    KB_ROW("Ctrl + H",       "Highlight", "highlight");
-    KB_ROW("Ctrl + Q",       "Blockquote", "blockquote");
-    KB_ROW("Ctrl + M",       "Math", "math");
-    KB_ROW("Ctrl + Shift+O", "Ordered list", "ordered_list");
-    KB_ROW("Ctrl + Shift+T", "Task list", "task_list");
-
-    KB_SECTION("2. ZOOM & TYPOGRAPHY")
-    KB_ROW("Ctrl + = / +",   "Zoom In", "zoom_in");
-    KB_ROW("Ctrl + -",       "Zoom Out", "zoom_out");
-    KB_ROW("Ctrl + 0",       "Reset Zoom", "reset_zoom");
-    KB_ROW("F11",            "Fullscreen / Focus Mode", "fullscreen");
-
-    KB_SECTION("3. ADVANCED EDITING")
-    KB_ROW("Ctrl + C",       "Copy selected text", "copy");
-    KB_ROW("Ctrl + X",       "Cut selected text", "cut");
-    KB_ROW("Ctrl + V",       "Paste text", "paste");
-    KB_ROW("Ctrl + Shift+V", "Paste plain text", "paste_plain");
-    KB_ROW("Ctrl + Z",       "Undo last action", "undo");
-    KB_ROW("Ctrl + Y / Shift+Z", "Redo last action", "redo");
-    KB_ROW("Ctrl + A",       "Select all text", "select_all");
-    KB_ROW("Ctrl + D / Enter", "Duplicate current line", "duplicate_line");
-    KB_ROW("Alt + Up",       "Move line up", "move_line_up");
-    KB_ROW("Alt + Down",     "Move line down", "move_line_down");
-    KB_ROW("Ctrl + /",       "Toggle comment", "toggle_comment");
-
-    KB_SECTION("4. NAVIGATION & DELETION")
-    KB_ROW("Ctrl + Backspace", "Delete previous word", "delete_prev_word");
-    KB_ROW("Ctrl + Delete",  "Delete next word", "delete_next_word");
-    KB_ROW("Ctrl + Shift+K", "Delete current line", "delete_line");
-    KB_ROW("Ctrl + Left",    "Move word left", "move_word_left");
-    KB_ROW("Ctrl + Right",   "Move word right", "move_word_right");
-    KB_ROW("Home",           "Move to start of line", "move_line_start");
-    KB_ROW("End",            "Move to end of line", "move_line_end");
-    KB_ROW("Ctrl + Home",    "Move to start of document", "move_doc_start");
-    KB_ROW("Ctrl + End",     "Move to end of document", "move_doc_end");
-
-    KB_SECTION("5. FILE & SEARCH")
-    KB_ROW("Ctrl + N",       "Create new file", "new_file");
-    KB_ROW("Ctrl + O",       "Open existing file", "open_file");
-    KB_ROW("Ctrl + S",       "Save file", "save_file");
-    KB_ROW("Ctrl + Shift+S", "Save file as...", "save_file_as");
-    KB_ROW("Ctrl + P",       "Print / Export PDF", "export_pdf");
-    KB_ROW("Ctrl + F",       "Toggle search bar", "toggle_search");
-    KB_ROW("Ctrl + H",       "Replace text", "replace_text");
-    KB_ROW("Ctrl + W / F4",  "Close file / tab", "close_tab");
-    KB_ROW("Ctrl + ,",       "Open settings", "open_settings");
-    KB_ROW("Ctrl + ?",       "Shortcuts reference", "shortcuts_ref");
-    KB_ROW("Ctrl + \\",      "Toggle Sidebar", "toggle_sidebar");
-
-    #undef KB_SECTION
-    #undef KB_ROW
-
-    GtkEventController *dialog_key_ctrl = gtk_event_controller_key_new();
-    g_signal_connect(dialog_key_ctrl, "key-pressed", G_CALLBACK(on_settings_key_pressed), gui);
-    gtk_widget_add_controller(dialog, dialog_key_ctrl);
-
-    g_signal_connect(dialog, "destroy", G_CALLBACK(on_kb_window_destroy), NULL);
-
-    gtk_window_present(GTK_WINDOW(dialog));
-}
-
-gboolean keypress_has_text_modifier(GdkModifierType state) {
-    return (state & (GDK_CONTROL_MASK | GDK_ALT_MASK | GDK_SUPER_MASK | GDK_META_MASK)) != 0;
-}
 
 void insert_text_pair(GtkTextBuffer *buf, const char *open, const char *close) {
     GtkTextIter start, end;
@@ -2163,7 +1328,7 @@ void on_insert_text_after(GtkTextBuffer *buf, GtkTextIter *location, gchar *text
     if (start_offset < 0) start_offset = 0;
 
     GtkTextIter start_iter;
-    debug_get_iter_at_offset(buf, &start_iter, start_offset, "on_insert_text_after");
+    gtk_text_buffer_get_iter_at_offset(buf, &start_iter, start_offset);
 
     int start_line = gtk_text_iter_get_line(&start_iter);
     int start_col = gtk_text_iter_get_line_offset(&start_iter);
@@ -2824,13 +1989,7 @@ static void on_settings_btn_clicked(GtkButton *btn, gpointer user_data) {
 
 static gboolean on_settings_window_close_request(GtkWindow *window, gpointer user_data) {
     (void)user_data;
-    if (shortcut_listening_index >= 0) {
-        int old_idx = shortcut_listening_index;
-        shortcut_listening_index = -1;
-        if (shortcut_edit_buttons[old_idx]) {
-            gtk_button_set_label(GTK_BUTTON(shortcut_edit_buttons[old_idx]), "Edit");
-        }
-    }
+    shortcuts_cancel_listening();
     gtk_widget_set_visible(GTK_WIDGET(window), FALSE);
     return TRUE;
 }
@@ -4186,7 +3345,6 @@ static void activate(GtkApplication *app, gpointer user_data) {
 
     int gh_connected = zig_github_check_status();
     gui_update_github_status(gh_connected, gh_connected ? "Connected" : "Disconnected");
-
 }
 
 
@@ -4199,7 +3357,6 @@ int run_gui(int argc, char **argv) {
     adw_init();
     AdwApplication *app = adw_application_new("org.qirtas.notebook",
                                                G_APPLICATION_DEFAULT_FLAGS);
-    signal(SIGUSR1, sigusr1_handler);
     g_signal_connect(app, "activate", G_CALLBACK(activate), NULL);
     g_signal_connect(app, "shutdown", G_CALLBACK(on_app_shutdown), NULL);
     int status = g_application_run(G_APPLICATION(app), argc, argv);
@@ -4493,15 +3650,14 @@ void gui_get_cursor_position(int *line, int *col) {
 
 void gui_set_cursor_position(int line, int col) {
     if (!global_source_view || !global_gui) return;
-    g_print("GUI_SET_CURSOR_POSITION_ENTRY received_line=%d received_col=%d\n", line, col);
-    
+
     int target_abs_line = line - 1; // 0-indexed
     if (target_abs_line < 0) target_abs_line = 0;
-        GtkTextBuffer *buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(global_source_view));
+    GtkTextBuffer *buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(global_source_view));
     GtkTextIter iter;
     int rel_line = target_abs_line;
     if (rel_line < 0) rel_line = 0;
-    
+
     int total_lines = gtk_text_buffer_get_line_count(buf);
     if (rel_line >= total_lines) {
         rel_line = total_lines - 1;
@@ -4509,13 +3665,15 @@ void gui_set_cursor_position(int line, int col) {
     if (rel_line < 0) rel_line = 0;
 
     gtk_text_buffer_get_iter_at_line(buf, &iter, rel_line);
-    int line_bytes = gtk_text_iter_get_bytes_in_line(&iter);
-    
+    int line_chars = gtk_text_iter_get_chars_in_line(&iter);
+
     int safe_col = col;
     if (safe_col < 0) safe_col = 0;
-    if (safe_col > line_bytes) safe_col = line_bytes;
+    if (safe_col > line_chars) safe_col = line_chars;
 
-    debug_get_iter_at(buf, &iter, rel_line, safe_col, "gui_set_cursor_position");
+    /* col is a char offset, matching gui_get_cursor_position and every
+     * internal Position.col (iter_to_position uses get_line_offset too). */
+    gtk_text_buffer_get_iter_at_line_offset(buf, &iter, rel_line, safe_col);
     gtk_text_buffer_select_range(buf, &iter, &iter);
     reset_cursor_trail(global_gui);
     gui_reset_preferred_x(global_gui);
@@ -4994,105 +4152,4 @@ void gui_prepare_tab_switch(void) {
 void gui_remeasure_line_height(void) {
     if (!global_gui || !global_gui->source_view) return;
     global_gui->line_height = get_line_height(global_gui->source_view);
-}
-
-gboolean debug_get_iter_at(
-    GtkTextBuffer *buf,
-    GtkTextIter *iter,
-    int rel_line,
-    int col,
-    const char *caller
-) {
-    int line_bytes = -1;
-    int line_chars = -1;
-    int generation = -1;
-
-    if (global_gui) {
-        generation = (int)global_gui->buffer_generation;
-    }
-
-    int total_lines = gtk_text_buffer_get_line_count(buf);
-    if (rel_line < 0) rel_line = 0;
-    if (rel_line >= total_lines) rel_line = total_lines - 1;
-
-    GtkTextIter line_start_iter;
-    gtk_text_buffer_get_iter_at_line(buf, &line_start_iter, rel_line);
-    line_bytes = gtk_text_iter_get_bytes_in_line(&line_start_iter);
-    line_chars = gtk_text_iter_get_chars_in_line(&line_start_iter);
-
-    g_print("LINE_INDEX_CHECK caller=%s requested=%d available=%d available_chars=%d\n",
-            caller, col, line_bytes, line_chars);
-
-    int requested_index = col;
-    requested_index = CLAMP(requested_index, 0, line_bytes);
-
-    gtk_text_buffer_get_iter_at_line_offset(buf, iter, rel_line, requested_index);
-    
-    return TRUE;
-}
-
-void debug_get_iter_at_offset(
-    GtkTextBuffer *buf,
-    GtkTextIter *iter,
-    int char_offset,
-    const char *caller
-) {
-    int generation = global_gui ? (int)global_gui->buffer_generation : -1;
-    g_print("ITER_DEBUG_OFFSET before caller=%s offset=%d generation=%d\n", caller, char_offset, generation);
-    gtk_text_buffer_get_iter_at_offset(buf, iter, char_offset);
-    g_print("ITER_DEBUG_OFFSET SUCCESS caller=%s\n", caller);
-}
-
-void debug_set_line_offset(
-    GtkTextIter *iter,
-    int offset,
-    const char *caller
-) {
-    int bytes = gtk_text_iter_get_bytes_in_line(iter);
-    int chars = gtk_text_iter_get_chars_in_line(iter);
-
-    g_print("LINE_INDEX_CHECK caller=%s requested=%d available=%d available_chars=%d\n",
-            caller, offset, bytes, chars);
-
-    int requested_index = offset;
-    requested_index = CLAMP(requested_index, 0, bytes);
-
-    gtk_text_iter_set_line_offset(iter, requested_index);
-}
-
-#undef gtk_text_buffer_place_cursor
-void debug_place_cursor(GtkTextBuffer *buf, const GtkTextIter *iter, const char *caller) {
-    int line = gtk_text_iter_get_line(iter);
-    int col = gtk_text_iter_get_line_offset(iter);
-    int gen = global_gui ? (int)global_gui->buffer_generation : -1;
-    g_print("CALL_PLACE_CURSOR caller=%s line=%d col=%d generation=%d\n", caller, line, col, gen);
-    gtk_text_buffer_place_cursor(buf, iter);
-}
-
-#undef gtk_text_buffer_select_range
-void debug_select_range(GtkTextBuffer *buf, const GtkTextIter *ins, const GtkTextIter *bound, const char *caller) {
-    int ins_line = gtk_text_iter_get_line(ins);
-    int ins_col = gtk_text_iter_get_line_offset(ins);
-    int bound_line = gtk_text_iter_get_line(bound);
-    int bound_col = gtk_text_iter_get_line_offset(bound);
-    int gen = global_gui ? (int)global_gui->buffer_generation : -1;
-    g_print("CALL_SELECT_RANGE caller=%s ins_line=%d ins_col=%d bound_line=%d bound_col=%d generation=%d\n", 
-            caller, ins_line, ins_col, bound_line, bound_col, gen);
-    gtk_text_buffer_select_range(buf, ins, bound);
-}
-
-#undef gtk_text_view_scroll_to_mark
-void debug_scroll_to_mark(GtkTextView *text_view, GtkTextMark *mark, double within_margin, gboolean use_align, double xalign, double yalign, const char *caller) {
-    const char *mark_name = gtk_text_mark_get_name(mark);
-    int gen = global_gui ? (int)global_gui->buffer_generation : -1;
-    g_print("CALL_SCROLL_TO_MARK caller=%s mark=%s generation=%d\n", caller, mark_name ? mark_name : "anonymous", gen);
-    gtk_text_view_scroll_to_mark(text_view, mark, within_margin, use_align, xalign, yalign);
-}
-
-#undef gtk_text_view_scroll_mark_onscreen
-void debug_scroll_mark_onscreen(GtkTextView *text_view, GtkTextMark *mark, const char *caller) {
-    const char *mark_name = gtk_text_mark_get_name(mark);
-    int gen = global_gui ? (int)global_gui->buffer_generation : -1;
-    g_print("CALL_SCROLL_MARK_ONSCREEN caller=%s mark=%s generation=%d\n", caller, mark_name ? mark_name : "anonymous", gen);
-    gtk_text_view_scroll_mark_onscreen(text_view, mark);
 }

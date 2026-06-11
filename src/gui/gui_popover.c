@@ -4,6 +4,62 @@
 #include <stdio.h>
 #include "gui_internal.h"
 
+void apply_paragraph_alignment(GtkTextBuffer *buf, GtkJustification justification) {
+    GtkTextTagTable *table = gtk_text_buffer_get_tag_table(buf);
+    GtkTextTag *tag_left = gtk_text_tag_table_lookup(table, "align-left");
+    if (!tag_left) {
+        tag_left = gtk_text_buffer_create_tag(buf, "align-left", "justification", GTK_JUSTIFY_LEFT, NULL);
+    }
+    GtkTextTag *tag_center = gtk_text_tag_table_lookup(table, "align-center");
+    if (!tag_center) {
+        tag_center = gtk_text_buffer_create_tag(buf, "align-center", "justification", GTK_JUSTIFY_CENTER, NULL);
+    }
+    GtkTextTag *tag_right = gtk_text_tag_table_lookup(table, "align-right");
+    if (!tag_right) {
+        tag_right = gtk_text_buffer_create_tag(buf, "align-right", "justification", GTK_JUSTIFY_RIGHT, NULL);
+    }
+    GtkTextTag *tag_justify = gtk_text_tag_table_lookup(table, "align-justify");
+    if (!tag_justify) {
+        tag_justify = gtk_text_buffer_create_tag(buf, "align-justify", "justification", GTK_JUSTIFY_FILL, NULL);
+    }
+
+    GtkTextTag *target_tag = NULL;
+    switch (justification) {
+        case GTK_JUSTIFY_LEFT:   target_tag = tag_left; break;
+        case GTK_JUSTIFY_CENTER: target_tag = tag_center; break;
+        case GTK_JUSTIFY_RIGHT:  target_tag = tag_right; break;
+        case GTK_JUSTIFY_FILL:   target_tag = tag_justify; break;
+        default: return;
+    }
+
+    GtkTextIter start, end;
+    if (!gtk_text_buffer_get_selection_bounds(buf, &start, &end)) {
+        gtk_text_buffer_get_iter_at_mark(buf, &start, gtk_text_buffer_get_insert(buf));
+        end = start;
+    }
+
+    gint start_line = gtk_text_iter_get_line(&start);
+    gint end_line = gtk_text_iter_get_line(&end);
+
+    gtk_text_buffer_begin_user_action(buf);
+
+    for (gint l = start_line; l <= end_line; l++) {
+        GtkTextIter line_start, line_end;
+        gtk_text_buffer_get_iter_at_line(buf, &line_start, l);
+        line_end = line_start;
+        gtk_text_iter_forward_to_line_end(&line_end);
+
+        gtk_text_buffer_remove_tag(buf, tag_left, &line_start, &line_end);
+        gtk_text_buffer_remove_tag(buf, tag_center, &line_start, &line_end);
+        gtk_text_buffer_remove_tag(buf, tag_right, &line_start, &line_end);
+        gtk_text_buffer_remove_tag(buf, tag_justify, &line_start, &line_end);
+
+        gtk_text_buffer_apply_tag(buf, target_tag, &line_start, &line_end);
+    }
+
+    gtk_text_buffer_end_user_action(buf);
+}
+
 typedef struct {
     GtkTextBuffer *buf;
     GtkWidget     *popover;
@@ -158,7 +214,7 @@ static void apply_format_with_saved(GtkTextBuffer *buf, const char *prefix, cons
     AppGui *gui = global_gui;
     if (!has_selection) {
         GtkTextIter cursor_iter;
-        debug_get_iter_at_offset(buf, &cursor_iter, saved_start, "apply_format_with_saved_cursor");
+        gtk_text_buffer_get_iter_at_offset(buf, &cursor_iter, saved_start);
         Position start_pos = iter_to_position(&cursor_iter);
         char *wrapped = g_strconcat(prefix, suffix, NULL);
         zig_insert_text(start_pos, wrapped);
@@ -169,8 +225,8 @@ static void apply_format_with_saved(GtkTextBuffer *buf, const char *prefix, cons
         g_free(wrapped);
     } else {
         GtkTextIter start, end;
-        debug_get_iter_at_offset(buf, &start, saved_start, "apply_format_with_saved_start");
-        debug_get_iter_at_offset(buf, &end,   saved_end,   "apply_format_with_saved_end");
+        gtk_text_buffer_get_iter_at_offset(buf, &start, saved_start);
+        gtk_text_buffer_get_iter_at_offset(buf, &end,   saved_end);
         gchar *text     = gtk_text_buffer_get_text(buf, &start, &end, TRUE);
         gchar *new_text = g_strconcat(prefix, text, suffix, NULL);
         Position start_pos = iter_to_position(&start);
@@ -223,8 +279,8 @@ static void apply_paragraph_format_core(GtkTextBuffer *buf, const char *prefix,
 static void apply_paragraph_format_with_saved(GtkTextBuffer *buf, const char *prefix,
                                               gint saved_start, gint saved_end) {
     GtkTextIter start, end;
-    debug_get_iter_at_offset(buf, &start, saved_start, "apply_paragraph_format_with_saved_start");
-    debug_get_iter_at_offset(buf, &end,   saved_end,   "apply_paragraph_format_with_saved_end");
+    gtk_text_buffer_get_iter_at_offset(buf, &start, saved_start);
+    gtk_text_buffer_get_iter_at_offset(buf, &end,   saved_end);
     gint start_line = gtk_text_iter_get_line(&start);
     gint end_line   = gtk_text_iter_get_line(&end);
     apply_paragraph_format_core(buf, prefix, start_line, end_line);
@@ -244,8 +300,6 @@ void apply_paragraph_format(GtkTextBuffer *buf, const char *prefix) {
 
 static gboolean do_idle_format(gpointer user_data) {
     IdleFormatData *ifd = (IdleFormatData *)user_data;
-    g_print("IDLE_CALLBACK_START do_idle_format paragraph=%d prefix=%s suffix=%s start=%d end=%d\n",
-            ifd->is_paragraph, ifd->prefix ? ifd->prefix : "null", ifd->suffix ? ifd->suffix : "null", ifd->saved_start, ifd->saved_end);
     GtkTextBuffer *buf = ifd->buf;
 
     if (global_gui) {
@@ -281,7 +335,6 @@ static gboolean do_idle_format(gpointer user_data) {
     g_free(ifd->prefix);
     g_free(ifd->suffix);
     g_free(ifd);
-    g_print("IDLE_CALLBACK_END do_idle_format SUCCESS\n");
     return G_SOURCE_REMOVE;
 }
 

@@ -52,7 +52,7 @@ void check_and_insert_hr(GtkTextBuffer *buf, AppGui *gui) {
     gtk_text_buffer_get_iter_at_mark(buf, &cursor, insert_mark);
 
     GtkTextIter line_start = cursor;
-    debug_set_line_offset(&line_start, 0, "check_and_insert_hr_current");
+    gtk_text_iter_set_line_offset(&line_start, 0);
 
     gchar *line_text = gtk_text_buffer_get_text(buf, &line_start, &cursor, TRUE);
     if (!line_text) return;
@@ -76,7 +76,7 @@ void check_and_insert_hr(GtkTextBuffer *buf, AppGui *gui) {
             gunichar c = gtk_text_iter_get_char(&prev_char);
             if (c == '\n') {
                 GtkTextIter prev_line_start = prev_char;
-                debug_set_line_offset(&prev_line_start, 0, "check_and_insert_hr_prev");
+                gtk_text_iter_set_line_offset(&prev_line_start, 0);
                 gchar *prev_line_text = gtk_text_buffer_get_text(buf, &prev_line_start, &prev_char, TRUE);
                 if (prev_line_text && strcmp(prev_line_text, "---") == 0) {
                     is_hr = TRUE;

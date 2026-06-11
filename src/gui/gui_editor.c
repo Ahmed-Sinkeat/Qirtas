@@ -142,62 +142,6 @@ void toggle_fullscreen(AppGui *gui) {
     }
 }
 
-static void apply_paragraph_alignment(GtkTextBuffer *buf, GtkJustification justification) {
-    GtkTextTagTable *table = gtk_text_buffer_get_tag_table(buf);
-    GtkTextTag *tag_left = gtk_text_tag_table_lookup(table, "align-left");
-    if (!tag_left) {
-        tag_left = gtk_text_buffer_create_tag(buf, "align-left", "justification", GTK_JUSTIFY_LEFT, NULL);
-    }
-    GtkTextTag *tag_center = gtk_text_tag_table_lookup(table, "align-center");
-    if (!tag_center) {
-        tag_center = gtk_text_buffer_create_tag(buf, "align-center", "justification", GTK_JUSTIFY_CENTER, NULL);
-    }
-    GtkTextTag *tag_right = gtk_text_tag_table_lookup(table, "align-right");
-    if (!tag_right) {
-        tag_right = gtk_text_buffer_create_tag(buf, "align-right", "justification", GTK_JUSTIFY_RIGHT, NULL);
-    }
-    GtkTextTag *tag_justify = gtk_text_tag_table_lookup(table, "align-justify");
-    if (!tag_justify) {
-        tag_justify = gtk_text_buffer_create_tag(buf, "align-justify", "justification", GTK_JUSTIFY_FILL, NULL);
-    }
-
-    GtkTextTag *target_tag = NULL;
-    switch (justification) {
-        case GTK_JUSTIFY_LEFT:   target_tag = tag_left; break;
-        case GTK_JUSTIFY_CENTER: target_tag = tag_center; break;
-        case GTK_JUSTIFY_RIGHT:  target_tag = tag_right; break;
-        case GTK_JUSTIFY_FILL:   target_tag = tag_justify; break;
-        default: return;
-    }
-
-    GtkTextIter start, end;
-    if (!gtk_text_buffer_get_selection_bounds(buf, &start, &end)) {
-        gtk_text_buffer_get_iter_at_mark(buf, &start, gtk_text_buffer_get_insert(buf));
-        end = start;
-    }
-
-    gint start_line = gtk_text_iter_get_line(&start);
-    gint end_line = gtk_text_iter_get_line(&end);
-
-    gtk_text_buffer_begin_user_action(buf);
-
-    for (gint l = start_line; l <= end_line; l++) {
-        GtkTextIter line_start, line_end;
-        gtk_text_buffer_get_iter_at_line(buf, &line_start, l);
-        line_end = line_start;
-        gtk_text_iter_forward_to_line_end(&line_end);
-
-        gtk_text_buffer_remove_tag(buf, tag_left, &line_start, &line_end);
-        gtk_text_buffer_remove_tag(buf, tag_center, &line_start, &line_end);
-        gtk_text_buffer_remove_tag(buf, tag_right, &line_start, &line_end);
-        gtk_text_buffer_remove_tag(buf, tag_justify, &line_start, &line_end);
-
-        gtk_text_buffer_apply_tag(buf, target_tag, &line_start, &line_end);
-    }
-
-    gtk_text_buffer_end_user_action(buf);
-}
-
 static void on_paste_plain_text_received(GObject *source_object, GAsyncResult *res, gpointer user_data) {
     GdkClipboard *clipboard = GDK_CLIPBOARD(source_object);
     GError *error = NULL;
@@ -236,29 +180,6 @@ gboolean on_editor_key_pressed(GtkEventControllerKey *ctrl,
 
     gboolean ctrl_held  = (state & GDK_CONTROL_MASK) != 0;
     gboolean shift_held = (state & GDK_SHIFT_MASK)   != 0;
-
-    if (keyval == GDK_KEY_Up || keyval == GDK_KEY_KP_Up ||
-        keyval == GDK_KEY_Down || keyval == GDK_KEY_KP_Down ||
-        keyval == GDK_KEY_Home || keyval == GDK_KEY_KP_Home ||
-        keyval == GDK_KEY_End || keyval == GDK_KEY_KP_End ||
-        keyval == GDK_KEY_Page_Up || keyval == GDK_KEY_KP_Page_Up ||
-        keyval == GDK_KEY_Page_Down || keyval == GDK_KEY_KP_Page_Down) {
-        GtkTextIter cursor;
-        gtk_text_buffer_get_iter_at_mark(buf, &cursor, gtk_text_buffer_get_insert(buf));
-        int line = gtk_text_iter_get_line(&cursor);
-        int col = gtk_text_iter_get_line_offset(&cursor);
-        int gen = gui ? (int)gui->buffer_generation : -1;
-        const char *keyname = "Unknown";
-        if (keyval == GDK_KEY_Up || keyval == GDK_KEY_KP_Up) keyname = "Up";
-        else if (keyval == GDK_KEY_Down || keyval == GDK_KEY_KP_Down) keyname = "Down";
-        else if (keyval == GDK_KEY_Home || keyval == GDK_KEY_KP_Home) keyname = "Home";
-        else if (keyval == GDK_KEY_End || keyval == GDK_KEY_KP_End) keyname = "End";
-        else if (keyval == GDK_KEY_Page_Up || keyval == GDK_KEY_KP_Page_Up) keyname = "PageUp";
-        else if (keyval == GDK_KEY_Page_Down || keyval == GDK_KEY_KP_Page_Down) keyname = "PageDown";
-        g_print("KEY_NAVIGATION key=%s line=%d col=%d generation=%d\n", keyname, line, col, gen);
-
-
-    }
 
     /* ── Bold ── */
     if (match_app_shortcut("bold", keyval, keycode, state)) {
@@ -480,7 +401,7 @@ gboolean on_editor_key_pressed(GtkEventControllerKey *ctrl,
     if (match_app_shortcut("move_line_start", keyval, keycode, state)) {
         GtkTextIter iter;
         gtk_text_buffer_get_iter_at_mark(buf, &iter, gtk_text_buffer_get_insert(buf));
-        debug_set_line_offset(&iter, 0, "move_line_start");
+        gtk_text_iter_set_line_offset(&iter, 0);
         gtk_text_buffer_place_cursor(buf, &iter);
         gtk_text_view_scroll_mark_onscreen(GTK_TEXT_VIEW(gui->source_view), gtk_text_buffer_get_insert(buf));
         return TRUE;
