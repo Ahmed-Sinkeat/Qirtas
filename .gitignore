@@ -3,3 +3,9 @@ zig-out/
 *.db
 *.png
 *.jpg
+*.bak
+*.step*
+*.before_*
+test_run.log
+crash_run.log
+test_*.md
