@@ -33,6 +33,7 @@ typedef struct {
     /* Search */
     GtkWidget               *search_revealer;
     GtkWidget               *search_entry;
+    GtkWidget               *replace_entry;
     GtkWidget               *search_match_label;
     GtkSourceSearchContext  *search_ctx;
     GtkSourceSearchSettings *search_settings;
@@ -179,7 +180,30 @@ typedef struct {
     /* Re-entrancy guard */
     gboolean in_conceal_update;
     gboolean show_layout_dividers;
+
+    /* Editor preferences */
+    gboolean  wrap_lines;
+    gboolean  show_line_numbers;
+    gboolean  highlight_current_line;
+    gboolean  show_right_margin;
+    int       right_margin_pos;
+    gboolean  show_overview_map;
+    gboolean  restore_session;
+    gboolean  compact_mode;
+    GtkWidget *source_map;
 } AppGui;
+
+/* Language / icon style (loaded from app_prefs at startup) */
+extern int qirtas_app_language; /* 0 = English, 1 = Arabic */
+extern int qirtas_icon_style;   /* 0 = Classic, 1 = Modern */
+const char *qirtas_tr(const char *en);
+const char *qirtas_icon(const char *key);
+
+/* Generic key/value preference store (app_prefs table in vault.db) */
+int  qirtas_pref_get_int(const char *key, int fallback);
+void qirtas_pref_set_int(const char *key, int value);
+char *qirtas_pref_get_string(const char *key);
+void qirtas_pref_set_string(const char *key, const char *value);
 
 typedef struct {
     const char      *action_id;
@@ -235,6 +259,8 @@ void gui_set_buffer_modified(gboolean modified);
 void on_search_text_changed(GtkSearchEntry *entry, gpointer user_data);
 void on_search_next_clicked(GtkButton *btn, gpointer user_data);
 void on_search_prev_clicked(GtkButton *btn, gpointer user_data);
+void on_replace_clicked(GtkButton *btn, gpointer user_data);
+void on_replace_all_clicked(GtkButton *btn, gpointer user_data);
 gboolean on_search_entry_key(GtkEventControllerKey *ctrl, guint keyval, guint keycode, GdkModifierType state, gpointer user_data);
 void toggle_search(AppGui *gui);
 void toggle_fullscreen(AppGui *gui);
@@ -275,6 +301,7 @@ void insert_text_pair(GtkTextBuffer *buf, const char *open, const char *close);
 gboolean maybe_skip_closing_pair(GtkTextBuffer *buf, const char *close);
 gboolean maybe_delete_empty_pair(GtkTextBuffer *buf);
 void duplicate_current_line(GtkTextBuffer *buf);
+void insert_horizontal_rule(GtkTextBuffer *buf);
 void delete_current_line(GtkTextBuffer *buf);
 void move_current_line(GtkTextBuffer *buf, gboolean up);
 gboolean on_editor_key_pressed(GtkEventControllerKey *ctrl, guint keyval, guint keycode, GdkModifierType state, gpointer user_data);

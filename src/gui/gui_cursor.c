@@ -1,7 +1,11 @@
 #include "gui_internal.h"
 #include <sqlite3.h>
+#include <stdlib.h>
+#include <stdio.h>
 
-#define SMEAR_STIFFNESS 0.30
+/* 0.55: snappier catch-up — 0.30 made plain horizontal arrow movement
+ * feel like the caret was dragging behind. */
+#define SMEAR_STIFFNESS 0.55
 #define SMEAR_TRAILING_LENGTH 0.30
 #define SMEAR_TRAILING_WIDTH 0.1
 #define GHOST_DECAY (1.0 / (SMEAR_TRAILING_LENGTH * 60.0))
@@ -17,11 +21,76 @@ static GdkRGBA trail_color_for_theme(const char *theme_name) {
         if (strcmp(theme_name, "typewriter-dark") == 0)
             return (GdkRGBA){ 255.0/255.0, 107.0/255.0, 107.0/255.0, 1.0 };
         if (strcmp(theme_name, "qirtas") == 0)
-            return (GdkRGBA){  31.0/255.0, 111.0/255.0, 235.0/255.0, 1.0 };
+            return (GdkRGBA){  27.0/255.0,  24.0/255.0,  22.0/255.0, 1.0 };
+        if (strcmp(theme_name, "qirtas-dark") == 0)
+            return (GdkRGBA){ 236.0/255.0, 231.0/255.0, 219.0/255.0, 1.0 };
         if (strcmp(theme_name, "midnight") == 0)
             return (GdkRGBA){ 170.0/255.0, 196.0/255.0, 255.0/255.0, 1.0 };
     }
     return (GdkRGBA){ 255.0/255.0, 121.0/255.0, 198.0/255.0, 1.0 };
+}
+
+/* ── Generic key/value preference store ──
+ * Lives in vault.db alongside session_state but in its own table so we
+ * never fight the zig-side schema. All accessors silent-fail. */
+static sqlite3 *prefs_open(void) {
+    sqlite3 *db = NULL;
+    if (sqlite3_open(DB_PATH, &db) != SQLITE_OK) {
+        if (db) sqlite3_close(db);
+        return NULL;
+    }
+    sqlite3_busy_timeout(db, 5000);
+    sqlite3_exec(db,
+        "CREATE TABLE IF NOT EXISTS app_prefs (key TEXT PRIMARY KEY, value TEXT);",
+        NULL, NULL, NULL);
+    return db;
+}
+
+char *qirtas_pref_get_string(const char *key) {
+    char *result = NULL;
+    sqlite3 *db = prefs_open();
+    if (!db) return NULL;
+    sqlite3_stmt *stmt = NULL;
+    if (sqlite3_prepare_v2(db, "SELECT value FROM app_prefs WHERE key = ?;", -1, &stmt, NULL) == SQLITE_OK) {
+        sqlite3_bind_text(stmt, 1, key, -1, SQLITE_TRANSIENT);
+        if (sqlite3_step(stmt) == SQLITE_ROW) {
+            const unsigned char *v = sqlite3_column_text(stmt, 0);
+            if (v) result = g_strdup((const char *)v);
+        }
+        sqlite3_finalize(stmt);
+    }
+    sqlite3_close(db);
+    return result;
+}
+
+void qirtas_pref_set_string(const char *key, const char *value) {
+    sqlite3 *db = prefs_open();
+    if (!db) return;
+    sqlite3_stmt *stmt = NULL;
+    if (sqlite3_prepare_v2(db,
+            "INSERT INTO app_prefs (key, value) VALUES (?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value;",
+            -1, &stmt, NULL) == SQLITE_OK) {
+        sqlite3_bind_text(stmt, 1, key, -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(stmt, 2, value ? value : "", -1, SQLITE_TRANSIENT);
+        sqlite3_step(stmt);
+        sqlite3_finalize(stmt);
+    }
+    sqlite3_close(db);
+}
+
+int qirtas_pref_get_int(const char *key, int fallback) {
+    char *s = qirtas_pref_get_string(key);
+    if (!s) return fallback;
+    int v = atoi(s);
+    g_free(s);
+    return v;
+}
+
+void qirtas_pref_set_int(const char *key, int value) {
+    char buf[32];
+    snprintf(buf, sizeof(buf), "%d", value);
+    qirtas_pref_set_string(key, buf);
 }
 
 void reset_cursor_trail(AppGui *gui) {

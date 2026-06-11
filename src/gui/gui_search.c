@@ -8,7 +8,7 @@ static void update_search_match_count(AppGui *gui) {
     gint count = gtk_source_search_context_get_occurrences_count(gui->search_ctx);
     char buf[48];
     if (count == -1 || count == 0)
-        snprintf(buf, sizeof(buf), "no matches");
+        snprintf(buf, sizeof(buf), "%s", qirtas_tr("no matches"));
     else
         snprintf(buf, sizeof(buf), "%d match%s", count, count == 1 ? "" : "es");
     gtk_label_set_text(GTK_LABEL(gui->search_match_label), buf);
@@ -153,4 +153,39 @@ void on_close_search_clicked(GtkButton *btn, gpointer user_data) {
     (void)btn;
     AppGui *gui = (AppGui *)user_data;
     if (gui->search_visible) toggle_search(gui);
+}
+
+void on_replace_clicked(GtkButton *btn, gpointer user_data) {
+    (void)btn;
+    AppGui *gui = (AppGui *)user_data;
+    if (!gui->search_ctx || !gui->replace_entry) return;
+
+    const char *replacement = gtk_editable_get_text(GTK_EDITABLE(gui->replace_entry));
+    GtkTextBuffer *buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(gui->source_view));
+
+    GtkTextIter start, ms, me;
+    gtk_text_buffer_get_selection_bounds(buf, &start, NULL);
+    gboolean wrapped;
+    if (!gtk_source_search_context_forward(gui->search_ctx, &start, &ms, &me, &wrapped))
+        return;
+
+    GError *error = NULL;
+    if (gtk_source_search_context_replace(gui->search_ctx, &ms, &me,
+                                          replacement, -1, &error)) {
+        do_search_forward(gui);
+    }
+    if (error) g_error_free(error);
+    update_search_match_count(gui);
+}
+
+void on_replace_all_clicked(GtkButton *btn, gpointer user_data) {
+    (void)btn;
+    AppGui *gui = (AppGui *)user_data;
+    if (!gui->search_ctx || !gui->replace_entry) return;
+
+    const char *replacement = gtk_editable_get_text(GTK_EDITABLE(gui->replace_entry));
+    GError *error = NULL;
+    gtk_source_search_context_replace_all(gui->search_ctx, replacement, -1, &error);
+    if (error) g_error_free(error);
+    update_search_match_count(gui);
 }

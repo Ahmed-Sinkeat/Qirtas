@@ -194,9 +194,140 @@ static const char *CSS_FALLBACK_MINIMAL =
 
 static char current_theme[32] = "qirtas";
 static char custom_theme_path[1024] = "";
+
+/* ── App language (0 = English, 1 = Arabic) and icon style ── */
+int qirtas_app_language = 0;
+int qirtas_icon_style   = 0;
+
+typedef struct { const char *en; const char *ar; } TrPair;
+static const TrPair tr_table[] = {
+    { "Add New File",            "ملف جديد" },
+    { "Open File",               "فتح ملف" },
+    { "Save File",               "حفظ الملف" },
+    { "Export as PDF",           "تصدير PDF" },
+    { "Save As…",                "حفظ باسم…" },
+    { "Find / Replace…",         "بحث / استبدال…" },
+    { "Fullscreen",              "ملء الشاشة" },
+    { "Preferences",             "التفضيلات" },
+    { "Keyboard Shortcuts",      "اختصارات لوحة المفاتيح" },
+    { "Quit Qirtas",             "إغلاق قرطاس" },
+    { "Open",                    "فتح" },
+    { "Open with File Manager",  "فتح في مدير الملفات" },
+    { "Menu",                    "القائمة" },
+    { "THEME",                   "السمة" },
+    { "Theme",                   "السمة" },
+    { "PREFERENCES",             "التفضيلات" },
+    { "LAYOUT PREFERENCES",      "تفضيلات التخطيط" },
+    { "KEYBOARD SHORTCUTS",      "اختصارات لوحة المفاتيح" },
+    { "SYNC & CLOUD",            "المزامنة والسحابة" },
+    { "GENERAL",                 "عام" },
+    { "Language",                "اللغة | Language" },
+    { "Icon Style",              "نمط الأيقونات" },
+    { "Wrap Lines Automatically","التفاف الأسطر تلقائيًا" },
+    { "Display Line Numbers",    "إظهار أرقام الأسطر" },
+    { "Highlight Current Line",  "تمييز السطر الحالي" },
+    { "Display Overview Map",    "إظهار الخريطة العامة" },
+    { "Show Right Margin",       "إظهار الهامش الأيمن" },
+    { "Margin Position",         "موضع الهامش" },
+    { "Restore Session on Startup", "استعادة الجلسة عند التشغيل" },
+    { "Compact Layout",          "تخطيط مضغوط" },
+    { "Pointer Trail Animation", "أثر المؤشر المتحرك" },
+    { "Trail Color",             "لون الأثر" },
+    { "Pointer Color",           "لون المؤشر" },
+    { "Custom",                  "مخصص" },
+    { "Font Size",               "حجم الخط" },
+    { "English Font",            "الخط الإنجليزي" },
+    { "Arabic Font",             "الخط العربي" },
+    { "Status Bar Position",     "موضع شريط الحالة" },
+    { "Sidebar Side",            "جهة الشريط الجانبي" },
+    { "Show layout dividers",    "إظهار فواصل التخطيط" },
+    { "Scroll past end (extra bottom space)", "تمرير بعد النهاية (مساحة سفلية إضافية)" },
+    { "Focus Mode",              "وضع التركيز" },
+    { "Show editor border",      "إظهار إطار المحرر" },
+    { "Keyboard Shortcuts",      "اختصارات لوحة المفاتيح" },
+    { "Settings",                "الإعدادات" },
+    { "Search in file…",         "بحث في الملف…" },
+    { "Replace with…",           "استبدال بـ…" },
+    { "Replace",                 "استبدال" },
+    { "All",                     "الكل" },
+    { "Toggle Sidebar (Ctrl+\\)","إظهار/إخفاء الشريط الجانبي" },
+    { "Search in file (Ctrl+F)", "بحث في الملف (Ctrl+F)" },
+    { "Horizontal Rule",         "خط أفقي" },
+    { "FORMAT",                  "تنسيق" },
+    { "PARAGRAPH",               "فقرة" },
+    { "Sync Now",                "مزامنة الآن" },
+    { "Copy File",               "نسخ الملف" },
+    { "Notes",                   "الملاحظات" },
+    { "Enter file name:",        "أدخل اسم الملف:" },
+    { "VAULT",                   "الخزنة" },
+    { "Current Vault",           "الخزنة الحالية" },
+    { "Google Drive:",           "جوجل درايف:" },
+    { "Dropbox:",                "دروب بوكس:" },
+    { "GitHub:",                 "جيت هاب:" },
+    { "Local / Syncthing:",      "محلي / Syncthing:" },
+    { "Disconnected",            "غير متصل" },
+    { "Connected",               "متصل" },
+    { "Connect to Google Drive", "الاتصال بجوجل درايف" },
+    { "Connect to Dropbox",      "الاتصال بدروب بوكس" },
+    { "Connect to GitHub",       "الاتصال بجيت هاب" },
+    { "Sync Folder",             "مجلد المزامنة" },
+    { "Previous match",          "النتيجة السابقة" },
+    { "Next match",              "النتيجة التالية" },
+    { "Close (Esc)",             "إغلاق (Esc)" },
+    { "Replace current match",   "استبدال النتيجة الحالية" },
+    { "Replace all matches",     "استبدال كل النتائج" },
+    { "Scroll tabs left",        "تمرير التبويبات لليسار" },
+    { "Scroll tabs right",       "تمرير التبويبات لليمين" },
+    { "words",                   "كلمة" },
+    { "chars",                   "حرف" },
+    { "0 words",                 "0 كلمة" },
+    { "0 chars",                 "0 حرف" },
+    { "Open Existing File",      "فتح ملف موجود" },
+    { "Select Custom Theme CSS", "اختيار سمة CSS مخصصة" },
+    { "Open Reference  (Ctrl+?)","فتح المرجع (Ctrl+?)" },
+    { "Toggle sidebar",          "إظهار/إخفاء الشريط الجانبي" },
+    { "no matches",              "لا نتائج" },
+};
+
+const char *qirtas_tr(const char *en) {
+    if (qirtas_app_language != 1 || !en) return en;
+    for (size_t i = 0; i < G_N_ELEMENTS(tr_table); i++) {
+        if (strcmp(tr_table[i].en, en) == 0) return tr_table[i].ar;
+    }
+    return en;
+}
+
+/* Icon name lookup: classic (row 0) vs modern (row 1) sets */
+typedef struct { const char *key; const char *classic; const char *modern; } IconPair;
+static const IconPair icon_table[] = {
+    { "search",      "system-search-symbolic",       "preferences-system-search-symbolic" },
+    { "sidebar",     "sidebar-show-symbolic",        "view-dual-symbolic" },
+    { "menu",        "open-menu-symbolic",           "view-more-symbolic" },
+    { "new",         "document-new-symbolic",        "list-add-symbolic" },
+    { "open",        "document-open-symbolic",       "folder-open-symbolic" },
+    { "save",        "document-save-symbolic",       "media-floppy-symbolic" },
+    { "saveas",      "document-save-as-symbolic",    "document-save-as-symbolic" },
+    { "pdf",         "document-print-symbolic",      "x-office-document-symbolic" },
+    { "folder",      "folder-symbolic",              "folder-open-symbolic" },
+    { "file",        "text-x-generic-symbolic",      "emblem-documents-symbolic" },
+    { "findreplace", "edit-find-replace-symbolic",   "edit-find-replace-symbolic" },
+    { "fullscreen",  "view-fullscreen-symbolic",     "view-fullscreen-symbolic" },
+    { "prefs",       "preferences-system-symbolic",  "applications-system-symbolic" },
+    { "keyboard",    "input-keyboard-symbolic",      "input-keyboard-symbolic" },
+    { "quit",        "window-close-symbolic",        "application-exit-symbolic" },
+    { "filemanager", "system-file-manager-symbolic", "system-file-manager-symbolic" },
+};
+
+const char *qirtas_icon(const char *key) {
+    for (size_t i = 0; i < G_N_ELEMENTS(icon_table); i++) {
+        if (strcmp(icon_table[i].key, key) == 0)
+            return qirtas_icon_style == 1 ? icon_table[i].modern : icon_table[i].classic;
+    }
+    return key;
+}
 void on_theme_dropdown_changed(GObject *gobject, GParamSpec *pspec, gpointer user_data);
 #define GHOST_MIN_DIST 3.0
-#define SMEAR_STIFFNESS 0.30
+#define SMEAR_STIFFNESS 0.55
 #define SMEAR_TRAILING_LENGTH 0.30
 #define SMEAR_TRAILING_WIDTH 0.1
 #define GHOST_DECAY (1.0 / (SMEAR_TRAILING_LENGTH * 60.0))
@@ -215,7 +346,9 @@ static GdkRGBA trail_color_for_theme(void) {
     if (strcmp(current_theme, "typewriter-dark") == 0)
         return (GdkRGBA){ 255.0/255.0, 107.0/255.0, 107.0/255.0, 1.0 };
     if (strcmp(current_theme, "qirtas") == 0)
-        return (GdkRGBA){  31.0/255.0, 111.0/255.0, 235.0/255.0, 1.0 };
+        return (GdkRGBA){  27.0/255.0,  24.0/255.0,  22.0/255.0, 1.0 };
+    if (strcmp(current_theme, "qirtas-dark") == 0)
+        return (GdkRGBA){ 236.0/255.0, 231.0/255.0, 219.0/255.0, 1.0 };
     if (strcmp(current_theme, "midnight") == 0)
         return (GdkRGBA){ 170.0/255.0, 196.0/255.0, 255.0/255.0, 1.0 };
     return (GdkRGBA){ 255.0/255.0, 121.0/255.0, 198.0/255.0, 1.0 };
@@ -549,10 +682,14 @@ static void apply_editor_border(AppGui *gui) {
 
     if (gui->enable_editor_border) {
         gtk_widget_remove_css_class(gui->scrolled, "focus-mode");
-        gtk_widget_set_margin_start(gui->scrolled, 28);
-        gtk_widget_set_margin_end(gui->scrolled, 28);
-        gtk_widget_set_margin_top(gui->scrolled, 24);
-        gtk_widget_set_margin_bottom(gui->scrolled, 20);
+        /* Compact mode keeps the floating-paper feel, just tighter. */
+        int side = gui->compact_mode ? 12 : 28;
+        int top  = gui->compact_mode ? 10 : 24;
+        int bot  = gui->compact_mode ?  8 : 20;
+        gtk_widget_set_margin_start(gui->scrolled, side);
+        gtk_widget_set_margin_end(gui->scrolled, side);
+        gtk_widget_set_margin_top(gui->scrolled, top);
+        gtk_widget_set_margin_bottom(gui->scrolled, bot);
     } else {
         gtk_widget_add_css_class(gui->scrolled, "focus-mode");
         gtk_widget_set_margin_start(gui->scrolled, 0);
@@ -660,6 +797,7 @@ static void on_pointer_color_custom_toggled(GtkCheckButton *chk, gpointer user_d
     }
     save_pointer_color_settings(gui);
     apply_theme(gui, current_theme);
+    update_editor_font(gui);
 }
 
 static void on_pointer_color_changed(GObject *object, GParamSpec *pspec, gpointer user_data) {
@@ -672,6 +810,7 @@ static void on_pointer_color_changed(GObject *object, GParamSpec *pspec, gpointe
         gui->custom_pointer_color = *rgba;
         save_pointer_color_settings(gui);
         apply_theme(gui, current_theme);
+        update_editor_font(gui);
     }
 }
 
@@ -679,7 +818,7 @@ static void on_pointer_color_changed(GObject *object, GParamSpec *pspec, gpointe
 static void on_open_existing_clicked(GtkButton *btn, gpointer user_data) {
     AppGui *gui = (AppGui *)user_data;
     GtkFileDialog *dialog = gtk_file_dialog_new();
-    gtk_file_dialog_set_title(dialog, "Open Existing File");
+    gtk_file_dialog_set_title(dialog, qirtas_tr("Open Existing File"));
     gtk_file_dialog_open(dialog, GTK_WINDOW(gui->window), NULL, on_open_dialog_response, gui);
     
     GtkWidget *pop = gtk_widget_get_ancestor(GTK_WIDGET(btn), GTK_TYPE_POPOVER);
@@ -701,6 +840,86 @@ static void on_create_new_clicked(GtkButton *btn, gpointer user_data) {
     gtk_widget_set_visible(w->box_actions, FALSE);
     gtk_widget_set_visible(w->box_input, TRUE);
     gtk_widget_grab_focus(w->entry_name);
+}
+
+static void popdown_ancestor_popover(GtkWidget *w) {
+    GtkWidget *pop = gtk_widget_get_ancestor(w, GTK_TYPE_POPOVER);
+    if (pop) gtk_popover_popdown(GTK_POPOVER(pop));
+}
+
+static void on_status_menu_copy_file(GtkButton *btn, gpointer user_data) {
+    popdown_ancestor_popover(GTK_WIDGET(btn));
+    AppGui *gui = (AppGui *)user_data;
+    if (!gui || gui->active_tab_index == -1 || gui->active_tab_index >= gui->num_tabs) return;
+    const char *path = gui->open_tabs[gui->active_tab_index];
+    if (!path || strcmp(path, "Untitled") == 0) return;
+    if (!g_file_test(path, G_FILE_TEST_EXISTS)) return;
+
+    /* Put the file itself on the clipboard (text/uri-list) so pasting in
+     * a file manager copies the .md file. */
+    GFile *file = g_file_new_for_path(path);
+    GdkFileList *flist = gdk_file_list_new_from_array(&file, 1);
+    GdkClipboard *cb = gdk_display_get_clipboard(gdk_display_get_default());
+    gdk_clipboard_set(cb, GDK_TYPE_FILE_LIST, flist);
+    g_boxed_free(GDK_TYPE_FILE_LIST, flist);
+    g_object_unref(file);
+}
+
+static void on_status_menu_save_as(GtkButton *btn, gpointer user_data) {
+    popdown_ancestor_popover(GTK_WIDGET(btn));
+    trigger_save_as((AppGui *)user_data);
+}
+
+static void on_status_menu_find_replace(GtkButton *btn, gpointer user_data) {
+    popdown_ancestor_popover(GTK_WIDGET(btn));
+    AppGui *gui = (AppGui *)user_data;
+    if (!gui->search_visible) toggle_search(gui);
+}
+
+static void on_status_menu_fullscreen(GtkButton *btn, gpointer user_data) {
+    popdown_ancestor_popover(GTK_WIDGET(btn));
+    toggle_fullscreen((AppGui *)user_data);
+}
+
+static void on_status_menu_settings(GtkButton *btn, gpointer user_data) {
+    popdown_ancestor_popover(GTK_WIDGET(btn));
+    on_settings_btn_clicked(NULL, (AppGui *)user_data);
+}
+
+static void on_status_menu_shortcuts(GtkButton *btn, gpointer user_data) {
+    popdown_ancestor_popover(GTK_WIDGET(btn));
+    show_keybindings_window((AppGui *)user_data);
+}
+
+static void on_status_menu_quit(GtkButton *btn, gpointer user_data) {
+    (void)user_data;
+    popdown_ancestor_popover(GTK_WIDGET(btn));
+    g_application_quit(g_application_get_default());
+}
+
+/* Build one status-menu row: icon + label (+ optional right-aligned hint) */
+static GtkWidget *status_menu_item(const char *icon, const char *label,
+                                   const char *hint,
+                                   GCallback cb, gpointer user_data) {
+    GtkWidget *btn = gtk_button_new();
+    gtk_widget_add_css_class(btn, "pop-btn");
+    gtk_widget_add_css_class(btn, "menu-item-btn");
+    GtkWidget *hbox = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+    GtkWidget *img = gtk_image_new_from_icon_name(icon);
+    GtkWidget *lbl = gtk_label_new(label);
+    gtk_widget_set_halign(lbl, GTK_ALIGN_START);
+    gtk_widget_set_hexpand(lbl, TRUE);
+    gtk_box_append(GTK_BOX(hbox), img);
+    gtk_box_append(GTK_BOX(hbox), lbl);
+    if (hint) {
+        GtkWidget *hint_lbl = gtk_label_new(hint);
+        gtk_widget_add_css_class(hint_lbl, "menu-item-hint");
+        gtk_widget_set_halign(hint_lbl, GTK_ALIGN_END);
+        gtk_box_append(GTK_BOX(hbox), hint_lbl);
+    }
+    gtk_button_set_child(GTK_BUTTON(btn), hbox);
+    g_signal_connect(btn, "clicked", cb, user_data);
+    return btn;
 }
 
 static void on_status_bar_new_file_clicked(GtkButton *btn, gpointer user_data) {
@@ -725,7 +944,7 @@ static void on_status_bar_open_file_clicked(GtkButton *btn, gpointer user_data) 
     if (pop) gtk_popover_popdown(GTK_POPOVER(pop));
 
     GtkFileDialog *dialog = gtk_file_dialog_new();
-    gtk_file_dialog_set_title(dialog, "Open Existing File");
+    gtk_file_dialog_set_title(dialog, qirtas_tr("Open Existing File"));
     gtk_file_dialog_open(dialog, GTK_WINDOW(gui->window), NULL, on_open_dialog_response, gui);
 }
 
@@ -749,6 +968,14 @@ static void on_popover_closed(GtkPopover *popover, gpointer user_data) {
 static void on_app_shutdown(GApplication *app, gpointer user_data) {
     (void)app;
     (void)user_data;
+    /* Remember the active file so "Restore Session" can reopen it. */
+    if (global_gui && global_gui->active_tab_index != -1 &&
+        global_gui->active_tab_index < global_gui->num_tabs) {
+        const char *path = global_gui->open_tabs[global_gui->active_tab_index];
+        if (path && strcmp(path, "Untitled") != 0) {
+            qirtas_pref_set_string("last_file", path);
+        }
+    }
     zig_on_shutdown();
 }
 
@@ -909,19 +1136,20 @@ void gui_set_buffer_modified(gboolean modified) {
 
 
 
-void on_buffer_changed(GtkTextBuffer *buf, gpointer user_data) {
+static guint buffer_stats_timeout_id = 0;
+
+static gboolean buffer_stats_timeout_cb(gpointer user_data) {
     AppGui *gui = (AppGui *)user_data;
-    if (gui && gui->loading_viewport) return;
-    
-    zig_undo_commit();
-    check_and_insert_hr(buf, gui);
-    
+    buffer_stats_timeout_id = 0;
+    if (!gui || !gui->source_view) return G_SOURCE_REMOVE;
+
+    GtkTextBuffer *buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(gui->source_view));
     GtkTextIter start, end;
     gtk_text_buffer_get_bounds(buf, &start, &end);
     gchar *text = gtk_text_buffer_get_text(buf, &start, &end, TRUE);
-    
+
     glong char_count = g_utf8_strlen(text, -1);
-    
+
     glong word_count = 0;
     gboolean in_word = FALSE;
     char *p = text;
@@ -937,21 +1165,36 @@ void on_buffer_changed(GtkTextBuffer *buf, gpointer user_data) {
         }
         p = g_utf8_next_char(p);
     }
-    
+
     char w_buf[32], c_buf[32];
-    snprintf(w_buf, sizeof(w_buf), "%ld words", word_count);
-    snprintf(c_buf, sizeof(c_buf), "%ld chars", char_count);
-    
+    snprintf(w_buf, sizeof(w_buf), "%ld %s", word_count, qirtas_tr("words"));
+    snprintf(c_buf, sizeof(c_buf), "%ld %s", char_count, qirtas_tr("chars"));
+
     if (gui->lbl_words) gtk_label_set_text(GTK_LABEL(gui->lbl_words), w_buf);
     if (gui->lbl_chars) gtk_label_set_text(GTK_LABEL(gui->lbl_chars), c_buf);
-    
+
     g_free(text);
-    /* Defer the conceal pass to an idle callback so Pango finishes
-     * updating its line-layout cache before we apply/remove any tags.
-     * Applying tags synchronously inside the 'changed' signal can leave
-     * GTK with a stale byte-index cache, causing the fatal:
-     *   "Byte index N is off the end of the line" abort. */
-    g_idle_add_once((GSourceOnceFunc)update_conceal_markdown_all, buf);
+
+    /* Full conceal pass runs here (already deferred past the 'changed'
+     * signal, so Pango's line-layout cache is stable — avoids the
+     * "Byte index N is off the end of the line" abort). */
+    update_conceal_markdown_all(buf);
+    return G_SOURCE_REMOVE;
+}
+
+void on_buffer_changed(GtkTextBuffer *buf, gpointer user_data) {
+    AppGui *gui = (AppGui *)user_data;
+    if (gui && gui->loading_viewport) return;
+
+    zig_undo_commit();
+    check_and_insert_hr(buf, gui);
+
+    /* Word/char count + full-buffer conceal are O(document) — debounce
+     * so fast typing in big files costs one pass per pause, not one per
+     * keystroke. Local conceal around the cursor still runs instantly
+     * via on_mark_set. */
+    if (buffer_stats_timeout_id) g_source_remove(buffer_stats_timeout_id);
+    buffer_stats_timeout_id = g_timeout_add(220, buffer_stats_timeout_cb, gui);
 }
 
 static void on_buffer_modified_changed(GtkTextBuffer *buf, gpointer user_data) {
@@ -1528,11 +1771,119 @@ static void on_files_clicked(GtkButton *btn, gpointer user_data) {
 
 /* stats click handler removed */
 
-static void on_wrap_toggled(GtkCheckButton *btn, gpointer user_data) {
-    GtkTextView *view = GTK_TEXT_VIEW(user_data);
+/* Apply all editor preferences to the live source view. */
+static void apply_editor_prefs(AppGui *gui) {
+    if (!gui || !gui->source_view) return;
+    GtkTextView   *view = GTK_TEXT_VIEW(gui->source_view);
+    GtkSourceView *sv   = GTK_SOURCE_VIEW(gui->source_view);
 
-    gboolean active = gtk_check_button_get_active(btn);
-    gtk_text_view_set_wrap_mode(view, active ? GTK_WRAP_WORD_CHAR : GTK_WRAP_NONE);
+    gtk_text_view_set_wrap_mode(view, gui->wrap_lines ? GTK_WRAP_WORD_CHAR : GTK_WRAP_NONE);
+    gtk_source_view_set_show_line_numbers(sv, gui->show_line_numbers);
+    gtk_source_view_set_highlight_current_line(sv, gui->highlight_current_line);
+    gtk_source_view_set_show_right_margin(sv, gui->show_right_margin);
+    if (gui->right_margin_pos < 20)  gui->right_margin_pos = 20;
+    if (gui->right_margin_pos > 200) gui->right_margin_pos = 200;
+    gtk_source_view_set_right_margin_position(sv, (guint)gui->right_margin_pos);
+    if (gui->source_map) gtk_widget_set_visible(gui->source_map, gui->show_overview_map);
+}
+
+static void on_wrap_toggled(GtkCheckButton *btn, gpointer user_data) {
+    AppGui *gui = (AppGui *)user_data;
+    gui->wrap_lines = gtk_check_button_get_active(btn);
+    qirtas_pref_set_int("wrap_lines", gui->wrap_lines ? 1 : 0);
+    apply_editor_prefs(gui);
+}
+
+static void on_line_numbers_toggled(GtkCheckButton *btn, gpointer user_data) {
+    AppGui *gui = (AppGui *)user_data;
+    gui->show_line_numbers = gtk_check_button_get_active(btn);
+    qirtas_pref_set_int("show_line_numbers", gui->show_line_numbers ? 1 : 0);
+    apply_editor_prefs(gui);
+}
+
+static void on_highlight_line_toggled(GtkCheckButton *btn, gpointer user_data) {
+    AppGui *gui = (AppGui *)user_data;
+    gui->highlight_current_line = gtk_check_button_get_active(btn);
+    qirtas_pref_set_int("highlight_current_line", gui->highlight_current_line ? 1 : 0);
+    apply_editor_prefs(gui);
+}
+
+static void on_right_margin_toggled(GtkCheckButton *btn, gpointer user_data) {
+    AppGui *gui = (AppGui *)user_data;
+    gui->show_right_margin = gtk_check_button_get_active(btn);
+    qirtas_pref_set_int("show_right_margin", gui->show_right_margin ? 1 : 0);
+    apply_editor_prefs(gui);
+}
+
+static void on_right_margin_pos_changed(GtkSpinButton *spin, gpointer user_data) {
+    AppGui *gui = (AppGui *)user_data;
+    gui->right_margin_pos = (int)gtk_spin_button_get_value(spin);
+    qirtas_pref_set_int("right_margin_pos", gui->right_margin_pos);
+    apply_editor_prefs(gui);
+}
+
+static void on_overview_map_toggled(GtkCheckButton *btn, gpointer user_data) {
+    AppGui *gui = (AppGui *)user_data;
+    gui->show_overview_map = gtk_check_button_get_active(btn);
+    qirtas_pref_set_int("show_overview_map", gui->show_overview_map ? 1 : 0);
+    apply_editor_prefs(gui);
+}
+
+static void on_restore_session_toggled(GtkCheckButton *btn, gpointer user_data) {
+    AppGui *gui = (AppGui *)user_data;
+    gui->restore_session = gtk_check_button_get_active(btn);
+    qirtas_pref_set_int("restore_session", gui->restore_session ? 1 : 0);
+}
+
+static void on_language_changed(GObject *gobject, GParamSpec *pspec, gpointer user_data) {
+    (void)pspec; (void)user_data;
+    guint sel = gtk_drop_down_get_selected(GTK_DROP_DOWN(gobject));
+    qirtas_app_language = (sel == 1) ? 1 : 0;
+    qirtas_pref_set_int("app_language", qirtas_app_language);
+    /* Mirror the layout live; labels switch on next launch. */
+    gtk_widget_set_default_direction(qirtas_app_language == 1
+                                     ? GTK_TEXT_DIR_RTL : GTK_TEXT_DIR_LTR);
+    if (global_gui && global_gui->bottom_bar_widget)
+        gtk_widget_set_direction(global_gui->bottom_bar_widget, GTK_TEXT_DIR_LTR);
+}
+
+static void on_icon_style_changed(GObject *gobject, GParamSpec *pspec, gpointer user_data) {
+    (void)pspec;
+    AppGui *gui = (AppGui *)user_data;
+    guint sel = gtk_drop_down_get_selected(GTK_DROP_DOWN(gobject));
+    qirtas_icon_style = (sel == 1) ? 1 : 0;
+    qirtas_pref_set_int("icon_style", qirtas_icon_style);
+
+    /* Live-swap the always-visible icons; popover menus pick the new
+     * set up on next launch. */
+    if (gui) {
+        if (gui->btn_search)
+            gtk_button_set_child(GTK_BUTTON(gui->btn_search),
+                gtk_image_new_from_icon_name(qirtas_icon("search")));
+        if (gui->btn_sidebar_toggle)
+            gtk_button_set_child(GTK_BUTTON(gui->btn_sidebar_toggle),
+                gtk_image_new_from_icon_name(qirtas_icon("sidebar")));
+        if (gui->btn_status_actions)
+            gtk_menu_button_set_icon_name(GTK_MENU_BUTTON(gui->btn_status_actions),
+                                          qirtas_icon("menu"));
+        populate_explorer(gui); /* folder + file icons in the tree */
+    }
+}
+
+static void apply_compact_mode(AppGui *gui) {
+    if (!gui || !gui->window) return;
+    if (gui->compact_mode)
+        gtk_widget_add_css_class(gui->window, "compact-ui");
+    else
+        gtk_widget_remove_css_class(gui->window, "compact-ui");
+    apply_editor_border(gui);
+}
+
+static void on_compact_mode_toggled(GtkCheckButton *btn, gpointer user_data) {
+    AppGui *gui = (AppGui *)user_data;
+    gui->compact_mode = gtk_check_button_get_active(btn);
+    qirtas_pref_set_int("compact_mode", gui->compact_mode ? 1 : 0);
+    apply_compact_mode(gui);
 }
 
 
@@ -1585,6 +1936,52 @@ static void on_tree_dir_toggle(GtkButton *btn, gpointer user_data) {
     gtk_label_set_text(GTK_LABEL(d->arrow_label), d->expanded ? "▼" : "▶");
 }
 
+static void on_tree_open_clicked(GtkButton *btn, gpointer user_data) {
+    popdown_ancestor_popover(GTK_WIDGET(btn));
+    zig_open_file((const char *)user_data);
+}
+
+static void on_tree_open_in_fm_clicked(GtkButton *btn, gpointer user_data) {
+    popdown_ancestor_popover(GTK_WIDGET(btn));
+    const char *path = (const char *)user_data;
+    GFile *file = g_file_new_for_path(path);
+    GtkFileLauncher *launcher = gtk_file_launcher_new(file);
+    GtkWindow *parent = global_gui ? GTK_WINDOW(global_gui->window) : NULL;
+    gtk_file_launcher_open_containing_folder(launcher, parent, NULL, NULL, NULL);
+    g_object_unref(launcher);
+    g_object_unref(file);
+}
+
+static void on_tree_file_right_click(GtkGestureClick *gesture, gint n_press,
+                                     gdouble x, gdouble y, gpointer user_data) {
+    (void)n_press;
+    GtkWidget *row = gtk_event_controller_get_widget(GTK_EVENT_CONTROLLER(gesture));
+    const char *path = (const char *)user_data;
+
+    GtkWidget *popover = gtk_popover_new();
+    gtk_widget_set_parent(popover, row);
+    GdkRectangle rect = { (int)x, (int)y, 1, 1 };
+    gtk_popover_set_pointing_to(GTK_POPOVER(popover), &rect);
+    g_signal_connect(popover, "closed", G_CALLBACK(gtk_widget_unparent), NULL);
+
+    GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 4);
+    gtk_widget_set_margin_start(box, 6);
+    gtk_widget_set_margin_end(box, 6);
+    gtk_widget_set_margin_top(box, 6);
+    gtk_widget_set_margin_bottom(box, 6);
+
+    gtk_box_append(GTK_BOX(box),
+        status_menu_item(qirtas_icon("open"), qirtas_tr("Open"), NULL,
+                         G_CALLBACK(on_tree_open_clicked), (gpointer)path));
+    gtk_box_append(GTK_BOX(box),
+        status_menu_item(qirtas_icon("filemanager"), qirtas_tr("Open with File Manager"), NULL,
+                         G_CALLBACK(on_tree_open_in_fm_clicked), (gpointer)path));
+
+    gtk_popover_set_child(GTK_POPOVER(popover), box);
+    gtk_popover_popup(GTK_POPOVER(popover));
+    gtk_gesture_set_state(GTK_GESTURE(gesture), GTK_EVENT_SEQUENCE_CLAIMED);
+}
+
 static void on_tree_file_clicked(GtkButton *btn, gpointer user_data) {
     /* Clear previous active */
     if (g_active_tree_row && GTK_IS_WIDGET(g_active_tree_row))
@@ -1614,7 +2011,7 @@ static GtkWidget *tree_build_file_row(const char *full_path, const char *name) {
     gtk_widget_set_hexpand(hbox, TRUE);
 
     /* File icon */
-    const char *icon_name = is_md ? "text-x-generic-symbolic" : "text-x-generic-symbolic";
+    const char *icon_name = qirtas_icon("file");
     GtkWidget *icon = gtk_image_new_from_icon_name(icon_name);
     gtk_widget_add_css_class(icon, is_md ? "tree-icon-md" : "tree-icon");
     gtk_box_append(GTK_BOX(hbox), icon);
@@ -1637,6 +2034,16 @@ static GtkWidget *tree_build_file_row(const char *full_path, const char *name) {
 
     /* Store filepath for search */
     g_object_set_data_full(G_OBJECT(btn), "tree_filepath", g_strdup(full_path), g_free);
+
+    /* Right-click context menu (Open / Open with File Manager).
+     * CAPTURE phase: GtkButton's own click gesture otherwise claims the
+     * sequence before bubble-phase controllers ever see it. */
+    GtkGesture *rc = gtk_gesture_click_new();
+    gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(rc), GDK_BUTTON_SECONDARY);
+    gtk_event_controller_set_propagation_phase(GTK_EVENT_CONTROLLER(rc), GTK_PHASE_CAPTURE);
+    g_signal_connect(rc, "pressed", G_CALLBACK(on_tree_file_right_click),
+                     g_object_get_data(G_OBJECT(btn), "tree_filepath"));
+    gtk_widget_add_controller(btn, GTK_EVENT_CONTROLLER(rc));
 
     return btn;
 }
@@ -1663,7 +2070,7 @@ static GtkWidget *tree_build_dir_row(const char *dir_path, const char *name) {
     gtk_box_append(GTK_BOX(hbox), arrow);
 
     /* Folder icon */
-    GtkWidget *icon = gtk_image_new_from_icon_name("folder-symbolic");
+    GtkWidget *icon = gtk_image_new_from_icon_name(qirtas_icon("folder"));
     gtk_widget_add_css_class(icon, "tree-icon-folder");
     gtk_box_append(GTK_BOX(hbox), icon);
 
@@ -1910,7 +2317,7 @@ static gboolean on_window_key_pressed(GtkEventControllerKey *ctrl,
     /* Open Existing File */
     if (match_app_shortcut("open_file", keyval, keycode, state)) {
         GtkFileDialog *dialog = gtk_file_dialog_new();
-        gtk_file_dialog_set_title(dialog, "Open Existing File");
+        gtk_file_dialog_set_title(dialog, qirtas_tr("Open Existing File"));
         gtk_file_dialog_open(dialog, GTK_WINDOW(gui->window), NULL, on_open_dialog_response, gui);
         return TRUE;
     }
@@ -2075,6 +2482,14 @@ static void activate(GtkApplication *app, gpointer user_data) {
                  "gtk-cursor-aspect-ratio", 0.02, 
                  NULL);
 
+    /* Language + icon style must be loaded BEFORE any widget is built —
+     * qirtas_tr()/qirtas_icon() are called during UI construction. */
+    qirtas_app_language = qirtas_pref_get_int("app_language", 0);
+    qirtas_icon_style   = qirtas_pref_get_int("icon_style", 0);
+    if (qirtas_app_language == 1) {
+        gtk_widget_set_default_direction(GTK_TEXT_DIR_RTL);
+    }
+
     /* ── Window ── */
     GtkWidget *window = adw_application_window_new(app);
     gtk_window_set_title(GTK_WINDOW(window), "Qirtas");
@@ -2099,6 +2514,16 @@ static void activate(GtkApplication *app, gpointer user_data) {
     load_trail_color_settings(gui);
     load_pointer_color_settings(gui);
     gui->active_tab_index = -1;
+
+    /* Editor preferences from the app_prefs store */
+    gui->wrap_lines             = qirtas_pref_get_int("wrap_lines", 1) != 0;
+    gui->show_line_numbers      = qirtas_pref_get_int("show_line_numbers", 1) != 0;
+    gui->highlight_current_line = qirtas_pref_get_int("highlight_current_line", 1) != 0;
+    gui->show_right_margin      = qirtas_pref_get_int("show_right_margin", 0) != 0;
+    gui->right_margin_pos       = qirtas_pref_get_int("right_margin_pos", 80);
+    gui->show_overview_map      = qirtas_pref_get_int("show_overview_map", 0) != 0;
+    gui->restore_session        = qirtas_pref_get_int("restore_session", 1) != 0;
+    gui->compact_mode           = qirtas_pref_get_int("compact_mode", 0) != 0;
 
 
     init_css(gui);
@@ -2231,7 +2656,7 @@ static void activate(GtkApplication *app, gpointer user_data) {
     gtk_widget_set_margin_top(w->box_input, 8);
     gtk_widget_set_margin_bottom(w->box_input, 8);
 
-    GtkWidget *lbl_prompt = gtk_label_new("Enter file name:");
+    GtkWidget *lbl_prompt = gtk_label_new(qirtas_tr("Enter file name:"));
     gtk_widget_add_css_class(lbl_prompt, "pop-section-label");
     gtk_widget_set_halign(lbl_prompt, GTK_ALIGN_START);
     gtk_box_append(GTK_BOX(w->box_input), lbl_prompt);
@@ -2304,7 +2729,7 @@ static void activate(GtkApplication *app, gpointer user_data) {
     gtk_widget_set_margin_top(exp_title_row, 12);
     gtk_widget_set_margin_bottom(exp_title_row, 4);
 
-    GtkWidget *exp_title = gtk_label_new("Notes");
+    GtkWidget *exp_title = gtk_label_new(qirtas_tr("Notes"));
     gtk_widget_add_css_class(exp_title, "explorer-title");
     gtk_widget_set_halign(exp_title, GTK_ALIGN_START);
     gtk_box_append(GTK_BOX(exp_title_row), exp_title);
@@ -2343,15 +2768,8 @@ static void activate(GtkApplication *app, gpointer user_data) {
 
     gui->btn_stats = NULL;
 
-    gui->btn_settings = gtk_button_new();
-    gtk_accessible_update_property(GTK_ACCESSIBLE(gui->btn_settings),
-                                   GTK_ACCESSIBLE_PROPERTY_LABEL,
-                                   "Settings", -1);
-    gtk_button_set_child(GTK_BUTTON(gui->btn_settings),
-        gtk_image_new_from_icon_name("preferences-system-symbolic"));
-    gtk_widget_add_css_class(gui->btn_settings, "nav-btn");
-    gtk_widget_set_tooltip_text(gui->btn_settings, "Settings (Ctrl+,)");
-    gtk_box_append(GTK_BOX(nav_bot), gui->btn_settings);
+    /* Settings moved to the status-bar menu (Ctrl+, still works). */
+    gui->btn_settings = NULL;
 
     /* ============================================================
      * STACK
@@ -2388,17 +2806,20 @@ static void activate(GtkApplication *app, gpointer user_data) {
     gtk_revealer_set_reveal_child(GTK_REVEALER(search_revealer), FALSE);
     gui->search_revealer = search_revealer;
 
-    GtkWidget *sbar_box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
-    gtk_widget_add_css_class(sbar_box, "search-bar-box");
-    gtk_revealer_set_child(GTK_REVEALER(search_revealer), sbar_box);
+    GtkWidget *sbar_outer = gtk_box_new(GTK_ORIENTATION_VERTICAL, 6);
+    gtk_widget_add_css_class(sbar_outer, "search-bar-box");
+    gtk_revealer_set_child(GTK_REVEALER(search_revealer), sbar_outer);
 
-    GtkWidget *sbar_icon = gtk_image_new_from_icon_name("system-search-symbolic");
+    GtkWidget *sbar_box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+    gtk_box_append(GTK_BOX(sbar_outer), sbar_box);
+
+    GtkWidget *sbar_icon = gtk_image_new_from_icon_name(qirtas_icon("search"));
     gtk_box_append(GTK_BOX(sbar_box), sbar_icon);
 
     GtkWidget *search_entry = gtk_search_entry_new();
     gtk_widget_add_css_class(search_entry, "search-entry");
     gtk_search_entry_set_placeholder_text(GTK_SEARCH_ENTRY(search_entry),
-                                           "Search in file…");
+                                           qirtas_tr("Search in file…"));
     gtk_box_append(GTK_BOX(sbar_box), search_entry);
     gui->search_entry = search_entry;
 
@@ -2412,7 +2833,7 @@ static void activate(GtkApplication *app, gpointer user_data) {
                                    GTK_ACCESSIBLE_PROPERTY_LABEL,
                                    "Previous match", -1);
     gtk_widget_add_css_class(btn_prev, "search-nav-btn");
-    gtk_widget_set_tooltip_text(btn_prev, "Previous match");
+    gtk_widget_set_tooltip_text(btn_prev, qirtas_tr("Previous match"));
     gtk_box_append(GTK_BOX(sbar_box), btn_prev);
 
     GtkWidget *btn_next = gtk_button_new_from_icon_name("go-down-symbolic");
@@ -2420,7 +2841,7 @@ static void activate(GtkApplication *app, gpointer user_data) {
                                    GTK_ACCESSIBLE_PROPERTY_LABEL,
                                    "Next match", -1);
     gtk_widget_add_css_class(btn_next, "search-nav-btn");
-    gtk_widget_set_tooltip_text(btn_next, "Next match");
+    gtk_widget_set_tooltip_text(btn_next, qirtas_tr("Next match"));
     gtk_box_append(GTK_BOX(sbar_box), btn_next);
 
     GtkWidget *btn_close_s = gtk_button_new_from_icon_name("window-close-symbolic");
@@ -2428,10 +2849,35 @@ static void activate(GtkApplication *app, gpointer user_data) {
                                    GTK_ACCESSIBLE_PROPERTY_LABEL,
                                    "Close search bar", -1);
     gtk_widget_add_css_class(btn_close_s, "search-nav-btn");
-    gtk_widget_set_tooltip_text(btn_close_s, "Close (Esc)");
+    gtk_widget_set_tooltip_text(btn_close_s, qirtas_tr("Close (Esc)"));
     gtk_widget_set_hexpand(btn_close_s, TRUE);
     gtk_widget_set_halign(btn_close_s, GTK_ALIGN_END);
     gtk_box_append(GTK_BOX(sbar_box), btn_close_s);
+
+    /* ── Replace row ── */
+    GtkWidget *rbar_box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+    gtk_box_append(GTK_BOX(sbar_outer), rbar_box);
+
+    GtkWidget *rbar_icon = gtk_image_new_from_icon_name("edit-find-replace-symbolic");
+    gtk_box_append(GTK_BOX(rbar_box), rbar_icon);
+
+    GtkWidget *replace_entry = gtk_entry_new();
+    gtk_widget_add_css_class(replace_entry, "search-entry");
+    gtk_entry_set_placeholder_text(GTK_ENTRY(replace_entry), qirtas_tr("Replace with…"));
+    gtk_box_append(GTK_BOX(rbar_box), replace_entry);
+    gui->replace_entry = replace_entry;
+
+    GtkWidget *btn_replace = gtk_button_new_with_label(qirtas_tr("Replace"));
+    gtk_widget_add_css_class(btn_replace, "search-nav-btn");
+    gtk_widget_set_tooltip_text(btn_replace, qirtas_tr("Replace current match"));
+    g_signal_connect(btn_replace, "clicked", G_CALLBACK(on_replace_clicked), gui);
+    gtk_box_append(GTK_BOX(rbar_box), btn_replace);
+
+    GtkWidget *btn_replace_all = gtk_button_new_with_label(qirtas_tr("All"));
+    gtk_widget_add_css_class(btn_replace_all, "search-nav-btn");
+    gtk_widget_set_tooltip_text(btn_replace_all, qirtas_tr("Replace all matches"));
+    g_signal_connect(btn_replace_all, "clicked", G_CALLBACK(on_replace_all_clicked), gui);
+    gtk_box_append(GTK_BOX(rbar_box), btn_replace_all);
 
     GtkWidget *scrolled = gtk_scrolled_window_new();
     gui->scrolled = scrolled;
@@ -2473,37 +2919,49 @@ static void activate(GtkApplication *app, gpointer user_data) {
     /* Append search bar after content so it sits at the bottom */
     gtk_box_append(GTK_BOX(editor_page), search_revealer);
 
-    GtkWidget *virtual_layout_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
-    gui->virtual_layout_box = virtual_layout_box;
-
-    gui->top_spacer = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
-    gtk_widget_set_vexpand(gui->top_spacer, FALSE);
-    gtk_widget_set_valign(gui->top_spacer, GTK_ALIGN_START);
-    gtk_box_append(GTK_BOX(virtual_layout_box), gui->top_spacer);
-
+    /* The source view is the scrolled window's DIRECT child, so it acts
+     * as a native GtkScrollable. GTK then validates Pango layout lazily
+     * (visible lines only) instead of allocating the widget at full
+     * document height — that full-height layout froze the UI for
+     * seconds when opening big files, and made every keystroke
+     * re-validate the whole document. It also lets GtkTextView's own
+     * scroll-to-cursor logic work, so the viewport tracks the caret in
+     * the same frame. Do NOT wrap it in a GtkBox again. */
     GtkWidget *source_view = gtk_source_view_new();
     gtk_text_view_set_wrap_mode(GTK_TEXT_VIEW(source_view), GTK_WRAP_WORD_CHAR);
     gtk_widget_set_hexpand(source_view, TRUE);
     gtk_widget_set_vexpand(source_view, TRUE);
     gtk_widget_set_halign(source_view, GTK_ALIGN_FILL);
     gtk_widget_set_valign(source_view, GTK_ALIGN_FILL);
-    gtk_widget_set_margin_start(source_view, 0);
-    gtk_widget_set_margin_end(source_view, 0);
-    gtk_widget_set_margin_top(source_view, 0);
-    gtk_widget_set_margin_bottom(source_view, 0);
     gtk_widget_add_css_class(source_view, "editor-source");
-    gtk_box_append(GTK_BOX(virtual_layout_box), source_view);
     gui->source_view = source_view;
 
-    gui->bottom_spacer = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
-    gtk_widget_set_vexpand(gui->bottom_spacer, FALSE);
-    gtk_widget_set_valign(gui->bottom_spacer, GTK_ALIGN_START);
-    gtk_box_append(GTK_BOX(virtual_layout_box), gui->bottom_spacer);
+    /* Legacy aliases from the old virtual-layout box; coordinate
+     * conversions that targeted the box now resolve to the view itself. */
+    gui->virtual_layout_box = source_view;
+    gui->top_spacer = NULL;
+    gui->bottom_spacer = NULL;
 
-    gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(scrolled), virtual_layout_box);
+    gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(scrolled), source_view);
 
     GtkAdjustment *vadj = gtk_scrolled_window_get_vadjustment(GTK_SCROLLED_WINDOW(scrolled));
     gui->vadjustment = vadj;
+
+    /* Overview map — floats over the right edge of the paper card */
+    GtkWidget *source_map = gtk_source_map_new();
+    gtk_source_map_set_view(GTK_SOURCE_MAP(source_map), GTK_SOURCE_VIEW(source_view));
+    gtk_widget_add_css_class(source_map, "overview-map");
+    gtk_widget_set_halign(source_map, GTK_ALIGN_END);
+    gtk_widget_set_valign(source_map, GTK_ALIGN_FILL);
+    gtk_widget_set_margin_end(source_map, 30);
+    gtk_widget_set_margin_top(source_map, 26);
+    gtk_widget_set_margin_bottom(source_map, 22);
+    gtk_widget_set_visible(source_map, gui->show_overview_map);
+    gtk_overlay_add_overlay(GTK_OVERLAY(editor_overlay), source_map);
+    gtk_overlay_set_measure_overlay(GTK_OVERLAY(editor_overlay), source_map, FALSE);
+    gui->source_map = source_map;
+
+    apply_editor_prefs(gui);
 
 
     /* Typography & Render spacing (line height equivalent) */
@@ -2526,6 +2984,10 @@ static void activate(GtkApplication *app, gpointer user_data) {
     gtk_source_view_set_indent_width(GTK_SOURCE_VIEW(source_view), 4);
     gtk_source_view_set_insert_spaces_instead_of_tabs(GTK_SOURCE_VIEW(source_view), TRUE);
     gtk_source_view_set_smart_backspace(GTK_SOURCE_VIEW(source_view), TRUE);
+
+    /* Re-apply stored editor prefs AFTER the hard-coded defaults above
+     * so user settings (wrap, line numbers, margins…) win. */
+    apply_editor_prefs(gui);
 
     /* Markdown syntax highlighting */
     GtkSourceBuffer *src_buf =
@@ -2635,13 +3097,13 @@ static void activate(GtkApplication *app, gpointer user_data) {
     gtk_widget_set_margin_bottom(pop_box, 14);
 
     /* --- VAULT GROUP --- */
-    GtkWidget *vault_lbl = gtk_label_new("VAULT");
+    GtkWidget *vault_lbl = gtk_label_new(qirtas_tr("VAULT"));
     gtk_widget_add_css_class(vault_lbl, "pop-section-label");
     gtk_widget_set_halign(vault_lbl, GTK_ALIGN_START);
     gtk_box_append(GTK_BOX(pop_box), vault_lbl);
 
     GtkWidget *vault_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
-    GtkWidget *vault_path_lbl = gtk_label_new("Current Vault");
+    GtkWidget *vault_path_lbl = gtk_label_new(qirtas_tr("Current Vault"));
     gtk_widget_set_hexpand(vault_path_lbl, TRUE);
     gtk_widget_set_halign(vault_path_lbl, GTK_ALIGN_START);
 
@@ -2666,13 +3128,13 @@ static void activate(GtkApplication *app, gpointer user_data) {
 
     gtk_box_append(GTK_BOX(pop_box), gtk_separator_new(GTK_ORIENTATION_HORIZONTAL));
 
-    GtkWidget *th_lbl = gtk_label_new("THEME");
+    GtkWidget *th_lbl = gtk_label_new(qirtas_tr("THEME"));
     gtk_widget_add_css_class(th_lbl, "pop-section-label");
     gtk_widget_set_halign(th_lbl, GTK_ALIGN_START);
     gtk_box_append(GTK_BOX(pop_box), th_lbl);
 
     GtkWidget *theme_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
-    GtkWidget *theme_label = gtk_label_new("Theme");
+    GtkWidget *theme_label = gtk_label_new(qirtas_tr("Theme"));
     gtk_widget_set_hexpand(theme_label, TRUE);
     gtk_widget_set_halign(theme_label, GTK_ALIGN_START);
 
@@ -2684,6 +3146,7 @@ static void activate(GtkApplication *app, gpointer user_data) {
         "Typewriter Light",
         "Typewriter Dark",
         "Qirtas Ink",
+        "Qirtas Ink Dark",
         "Add Custom Theme...",
         NULL
     };
@@ -2696,7 +3159,8 @@ static void activate(GtkApplication *app, gpointer user_data) {
     else if (strcmp(current_theme, "typewriter-light") == 0) theme_idx = 4;
     else if (strcmp(current_theme, "typewriter-dark") == 0) theme_idx = 5;
     else if (strcmp(current_theme, "qirtas") == 0) theme_idx = 6;
-    else if (strcmp(current_theme, "custom") == 0) theme_idx = 7;
+    else if (strcmp(current_theme, "qirtas-dark") == 0) theme_idx = 7;
+    else if (strcmp(current_theme, "custom") == 0) theme_idx = 8;
     gtk_drop_down_set_selected(GTK_DROP_DOWN(theme_dropdown), theme_idx);
     
     g_signal_connect(theme_dropdown, "notify::selected", G_CALLBACK(on_theme_dropdown_changed), gui);
@@ -2707,28 +3171,98 @@ static void activate(GtkApplication *app, gpointer user_data) {
 
     gtk_box_append(GTK_BOX(pop_box), gtk_separator_new(GTK_ORIENTATION_HORIZONTAL));
 
-    GtkWidget *pr_lbl = gtk_label_new("PREFERENCES");
+    GtkWidget *gen_lbl = gtk_label_new(qirtas_tr("GENERAL"));
+    gtk_widget_add_css_class(gen_lbl, "pop-section-label");
+    gtk_widget_set_halign(gen_lbl, GTK_ALIGN_START);
+    gtk_box_append(GTK_BOX(pop_box), gen_lbl);
+
+    GtkWidget *lang_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
+    GtkWidget *lang_lbl = gtk_label_new(qirtas_tr("Language"));
+    gtk_widget_set_hexpand(lang_lbl, TRUE);
+    gtk_widget_set_halign(lang_lbl, GTK_ALIGN_START);
+    const char *languages[] = { "English", "العربية", NULL };
+    GtkWidget *lang_dropdown = gtk_drop_down_new_from_strings(languages);
+    gtk_drop_down_set_selected(GTK_DROP_DOWN(lang_dropdown), qirtas_app_language == 1 ? 1 : 0);
+    gtk_widget_set_tooltip_text(lang_dropdown, "Layout flips immediately; labels change on next launch");
+    g_signal_connect(lang_dropdown, "notify::selected", G_CALLBACK(on_language_changed), gui);
+    gtk_box_append(GTK_BOX(lang_row), lang_lbl);
+    gtk_box_append(GTK_BOX(lang_row), lang_dropdown);
+    gtk_box_append(GTK_BOX(pop_box), lang_row);
+
+    GtkWidget *icon_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
+    GtkWidget *icon_lbl = gtk_label_new(qirtas_tr("Icon Style"));
+    gtk_widget_set_hexpand(icon_lbl, TRUE);
+    gtk_widget_set_halign(icon_lbl, GTK_ALIGN_START);
+    const char *icon_styles[] = { "Classic", "Modern", NULL };
+    GtkWidget *icon_dropdown = gtk_drop_down_new_from_strings(icon_styles);
+    gtk_drop_down_set_selected(GTK_DROP_DOWN(icon_dropdown), qirtas_icon_style == 1 ? 1 : 0);
+    gtk_widget_set_tooltip_text(icon_dropdown, "Takes effect on next launch");
+    g_signal_connect(icon_dropdown, "notify::selected", G_CALLBACK(on_icon_style_changed), gui);
+    gtk_box_append(GTK_BOX(icon_row), icon_lbl);
+    gtk_box_append(GTK_BOX(icon_row), icon_dropdown);
+    gtk_box_append(GTK_BOX(pop_box), icon_row);
+
+    gtk_box_append(GTK_BOX(pop_box), gtk_separator_new(GTK_ORIENTATION_HORIZONTAL));
+
+    GtkWidget *pr_lbl = gtk_label_new(qirtas_tr("PREFERENCES"));
     gtk_widget_add_css_class(pr_lbl, "pop-section-label");
     gtk_widget_set_halign(pr_lbl, GTK_ALIGN_START);
     gtk_box_append(GTK_BOX(pop_box), pr_lbl);
 
-    GtkWidget *wrap_chk = gtk_check_button_new_with_label("Word Wrap");
+    GtkWidget *wrap_chk = gtk_check_button_new_with_label(qirtas_tr("Wrap Lines Automatically"));
     gui->wrap_chk = wrap_chk;
-    gtk_check_button_set_active(GTK_CHECK_BUTTON(wrap_chk), FALSE);
-    g_signal_connect(wrap_chk, "toggled", G_CALLBACK(on_wrap_toggled), source_view);
-    gtk_widget_set_sensitive(wrap_chk, FALSE);
-    gtk_widget_set_tooltip_text(
-        wrap_chk,
-        "Disabled while virtual scrolling uses fixed logical line heights.");
+    gtk_check_button_set_active(GTK_CHECK_BUTTON(wrap_chk), gui->wrap_lines);
+    g_signal_connect(wrap_chk, "toggled", G_CALLBACK(on_wrap_toggled), gui);
     gtk_box_append(GTK_BOX(pop_box), wrap_chk);
 
-    GtkWidget *trail_chk = gtk_check_button_new_with_label("Pointer Trail Animation");
+    GtkWidget *ln_chk = gtk_check_button_new_with_label(qirtas_tr("Display Line Numbers"));
+    gtk_check_button_set_active(GTK_CHECK_BUTTON(ln_chk), gui->show_line_numbers);
+    g_signal_connect(ln_chk, "toggled", G_CALLBACK(on_line_numbers_toggled), gui);
+    gtk_box_append(GTK_BOX(pop_box), ln_chk);
+
+    GtkWidget *hl_chk = gtk_check_button_new_with_label(qirtas_tr("Highlight Current Line"));
+    gtk_check_button_set_active(GTK_CHECK_BUTTON(hl_chk), gui->highlight_current_line);
+    g_signal_connect(hl_chk, "toggled", G_CALLBACK(on_highlight_line_toggled), gui);
+    gtk_box_append(GTK_BOX(pop_box), hl_chk);
+
+    GtkWidget *map_chk = gtk_check_button_new_with_label(qirtas_tr("Display Overview Map"));
+    gtk_check_button_set_active(GTK_CHECK_BUTTON(map_chk), gui->show_overview_map);
+    g_signal_connect(map_chk, "toggled", G_CALLBACK(on_overview_map_toggled), gui);
+    gtk_box_append(GTK_BOX(pop_box), map_chk);
+
+    GtkWidget *rm_chk = gtk_check_button_new_with_label(qirtas_tr("Show Right Margin"));
+    gtk_check_button_set_active(GTK_CHECK_BUTTON(rm_chk), gui->show_right_margin);
+    g_signal_connect(rm_chk, "toggled", G_CALLBACK(on_right_margin_toggled), gui);
+    gtk_box_append(GTK_BOX(pop_box), rm_chk);
+
+    GtkWidget *rm_pos_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
+    GtkWidget *rm_pos_lbl = gtk_label_new(qirtas_tr("Margin Position"));
+    gtk_widget_set_hexpand(rm_pos_lbl, TRUE);
+    gtk_widget_set_halign(rm_pos_lbl, GTK_ALIGN_START);
+    GtkWidget *rm_pos_spin = gtk_spin_button_new_with_range(20.0, 200.0, 1.0);
+    gtk_spin_button_set_value(GTK_SPIN_BUTTON(rm_pos_spin), (double)gui->right_margin_pos);
+    g_signal_connect(rm_pos_spin, "value-changed", G_CALLBACK(on_right_margin_pos_changed), gui);
+    gtk_box_append(GTK_BOX(rm_pos_row), rm_pos_lbl);
+    gtk_box_append(GTK_BOX(rm_pos_row), rm_pos_spin);
+    gtk_box_append(GTK_BOX(pop_box), rm_pos_row);
+
+    GtkWidget *restore_chk = gtk_check_button_new_with_label(qirtas_tr("Restore Session on Startup"));
+    gtk_check_button_set_active(GTK_CHECK_BUTTON(restore_chk), gui->restore_session);
+    g_signal_connect(restore_chk, "toggled", G_CALLBACK(on_restore_session_toggled), gui);
+    gtk_box_append(GTK_BOX(pop_box), restore_chk);
+
+    GtkWidget *compact_chk = gtk_check_button_new_with_label(qirtas_tr("Compact Layout"));
+    gtk_check_button_set_active(GTK_CHECK_BUTTON(compact_chk), gui->compact_mode);
+    g_signal_connect(compact_chk, "toggled", G_CALLBACK(on_compact_mode_toggled), gui);
+    gtk_box_append(GTK_BOX(pop_box), compact_chk);
+
+    GtkWidget *trail_chk = gtk_check_button_new_with_label(qirtas_tr("Pointer Trail Animation"));
     gtk_check_button_set_active(GTK_CHECK_BUTTON(trail_chk), gui->enable_cursor_trail);
     g_signal_connect(trail_chk, "toggled", G_CALLBACK(on_trail_toggled), gui);
     gtk_box_append(GTK_BOX(pop_box), trail_chk);
 
     GtkWidget *trail_color_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
-    GtkWidget *trail_color_lbl = gtk_label_new("Trail Color");
+    GtkWidget *trail_color_lbl = gtk_label_new(qirtas_tr("Trail Color"));
     gtk_widget_set_hexpand(trail_color_lbl, TRUE);
     gtk_widget_set_halign(trail_color_lbl, GTK_ALIGN_START);
     gtk_box_append(GTK_BOX(trail_color_row), trail_color_lbl);
@@ -2742,7 +3276,7 @@ static void activate(GtkApplication *app, gpointer user_data) {
     gtk_box_append(GTK_BOX(trail_color_row), trail_color_btn);
     gui->trail_color_btn = trail_color_btn;
 
-    GtkWidget *trail_color_custom_chk = gtk_check_button_new_with_label("Custom");
+    GtkWidget *trail_color_custom_chk = gtk_check_button_new_with_label(qirtas_tr("Custom"));
     gtk_check_button_set_active(GTK_CHECK_BUTTON(trail_color_custom_chk), gui->use_custom_trail_color);
     g_signal_connect(trail_color_custom_chk, "toggled", G_CALLBACK(on_trail_color_custom_toggled), gui);
     gtk_box_append(GTK_BOX(trail_color_row), trail_color_custom_chk);
@@ -2751,7 +3285,7 @@ static void activate(GtkApplication *app, gpointer user_data) {
     gtk_box_append(GTK_BOX(pop_box), trail_color_row);
 
     GtkWidget *pointer_color_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
-    GtkWidget *pointer_color_lbl = gtk_label_new("Pointer Color");
+    GtkWidget *pointer_color_lbl = gtk_label_new(qirtas_tr("Pointer Color"));
     gtk_widget_set_hexpand(pointer_color_lbl, TRUE);
     gtk_widget_set_halign(pointer_color_lbl, GTK_ALIGN_START);
     gtk_box_append(GTK_BOX(pointer_color_row), pointer_color_lbl);
@@ -2763,7 +3297,7 @@ static void activate(GtkApplication *app, gpointer user_data) {
     gtk_box_append(GTK_BOX(pointer_color_row), pointer_color_btn);
     gui->pointer_color_btn = pointer_color_btn;
 
-    GtkWidget *pointer_color_custom_chk = gtk_check_button_new_with_label("Custom");
+    GtkWidget *pointer_color_custom_chk = gtk_check_button_new_with_label(qirtas_tr("Custom"));
     gtk_check_button_set_active(GTK_CHECK_BUTTON(pointer_color_custom_chk), gui->use_custom_pointer_color);
     g_signal_connect(pointer_color_custom_chk, "toggled", G_CALLBACK(on_pointer_color_custom_toggled), gui);
     gtk_box_append(GTK_BOX(pointer_color_row), pointer_color_custom_chk);
@@ -2773,7 +3307,7 @@ static void activate(GtkApplication *app, gpointer user_data) {
 
 
     GtkWidget *font_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
-    GtkWidget *font_lbl = gtk_label_new("Font Size");
+    GtkWidget *font_lbl = gtk_label_new(qirtas_tr("Font Size"));
     gtk_widget_set_hexpand(font_lbl, TRUE);
     gtk_widget_set_halign(font_lbl, GTK_ALIGN_START);
     GtkWidget *font_spin = gtk_spin_button_new_with_range(10.0, 26.0, 1.0);
@@ -2786,7 +3320,7 @@ static void activate(GtkApplication *app, gpointer user_data) {
 
     // English Font Selection
     GtkWidget *en_font_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
-    GtkWidget *en_font_lbl = gtk_label_new("English Font");
+    GtkWidget *en_font_lbl = gtk_label_new(qirtas_tr("English Font"));
     gtk_widget_set_hexpand(en_font_lbl, TRUE);
     gtk_widget_set_halign(en_font_lbl, GTK_ALIGN_START);
     const char *en_fonts[] = {
@@ -2816,7 +3350,7 @@ static void activate(GtkApplication *app, gpointer user_data) {
 
     // Arabic Font Selection
     GtkWidget *ar_font_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
-    GtkWidget *ar_font_lbl = gtk_label_new("Arabic Font");
+    GtkWidget *ar_font_lbl = gtk_label_new(qirtas_tr("Arabic Font"));
     gtk_widget_set_hexpand(ar_font_lbl, TRUE);
     gtk_widget_set_halign(ar_font_lbl, GTK_ALIGN_START);
     const char *ar_fonts[] = {
@@ -2844,7 +3378,7 @@ static void activate(GtkApplication *app, gpointer user_data) {
 
     gtk_box_append(GTK_BOX(pop_box), gtk_separator_new(GTK_ORIENTATION_HORIZONTAL));
 
-    GtkWidget *layout_lbl = gtk_label_new("LAYOUT PREFERENCES");
+    GtkWidget *layout_lbl = gtk_label_new(qirtas_tr("LAYOUT PREFERENCES"));
     gtk_widget_add_css_class(layout_lbl, "pop-section-label");
     gtk_widget_set_halign(layout_lbl, GTK_ALIGN_START);
     gtk_box_append(GTK_BOX(pop_box), layout_lbl);
@@ -2855,7 +3389,7 @@ static void activate(GtkApplication *app, gpointer user_data) {
         NULL
     };
     GtkWidget *sb_pos_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
-    GtkWidget *sb_pos_lbl = gtk_label_new("Status Bar Position");
+    GtkWidget *sb_pos_lbl = gtk_label_new(qirtas_tr("Status Bar Position"));
     gtk_widget_set_hexpand(sb_pos_lbl, TRUE);
     gtk_widget_set_halign(sb_pos_lbl, GTK_ALIGN_START);
     gui->sb_pos_dropdown = gtk_drop_down_new_from_strings(status_bar_positions);
@@ -2871,7 +3405,7 @@ static void activate(GtkApplication *app, gpointer user_data) {
         NULL
     };
     GtkWidget *sb_side_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
-    GtkWidget *sb_side_lbl = gtk_label_new("Sidebar Side");
+    GtkWidget *sb_side_lbl = gtk_label_new(qirtas_tr("Sidebar Side"));
     gtk_widget_set_hexpand(sb_side_lbl, TRUE);
     gtk_widget_set_halign(sb_side_lbl, GTK_ALIGN_START);
     gui->sb_side_dropdown = gtk_drop_down_new_from_strings(sidebar_sides);
@@ -2881,22 +3415,22 @@ static void activate(GtkApplication *app, gpointer user_data) {
     gtk_box_append(GTK_BOX(sb_side_row), gui->sb_side_dropdown);
     gtk_box_append(GTK_BOX(pop_box), sb_side_row);
 
-    gui->divider_chk = gtk_check_button_new_with_label("Show layout dividers");
+    gui->divider_chk = gtk_check_button_new_with_label(qirtas_tr("Show layout dividers"));
     gtk_check_button_set_active(GTK_CHECK_BUTTON(gui->divider_chk), gui->show_layout_dividers);
     g_signal_connect(gui->divider_chk, "toggled", G_CALLBACK(on_layout_dividers_toggled), gui);
     gtk_box_append(GTK_BOX(pop_box), gui->divider_chk);
 
-    GtkWidget *bottom_margin_chk = gtk_check_button_new_with_label("Scroll past end (extra bottom space)");
+    GtkWidget *bottom_margin_chk = gtk_check_button_new_with_label(qirtas_tr("Scroll past end (extra bottom space)"));
     gtk_check_button_set_active(GTK_CHECK_BUTTON(bottom_margin_chk), gui->enable_bottom_margin);
     g_signal_connect(bottom_margin_chk, "toggled", G_CALLBACK(on_bottom_margin_toggled), gui);
     gtk_box_append(GTK_BOX(pop_box), bottom_margin_chk);
 
-    gui->focus_chk = gtk_check_button_new_with_label("Focus Mode");
+    gui->focus_chk = gtk_check_button_new_with_label(qirtas_tr("Focus Mode"));
     gtk_check_button_set_active(GTK_CHECK_BUTTON(gui->focus_chk), gui->enable_focus_mode);
     g_signal_connect(gui->focus_chk, "toggled", G_CALLBACK(on_focus_mode_toggled), gui);
     gtk_box_append(GTK_BOX(pop_box), gui->focus_chk);
 
-    GtkWidget *border_chk = gtk_check_button_new_with_label("Show editor border");
+    GtkWidget *border_chk = gtk_check_button_new_with_label(qirtas_tr("Show editor border"));
     gtk_check_button_set_active(GTK_CHECK_BUTTON(border_chk), gui->enable_editor_border);
     g_signal_connect(border_chk, "toggled", G_CALLBACK(on_editor_border_toggled), gui);
     gtk_box_append(GTK_BOX(pop_box), border_chk);
@@ -2904,16 +3438,16 @@ static void activate(GtkApplication *app, gpointer user_data) {
 
 
     /* ── KEYBOARD SHORTCUTS ── */
-    GtkWidget *kb_lbl = gtk_label_new("KEYBOARD SHORTCUTS");
+    GtkWidget *kb_lbl = gtk_label_new(qirtas_tr("KEYBOARD SHORTCUTS"));
     gtk_widget_add_css_class(kb_lbl, "pop-section-label");
     gtk_widget_set_halign(kb_lbl, GTK_ALIGN_START);
     gtk_box_append(GTK_BOX(pop_box), kb_lbl);
 
     GtkWidget *kb_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
-    GtkWidget *kb_lbl_widget = gtk_label_new("Keyboard Shortcuts");
+    GtkWidget *kb_lbl_widget = gtk_label_new(qirtas_tr("Keyboard Shortcuts"));
     gtk_widget_set_hexpand(kb_lbl_widget, TRUE);
     gtk_widget_set_halign(kb_lbl_widget, GTK_ALIGN_START);
-    GtkWidget *kb_open_btn = gtk_button_new_with_label("Open Reference  (Ctrl+?)");
+    GtkWidget *kb_open_btn = gtk_button_new_with_label(qirtas_tr("Open Reference  (Ctrl+?)"));
     gtk_widget_add_css_class(kb_open_btn, "pop-btn");
     g_signal_connect_swapped(kb_open_btn, "clicked", G_CALLBACK(show_keybindings_window), gui);
     gtk_box_append(GTK_BOX(kb_row), kb_lbl_widget);
@@ -2923,7 +3457,7 @@ static void activate(GtkApplication *app, gpointer user_data) {
     // Sync & Cloud Layout
     gtk_box_append(GTK_BOX(pop_box), gtk_separator_new(GTK_ORIENTATION_HORIZONTAL));
 
-    GtkWidget *sync_lbl = gtk_label_new("SYNC & CLOUD");
+    GtkWidget *sync_lbl = gtk_label_new(qirtas_tr("SYNC & CLOUD"));
     gtk_widget_add_css_class(sync_lbl, "pop-section-label");
     gtk_widget_set_halign(sync_lbl, GTK_ALIGN_START);
     gtk_box_append(GTK_BOX(pop_box), sync_lbl);
@@ -2935,15 +3469,15 @@ static void activate(GtkApplication *app, gpointer user_data) {
 
     GtkWidget *gd_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
     gtk_widget_add_css_class(gd_row, "sync-card-header");
-    GtkWidget *gd_lbl = gtk_label_new("Google Drive:");
+    GtkWidget *gd_lbl = gtk_label_new(qirtas_tr("Google Drive:"));
     gtk_widget_add_css_class(gd_lbl, "stats-label");
     gtk_widget_add_css_class(gd_lbl, "sync-card-title");
-    gui->sync_status_lbl = gtk_label_new("Disconnected");
+    gui->sync_status_lbl = gtk_label_new(qirtas_tr("Disconnected"));
     gtk_widget_add_css_class(gui->sync_status_lbl, "stats-value");
     gtk_widget_add_css_class(gui->sync_status_lbl, "sync-card-status");
     gtk_widget_set_halign(gui->sync_status_lbl, GTK_ALIGN_START);
     gtk_widget_set_hexpand(gui->sync_status_lbl, TRUE);
-    gui->sync_connect_btn = gtk_button_new_with_label("Connect to Google Drive");
+    gui->sync_connect_btn = gtk_button_new_with_label(qirtas_tr("Connect to Google Drive"));
     gtk_widget_add_css_class(gui->sync_connect_btn, "pop-btn");
     gtk_widget_add_css_class(gui->sync_connect_btn, "sync-card-action");
     gtk_widget_set_hexpand(gui->sync_connect_btn, TRUE);
@@ -2954,7 +3488,7 @@ static void activate(GtkApplication *app, gpointer user_data) {
     gtk_box_append(GTK_BOX(gd_card), gd_row);
     gtk_box_append(GTK_BOX(gd_card), gui->sync_connect_btn);
 
-    gui->sync_now_btn = gtk_button_new_with_label("Sync Now");
+    gui->sync_now_btn = gtk_button_new_with_label(qirtas_tr("Sync Now"));
     gtk_widget_add_css_class(gui->sync_now_btn, "sync-now-btn");
     gtk_widget_add_css_class(gui->sync_now_btn, "sync-card-action");
     gtk_widget_set_sensitive(gui->sync_now_btn, FALSE);
@@ -2971,15 +3505,15 @@ static void activate(GtkApplication *app, gpointer user_data) {
 
     GtkWidget *db_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
     gtk_widget_add_css_class(db_row, "sync-card-header");
-    GtkWidget *db_lbl_sec = gtk_label_new("Dropbox:");
+    GtkWidget *db_lbl_sec = gtk_label_new(qirtas_tr("Dropbox:"));
     gtk_widget_add_css_class(db_lbl_sec, "stats-label");
     gtk_widget_add_css_class(db_lbl_sec, "sync-card-title");
-    gui->dropbox_status_lbl = gtk_label_new("Disconnected");
+    gui->dropbox_status_lbl = gtk_label_new(qirtas_tr("Disconnected"));
     gtk_widget_add_css_class(gui->dropbox_status_lbl, "stats-value");
     gtk_widget_add_css_class(gui->dropbox_status_lbl, "sync-card-status");
     gtk_widget_set_halign(gui->dropbox_status_lbl, GTK_ALIGN_START);
     gtk_widget_set_hexpand(gui->dropbox_status_lbl, TRUE);
-    gui->dropbox_connect_btn = gtk_button_new_with_label("Connect to Dropbox");
+    gui->dropbox_connect_btn = gtk_button_new_with_label(qirtas_tr("Connect to Dropbox"));
     gtk_widget_add_css_class(gui->dropbox_connect_btn, "pop-btn");
     gtk_widget_add_css_class(gui->dropbox_connect_btn, "sync-card-action");
     gtk_widget_set_hexpand(gui->dropbox_connect_btn, TRUE);
@@ -2990,7 +3524,7 @@ static void activate(GtkApplication *app, gpointer user_data) {
     gtk_box_append(GTK_BOX(db_card), db_row);
     gtk_box_append(GTK_BOX(db_card), gui->dropbox_connect_btn);
 
-    gui->dropbox_now_btn = gtk_button_new_with_label("Sync Now");
+    gui->dropbox_now_btn = gtk_button_new_with_label(qirtas_tr("Sync Now"));
     gtk_widget_add_css_class(gui->dropbox_now_btn, "sync-now-btn");
     gtk_widget_add_css_class(gui->dropbox_now_btn, "sync-card-action");
     gtk_widget_set_sensitive(gui->dropbox_now_btn, FALSE);
@@ -3007,15 +3541,15 @@ static void activate(GtkApplication *app, gpointer user_data) {
 
     GtkWidget *gh_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
     gtk_widget_add_css_class(gh_row, "sync-card-header");
-    GtkWidget *gh_lbl_sec = gtk_label_new("GitHub:");
+    GtkWidget *gh_lbl_sec = gtk_label_new(qirtas_tr("GitHub:"));
     gtk_widget_add_css_class(gh_lbl_sec, "stats-label");
     gtk_widget_add_css_class(gh_lbl_sec, "sync-card-title");
-    gui->github_status_lbl = gtk_label_new("Disconnected");
+    gui->github_status_lbl = gtk_label_new(qirtas_tr("Disconnected"));
     gtk_widget_add_css_class(gui->github_status_lbl, "stats-value");
     gtk_widget_add_css_class(gui->github_status_lbl, "sync-card-status");
     gtk_widget_set_halign(gui->github_status_lbl, GTK_ALIGN_START);
     gtk_widget_set_hexpand(gui->github_status_lbl, TRUE);
-    gui->github_connect_btn = gtk_button_new_with_label("Connect to GitHub");
+    gui->github_connect_btn = gtk_button_new_with_label(qirtas_tr("Connect to GitHub"));
     gtk_widget_add_css_class(gui->github_connect_btn, "pop-btn");
     gtk_widget_add_css_class(gui->github_connect_btn, "sync-card-action");
     gtk_widget_set_hexpand(gui->github_connect_btn, TRUE);
@@ -3026,7 +3560,7 @@ static void activate(GtkApplication *app, gpointer user_data) {
     gtk_box_append(GTK_BOX(gh_card), gh_row);
     gtk_box_append(GTK_BOX(gh_card), gui->github_connect_btn);
 
-    gui->github_now_btn = gtk_button_new_with_label("Sync Now");
+    gui->github_now_btn = gtk_button_new_with_label(qirtas_tr("Sync Now"));
     gtk_widget_add_css_class(gui->github_now_btn, "sync-now-btn");
     gtk_widget_add_css_class(gui->github_now_btn, "sync-card-action");
     gtk_widget_set_sensitive(gui->github_now_btn, FALSE);
@@ -3043,7 +3577,7 @@ static void activate(GtkApplication *app, gpointer user_data) {
 
     GtkWidget *local_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
     gtk_widget_add_css_class(local_row, "sync-card-header");
-    GtkWidget *local_lbl_sec = gtk_label_new("Local / Syncthing:");
+    GtkWidget *local_lbl_sec = gtk_label_new(qirtas_tr("Local / Syncthing:"));
     gtk_widget_add_css_class(local_lbl_sec, "stats-label");
     gtk_widget_add_css_class(local_lbl_sec, "sync-card-title");
     gui->local_sync_status_lbl = gtk_label_new("~/QirtasSync");
@@ -3051,7 +3585,7 @@ static void activate(GtkApplication *app, gpointer user_data) {
     gtk_widget_add_css_class(gui->local_sync_status_lbl, "sync-card-status");
     gtk_widget_set_halign(gui->local_sync_status_lbl, GTK_ALIGN_START);
     gtk_widget_set_hexpand(gui->local_sync_status_lbl, TRUE);
-    gui->local_sync_btn = gtk_button_new_with_label("Sync Folder");
+    gui->local_sync_btn = gtk_button_new_with_label(qirtas_tr("Sync Folder"));
     gtk_widget_add_css_class(gui->local_sync_btn, "pop-btn");
     gtk_widget_add_css_class(gui->local_sync_btn, "sync-card-action");
     gtk_widget_set_hexpand(gui->local_sync_btn, TRUE);
@@ -3086,7 +3620,6 @@ static void activate(GtkApplication *app, gpointer user_data) {
      * ============================================================ */
     if (gui->btn_editor) g_signal_connect(gui->btn_editor,   "clicked", G_CALLBACK(on_editor_clicked), gui);
     if (gui->btn_files)    g_signal_connect(gui->btn_files,    "clicked", G_CALLBACK(on_files_clicked),  gui);
-    if (gui->btn_settings) g_signal_connect(gui->btn_settings, "clicked", G_CALLBACK(on_settings_btn_clicked), gui);
 
     // Track text changes to update word/character counts
     g_signal_connect(src_buf, "changed", G_CALLBACK(on_buffer_changed), gui);
@@ -3136,9 +3669,9 @@ static void activate(GtkApplication *app, gpointer user_data) {
                                    GTK_ACCESSIBLE_PROPERTY_LABEL,
                                    "Toggle sidebar", -1);
     gtk_button_set_child(GTK_BUTTON(gui->btn_sidebar_toggle),
-        gtk_image_new_from_icon_name("sidebar-show-symbolic"));
+        gtk_image_new_from_icon_name(qirtas_icon("sidebar")));
     gtk_widget_add_css_class(gui->btn_sidebar_toggle, "bottom-icon-btn");
-    gtk_widget_set_tooltip_text(gui->btn_sidebar_toggle, "Toggle Sidebar (Ctrl+\\)");
+    gtk_widget_set_tooltip_text(gui->btn_sidebar_toggle, qirtas_tr("Toggle Sidebar (Ctrl+\\)"));
     g_signal_connect(gui->btn_sidebar_toggle, "clicked",
                      G_CALLBACK(on_logo_clicked), gui);
 
@@ -3153,9 +3686,9 @@ static void activate(GtkApplication *app, gpointer user_data) {
                                    GTK_ACCESSIBLE_PROPERTY_LABEL,
                                    "Search in file", -1);
     gtk_button_set_child(GTK_BUTTON(gui->btn_search),
-        gtk_image_new_from_icon_name("system-search-symbolic"));
+        gtk_image_new_from_icon_name(qirtas_icon("search")));
     gtk_widget_add_css_class(gui->btn_search, "bottom-icon-btn");
-    gtk_widget_set_tooltip_text(gui->btn_search, "Search in file (Ctrl+F)");
+    gtk_widget_set_tooltip_text(gui->btn_search, qirtas_tr("Search in file (Ctrl+F)"));
     g_signal_connect(gui->btn_search, "clicked", G_CALLBACK(on_search_icon_clicked), gui);
 
     /* ── Bottom-right: Menu icon button for quick file actions ── */
@@ -3163,9 +3696,9 @@ static void activate(GtkApplication *app, gpointer user_data) {
     gtk_accessible_update_property(GTK_ACCESSIBLE(gui->btn_status_actions),
                                    GTK_ACCESSIBLE_PROPERTY_LABEL,
                                    "Quick file actions", -1);
-    gtk_menu_button_set_icon_name(GTK_MENU_BUTTON(gui->btn_status_actions), "document-new-symbolic");
+    gtk_menu_button_set_icon_name(GTK_MENU_BUTTON(gui->btn_status_actions), qirtas_icon("menu"));
     gtk_widget_add_css_class(gui->btn_status_actions, "bottom-icon-btn");
-    gtk_widget_set_tooltip_text(gui->btn_status_actions, "Quick File Actions");
+    gtk_widget_set_tooltip_text(gui->btn_status_actions, qirtas_tr("Menu"));
 
     GtkWidget *actions_popover = gtk_popover_new();
     GtkWidget *actions_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 4);
@@ -3179,8 +3712,8 @@ static void activate(GtkApplication *app, gpointer user_data) {
     gtk_widget_add_css_class(btn_pop_new, "pop-btn");
     GtkWidget *hbox_new = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
     gtk_widget_set_halign(hbox_new, GTK_ALIGN_START);
-    GtkWidget *img_new = gtk_image_new_from_icon_name("document-new-symbolic");
-    GtkWidget *lbl_new = gtk_label_new("Add New File");
+    GtkWidget *img_new = gtk_image_new_from_icon_name(qirtas_icon("new"));
+    GtkWidget *lbl_new = gtk_label_new(qirtas_tr("Add New File"));
     gtk_box_append(GTK_BOX(hbox_new), img_new);
     gtk_box_append(GTK_BOX(hbox_new), lbl_new);
     gtk_button_set_child(GTK_BUTTON(btn_pop_new), hbox_new);
@@ -3192,8 +3725,8 @@ static void activate(GtkApplication *app, gpointer user_data) {
     gtk_widget_add_css_class(btn_pop_open, "pop-btn");
     GtkWidget *hbox_open = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
     gtk_widget_set_halign(hbox_open, GTK_ALIGN_START);
-    GtkWidget *img_open = gtk_image_new_from_icon_name("document-open-symbolic");
-    GtkWidget *lbl_open = gtk_label_new("Open File");
+    GtkWidget *img_open = gtk_image_new_from_icon_name(qirtas_icon("open"));
+    GtkWidget *lbl_open = gtk_label_new(qirtas_tr("Open File"));
     gtk_box_append(GTK_BOX(hbox_open), img_open);
     gtk_box_append(GTK_BOX(hbox_open), lbl_open);
     gtk_button_set_child(GTK_BUTTON(btn_pop_open), hbox_open);
@@ -3205,8 +3738,8 @@ static void activate(GtkApplication *app, gpointer user_data) {
     gtk_widget_add_css_class(btn_pop_save, "pop-btn");
     GtkWidget *hbox_save = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
     gtk_widget_set_halign(hbox_save, GTK_ALIGN_START);
-    GtkWidget *img_save = gtk_image_new_from_icon_name("document-save-symbolic");
-    GtkWidget *lbl_save = gtk_label_new("Save File");
+    GtkWidget *img_save = gtk_image_new_from_icon_name(qirtas_icon("save"));
+    GtkWidget *lbl_save = gtk_label_new(qirtas_tr("Save File"));
     gtk_box_append(GTK_BOX(hbox_save), img_save);
     gtk_box_append(GTK_BOX(hbox_save), lbl_save);
     gtk_button_set_child(GTK_BUTTON(btn_pop_save), hbox_save);
@@ -3218,21 +3751,53 @@ static void activate(GtkApplication *app, gpointer user_data) {
     gtk_widget_add_css_class(btn_pop_pdf, "pop-btn");
     GtkWidget *hbox_pdf = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
     gtk_widget_set_halign(hbox_pdf, GTK_ALIGN_START);
-    GtkWidget *img_pdf = gtk_image_new_from_icon_name("document-print-symbolic");
-    GtkWidget *lbl_pdf = gtk_label_new("Export as PDF");
+    GtkWidget *img_pdf = gtk_image_new_from_icon_name(qirtas_icon("pdf"));
+    GtkWidget *lbl_pdf = gtk_label_new(qirtas_tr("Export as PDF"));
     gtk_box_append(GTK_BOX(hbox_pdf), img_pdf);
     gtk_box_append(GTK_BOX(hbox_pdf), lbl_pdf);
     gtk_button_set_child(GTK_BUTTON(btn_pop_pdf), hbox_pdf);
     g_signal_connect(btn_pop_pdf, "clicked", G_CALLBACK(on_status_bar_export_pdf_clicked), gui);
     gtk_box_append(GTK_BOX(actions_box), btn_pop_pdf);
 
+    gtk_box_append(GTK_BOX(actions_box),
+        status_menu_item("edit-copy-symbolic", qirtas_tr("Copy File"), NULL,
+                         G_CALLBACK(on_status_menu_copy_file), gui));
+
+    gtk_box_append(GTK_BOX(actions_box),
+        status_menu_item(qirtas_icon("saveas"), qirtas_tr("Save As…"), "Ctrl+Shift+S",
+                         G_CALLBACK(on_status_menu_save_as), gui));
+
+    gtk_box_append(GTK_BOX(actions_box), gtk_separator_new(GTK_ORIENTATION_HORIZONTAL));
+
+    gtk_box_append(GTK_BOX(actions_box),
+        status_menu_item(qirtas_icon("findreplace"), qirtas_tr("Find / Replace…"), "Ctrl+F",
+                         G_CALLBACK(on_status_menu_find_replace), gui));
+    gtk_box_append(GTK_BOX(actions_box),
+        status_menu_item(qirtas_icon("fullscreen"), qirtas_tr("Fullscreen"), "F11",
+                         G_CALLBACK(on_status_menu_fullscreen), gui));
+
+    gtk_box_append(GTK_BOX(actions_box), gtk_separator_new(GTK_ORIENTATION_HORIZONTAL));
+
+    gtk_box_append(GTK_BOX(actions_box),
+        status_menu_item(qirtas_icon("prefs"), qirtas_tr("Preferences"), "Ctrl+,",
+                         G_CALLBACK(on_status_menu_settings), gui));
+    gtk_box_append(GTK_BOX(actions_box),
+        status_menu_item(qirtas_icon("keyboard"), qirtas_tr("Keyboard Shortcuts"), "Ctrl+?",
+                         G_CALLBACK(on_status_menu_shortcuts), gui));
+
+    gtk_box_append(GTK_BOX(actions_box), gtk_separator_new(GTK_ORIENTATION_HORIZONTAL));
+
+    gtk_box_append(GTK_BOX(actions_box),
+        status_menu_item(qirtas_icon("quit"), qirtas_tr("Quit Qirtas"), "Ctrl+Q",
+                         G_CALLBACK(on_status_menu_quit), gui));
+
     gtk_popover_set_child(GTK_POPOVER(actions_popover), actions_box);
     gtk_menu_button_set_popover(GTK_MENU_BUTTON(gui->btn_status_actions), actions_popover);
 
-    gui->lbl_words = gtk_label_new("0 words");
+    gui->lbl_words = gtk_label_new(qirtas_tr("0 words"));
     gtk_widget_add_css_class(gui->lbl_words, "bottom-bar-lbl");
 
-    gui->lbl_chars = gtk_label_new("0 chars");
+    gui->lbl_chars = gtk_label_new(qirtas_tr("0 chars"));
     gtk_widget_add_css_class(gui->lbl_chars, "bottom-bar-lbl");
 
     /* ── Far bottom-right: sync status dot button ── */
@@ -3245,7 +3810,7 @@ static void activate(GtkApplication *app, gpointer user_data) {
     gtk_widget_add_css_class(gui->sync_dot, "status-saved");
     gtk_button_set_child(GTK_BUTTON(gui->btn_sync_icon_bottom), gui->sync_dot);
     gtk_widget_add_css_class(gui->btn_sync_icon_bottom, "bottom-icon-btn");
-    gtk_widget_set_tooltip_text(gui->btn_sync_icon_bottom, "Sync Now");
+    gtk_widget_set_tooltip_text(gui->btn_sync_icon_bottom, qirtas_tr("Sync Now"));
     g_signal_connect(gui->btn_sync_icon_bottom, "clicked",
                      G_CALLBACK(on_sync_now_clicked), gui);
 
@@ -3259,7 +3824,7 @@ static void activate(GtkApplication *app, gpointer user_data) {
                                    GTK_ACCESSIBLE_PROPERTY_LABEL,
                                    "Scroll tabs left", -1);
     gtk_widget_add_css_class(gui->btn_tab_scroll_left, "tab-scroll-btn");
-    gtk_widget_set_tooltip_text(gui->btn_tab_scroll_left, "Scroll tabs left");
+    gtk_widget_set_tooltip_text(gui->btn_tab_scroll_left, qirtas_tr("Scroll tabs left"));
 
     gui->tab_bar_scroll = gtk_scrolled_window_new();
     gtk_widget_add_css_class(gui->tab_bar_scroll, "tab-bar-scroll");
@@ -3280,24 +3845,28 @@ static void activate(GtkApplication *app, gpointer user_data) {
                                    GTK_ACCESSIBLE_PROPERTY_LABEL,
                                    "Scroll tabs right", -1);
     gtk_widget_add_css_class(gui->btn_tab_scroll_right, "tab-scroll-btn");
-    gtk_widget_set_tooltip_text(gui->btn_tab_scroll_right, "Scroll tabs right");
+    gtk_widget_set_tooltip_text(gui->btn_tab_scroll_right, qirtas_tr("Scroll tabs right"));
 
     gtk_box_append(GTK_BOX(tab_strip), gui->btn_tab_scroll_left);
     gtk_box_append(GTK_BOX(tab_strip), gui->tab_bar_scroll);
     gtk_box_append(GTK_BOX(tab_strip), gui->btn_tab_scroll_right);
     gui_tabs_setup_viewport(gui);
 
+    /* Left cluster: sidebar toggle, sync dot, word/char counts */
     gtk_box_append(GTK_BOX(status_info_row), gui->btn_sidebar_toggle);
+    gtk_box_append(GTK_BOX(status_info_row), gui->btn_sync_icon_bottom);
+    gtk_box_append(GTK_BOX(status_info_row), gui->lbl_words);
+    gtk_box_append(GTK_BOX(status_info_row), gui->lbl_chars);
     gtk_box_append(GTK_BOX(status_info_row), gui->path_label);
     gtk_box_append(GTK_BOX(status_info_row), bottom_spacer);
     gtk_box_append(GTK_BOX(status_info_row), gui->btn_search);
     gtk_box_append(GTK_BOX(status_info_row), gui->btn_status_actions);
-    gtk_box_append(GTK_BOX(status_info_row), gui->lbl_words);
-    gtk_box_append(GTK_BOX(status_info_row), gui->lbl_chars);
-    gtk_box_append(GTK_BOX(status_info_row), gui->btn_sync_icon_bottom);
 
     gtk_box_append(GTK_BOX(bottom_bar), status_info_row);
     gtk_box_append(GTK_BOX(bottom_bar), tab_strip);
+
+    /* Status bar stays LTR even when the app runs RTL (Arabic). */
+    gtk_widget_set_direction(bottom_bar, GTK_TEXT_DIR_LTR);
 
 
     gui->bottom_bar_widget = bottom_bar;
@@ -3323,6 +3892,18 @@ static void activate(GtkApplication *app, gpointer user_data) {
     apply_focus_mode(gui);
     gtk_window_present(GTK_WINDOW(window));
     zig_on_gui_ready();
+
+    /* Restore Session: reopen the file from last run */
+    if (gui->restore_session) {
+        char *last = qirtas_pref_get_string("last_file");
+        if (last && last[0] != '\0' && g_file_test(last, G_FILE_TEST_EXISTS)) {
+            extern void zig_open_file(const char *filename);
+            zig_open_file(last);
+        }
+        g_free(last);
+    }
+
+    apply_compact_mode(gui);
 
     load_sync_credentials(gui);
     int connected = zig_sync_check_status();

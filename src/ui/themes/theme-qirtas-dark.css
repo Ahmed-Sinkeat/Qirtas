@@ -1,0 +1,39 @@
+/* ============================================================
+ *  Qirtas — Paper & Ink (Dark)
+ *  theme-qirtas-dark.css
+ *
+ *  Black paper, white ink — matches the dark logo: a pale ink-wash
+ *  splash on black. Warm near-black surfaces (charred paper, not
+ *  blue-grey UI dark), with bone-white ink for text and caret.
+ * ============================================================ */
+
+:root {
+  --ui-font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  --editor-font-family: 'Lora', 'Inter', 'Noto Naskh Arabic', 'Segoe UI', serif;
+
+  --bg-window: #0c0b0a;
+  --bg-sidebar: #121110;
+  --bg-card: #171513;
+  --bg-hover: #1f1c19;
+  --bg-active: #2a261f;
+  --border: #2e2a25;
+  --border-focus: #d8d2c4;
+  --accent: #d8d2c4;
+  --accent-light: #f4efe4;
+
+  --text-primary: #ece7db;
+  --text-muted: #b3aa9b;
+  --text-dim: #8a8174;
+  --cyan: #9db8d6;
+
+  --folder-icon: #c2a878;
+  --file-icon: #8a8174;
+  --md-icon: #d8d2c4;
+
+  --status-saved: #9cba8f;
+  --status-saving: #9db8d6;
+  --status-failed: #d98a8a;
+  --dirty-dot-color: #ece7db;
+
+  --caret-color: #f2ede1;
+}

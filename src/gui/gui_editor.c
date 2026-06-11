@@ -114,6 +114,19 @@ void move_current_line(GtkTextBuffer *buf, gboolean up) {
     zig_undo_commit();
 }
 
+void insert_horizontal_rule(GtkTextBuffer *buf) {
+    GtkTextIter cursor_iter;
+    gtk_text_buffer_get_iter_at_mark(buf, &cursor_iter, gtk_text_buffer_get_insert(buf));
+    int abs_line = gtk_text_iter_get_line(&cursor_iter);
+
+    Position insert_pos = { abs_line + 1, 0 };
+    zig_insert_text(insert_pos, "---\n");
+
+    gui_reload_full_buffer();
+    gui_set_cursor_position(abs_line + 3, 0);
+    zig_undo_commit();
+}
+
 void gui_manual_save(AppGui *gui) {
     if (!gui) return;
     if (gui->active_tab_index != -1 && strcmp(gui->open_tabs[gui->active_tab_index], "Untitled") == 0) {
@@ -256,6 +269,11 @@ gboolean on_editor_key_pressed(GtkEventControllerKey *ctrl,
     /* ── Delete Line ── */
     if (match_app_shortcut("delete_line", keyval, keycode, state)) {
         delete_current_line(buf);
+        return TRUE;
+    }
+    /* ── Insert Horizontal Rule ── */
+    if (match_app_shortcut("insert_hr", keyval, keycode, state)) {
+        insert_horizontal_rule(buf);
         return TRUE;
     }
     /* ── Inline code ── */

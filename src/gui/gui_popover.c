@@ -401,6 +401,20 @@ static void on_para_clicked(GtkButton *btn, gpointer user_data) {
     g_idle_add(do_idle_format, ifd);
 }
 
+static void on_insert_hr_clicked(GtkButton *btn, gpointer user_data) {
+    (void)btn;
+    PopoverData *pd = (PopoverData *)user_data;
+    GtkTextBuffer *buf = pd->buf;
+    gtk_popover_popdown(GTK_POPOVER(pd->popover));
+    if (global_source_view) gtk_widget_grab_focus(global_source_view);
+
+    /* Restore the click position as the cursor, then insert the rule. */
+    GtkTextIter iter;
+    gtk_text_buffer_get_iter_at_offset(buf, &iter, pd->saved_start);
+    gtk_text_buffer_place_cursor(buf, &iter);
+    insert_horizontal_rule(buf);
+}
+
 static void on_popover_destroy(GtkWidget *widget, gpointer user_data) {
     AppGui *gui = (AppGui *)user_data;
     if (gui && gui->active_popover == widget) {
@@ -451,7 +465,7 @@ void on_editor_right_click(GtkGestureClick *gesture, gint n_press, gdouble x, gd
     gtk_widget_set_margin_top(main_box, 8);
     gtk_widget_set_margin_bottom(main_box, 8);
     GtkWidget *format_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 4);
-    GtkWidget *lbl_format = gtk_label_new("FORMAT");
+    GtkWidget *lbl_format = gtk_label_new(qirtas_tr("FORMAT"));
     gtk_widget_add_css_class(lbl_format, "pop-section-label");
     gtk_widget_set_halign(lbl_format, GTK_ALIGN_START);
     gtk_box_append(GTK_BOX(format_box), lbl_format);
@@ -473,7 +487,7 @@ void on_editor_right_click(GtkGestureClick *gesture, gint n_press, gdouble x, gd
         gtk_box_append(GTK_BOX(format_box), btn);
     }
     GtkWidget *para_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 4);
-    GtkWidget *lbl_para = gtk_label_new("PARAGRAPH");
+    GtkWidget *lbl_para = gtk_label_new(qirtas_tr("PARAGRAPH"));
     gtk_widget_add_css_class(lbl_para, "pop-section-label");
     gtk_widget_set_halign(lbl_para, GTK_ALIGN_START);
     gtk_box_append(GTK_BOX(para_box), lbl_para);
@@ -498,6 +512,13 @@ void on_editor_right_click(GtkGestureClick *gesture, gint n_press, gdouble x, gd
         g_object_set_data(G_OBJECT(btn), "prefix", p_prefixes[i]);
         g_signal_connect(btn, "clicked", G_CALLBACK(on_para_clicked), pd);
         gtk_box_append(GTK_BOX(para_box), btn);
+    }
+    {
+        GtkWidget *hr_btn = gtk_button_new_with_label(qirtas_tr("Horizontal Rule"));
+        gtk_widget_add_css_class(hr_btn, "pop-btn");
+        gtk_widget_set_halign(hr_btn, GTK_ALIGN_FILL);
+        g_signal_connect(hr_btn, "clicked", G_CALLBACK(on_insert_hr_clicked), pd);
+        gtk_box_append(GTK_BOX(para_box), hr_btn);
     }
     gtk_box_append(GTK_BOX(main_box), format_box);
     gtk_box_append(GTK_BOX(main_box), gtk_separator_new(GTK_ORIENTATION_VERTICAL));
