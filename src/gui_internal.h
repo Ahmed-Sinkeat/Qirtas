@@ -109,7 +109,6 @@ typedef struct {
     GtkWidget     *top_spacer;
     GtkWidget     *bottom_spacer;
     GtkAdjustment *vadjustment;
-    gulong         scroll_signal_id;
     gboolean       in_scroll_update;
     gboolean       loading_viewport;
     gboolean       mouse_dragging;
@@ -117,11 +116,8 @@ typedef struct {
     double         mouse_press_x;
     double         mouse_press_y;
     double         last_v_offset;
-    int            total_virtual_lines;
     int            last_scroll_requested_line;
     guint          buffer_generation;
-    int            pending_line;
-    int            pending_col;
 
     /* Cursor trail animation */
     GtkWidget *cursor_trail_area;
@@ -149,13 +145,9 @@ typedef struct {
     GtkWidget *divider_chk;
     GtkWidget *focus_chk;
     gboolean   enable_focus_mode;
-    gboolean   virtual_scroll_enabled;
     GtkWidget *wrap_chk;
-    /* Viewport state */
-    int viewport_start_line;
-    int viewport_end_line;
-    int document_total_lines;
-    int line_height;
+    int        document_total_lines;
+    int        line_height;
     /* Vault system */
     GtkWidget *vault_path_lbl_val;
 
@@ -205,7 +197,7 @@ typedef struct {
 } HrRenderData;
 
 gboolean idle_render_hrs_cb(gpointer user_data);
-void gui_reset_scroll_direction_state(void);
+
 void gui_remeasure_line_height(void);
 
 gboolean debug_get_iter_at(
@@ -254,8 +246,7 @@ void apply_theme(AppGui *gui, const char *theme_name);
 void update_editor_font(AppGui *gui);
 void reset_cursor_trail(AppGui *gui);
 void gui_push_undo_snapshot(void);
-void request_viewport_position(AppGui *gui, int abs_line);
-void gui_reload_viewport(void);
+void gui_reload_full_buffer(void);
 void gui_set_buffer_modified(gboolean modified);
 void on_search_text_changed(GtkSearchEntry *entry, gpointer user_data);
 void on_search_next_clicked(GtkButton *btn, gpointer user_data);
@@ -298,7 +289,6 @@ gboolean maybe_delete_empty_pair(GtkTextBuffer *buf);
 void duplicate_current_line(GtkTextBuffer *buf);
 void delete_current_line(GtkTextBuffer *buf);
 void move_current_line(GtkTextBuffer *buf, gboolean up);
-void load_viewport_page(AppGui *gui, int new_start);
 gboolean on_editor_key_pressed(GtkEventControllerKey *ctrl, guint keyval, guint keycode, GdkModifierType state, gpointer user_data);
 void trigger_save_as(AppGui *gui);
 void gui_manual_save(AppGui *gui);

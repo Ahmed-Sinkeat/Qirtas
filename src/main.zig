@@ -26,17 +26,13 @@ extern fn gui_set_sync_status(status: [*:0]const u8) void;
 extern fn gui_show_editor() void;
 extern fn gui_get_cursor_position(line: *c_int, col: *c_int) void;
 extern fn gui_set_cursor_position(line: c_int, col: c_int) void;
-extern fn gui_reload_viewport() void;
+extern fn gui_reload_full_buffer() void;
 extern fn gui_set_buffer_modified(modified: c_int) void;
 extern fn gui_refresh_explorer() void;
 extern fn gui_index_all_files() void;
 extern fn gui_index_file(filename: [*:0]const u8) void;
 extern fn gui_remove_file_from_index(filename: [*:0]const u8) void;
-extern fn gui_init_virtual_document(total_lines: c_int, start_line: c_int, end_line: c_int) void;
 extern fn gui_trigger_autosave() void;
-extern fn gui_get_active_page_bounds(start_line: *c_int, end_line: *c_int, total_lines: *c_int) void;
-extern fn gui_update_total_virtual_lines(total_lines: c_int) void;
-extern fn gui_set_virtual_scroll_mode(enabled: c_int, total_lines: c_int) void;
 extern fn gui_tabs_save_active_to_cache() void;
 extern fn gui_tabs_restore_active_from_cache() void;
 
@@ -483,7 +479,7 @@ pub export fn zig_open_file(filename_ptr: [*:0]const u8) callconv(.c) void {
         @memcpy(active_file_path[0..filename.len], filename);
         active_file_path_len = filename.len;
 
-        gui_set_virtual_scroll_mode(0, 1);
+
         gui_set_text("", 0);
         gui_set_title("Untitled - Qirtas");
         gui_set_sync_status("Not Synced");
@@ -982,7 +978,6 @@ fn remap_active_file() !void {
 
     const content = if (size > 0) ptr[0..size] else "";
     try populate_line_offsets(content);
-    gui_update_total_virtual_lines(@as(c_int, @intCast(line_offsets.items.len)));
 }
 
 fn load_file_and_update_gui(filename: []const u8) !void {
@@ -1013,24 +1008,9 @@ fn load_file_and_update_gui(filename: []const u8) !void {
     try remap_active_file();
 
     const total_lines = @as(c_int, @intCast(line_offsets.items.len));
-    const enabled = if (total_lines >= 500) @as(c_int, 1) else @as(c_int, 0);
-    gui_set_virtual_scroll_mode(enabled, total_lines);
-
-    var page_size: c_int = 400;
-    if (total_lines > 4000) {
-        page_size = 250;
-    } else if (total_lines > 2000) {
-        page_size = 300;
-    }
-    const end_line = if (enabled == 1) (if (total_lines > page_size) page_size else total_lines) else total_lines;
-    
     var page_len: c_int = 0;
-    const page_text_ptr = zig_get_text_for_line_range(0, end_line, &page_len);
-    
+    const page_text_ptr = zig_get_text_for_line_range(0, total_lines, &page_len);
     gui_set_text(page_text_ptr.?, page_len);
-    if (enabled == 1) {
-        gui_init_virtual_document(total_lines, 0, end_line);
-    }
     
     // Update path headers dynamically
     var title_buf: [300]u8 = undefined;
@@ -1253,24 +1233,10 @@ fn reload_file_callback(user_data: ?*anyopaque) callconv(.c) void {
 
     remap_active_file() catch return;
 
-    // Retrieve active bounds from GUI and reload just that page range
-    var start: c_int = 0;
-    var end: c_int = 0;
-    var tot: c_int = 0;
-    gui_get_active_page_bounds(&start, &end, &tot);
-
     const total_lines = @as(c_int, @intCast(line_offsets.items.len));
-    if (start >= total_lines) start = 0;
-    if (end > total_lines) end = total_lines;
-    if (end <= start) {
-        end = if (total_lines > 400) 400 else total_lines;
-        start = 0;
-    }
-
     var page_len: c_int = 0;
-    const page_text_ptr = zig_get_text_for_line_range(start, end, &page_len);
+    const page_text_ptr = zig_get_text_for_line_range(0, total_lines, &page_len);
     gui_set_text(page_text_ptr.?, page_len);
-    gui_init_virtual_document(total_lines, start, end);
 
     gui_set_sync_status("Updated");
 }
@@ -1467,7 +1433,7 @@ fn write_document_content_and_remap(new_content: []const u8) !void {
         active_mmap_ptr = plain_buf.ptr;
         active_mmap_size = plain_buf.len;
         try populate_line_offsets(new_content);
-        gui_update_total_virtual_lines(@as(c_int, @intCast(line_offsets.items.len)));
+
         return;
     }
 
@@ -1490,7 +1456,7 @@ fn restoreSnapshot(entry: UndoEntry) void {
     file_open_in_progress = true;
     defer file_open_in_progress = false;
     write_document_content_and_remap(entry.text) catch return;
-    gui_reload_viewport();
+    gui_reload_full_buffer();
     gui_set_buffer_modified(1);
     gui_set_sync_status("Not Synced");
     gui_set_cursor_position(entry.cursor_line, entry.cursor_col);

@@ -72,8 +72,8 @@ static void select_position_range(AppGui *gui, Position start, Position end) {
     GtkTextBuffer *buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(gui->source_view));
     GtkTextIter start_iter, end_iter;
 
-    int rel_start_line = start.line - gui->viewport_start_line;
-    int rel_end_line = end.line - gui->viewport_start_line;
+    int rel_start_line = start.line;
+    int rel_end_line = end.line;
     if (rel_start_line < 0) rel_start_line = 0;
     if (rel_end_line < 0) rel_end_line = 0;
 
@@ -95,7 +95,7 @@ static void select_position_range(AppGui *gui, Position start, Position end) {
 static Position iter_to_position(GtkTextIter *iter) {
     Position pos = { 0, 0 };
     if (!global_gui || !iter) return pos;
-    pos.line = global_gui->viewport_start_line + gtk_text_iter_get_line(iter);
+    pos.line = gtk_text_iter_get_line(iter);
     pos.col = gtk_text_iter_get_line_offset(iter);
     return pos;
 }
@@ -1234,92 +1234,7 @@ void gui_set_buffer_modified(gboolean modified) {
     gtk_text_buffer_set_modified(buf, modified);
 }
 
-void gui_reload_viewport(void) {
-    if (!global_gui) return;
-    if (global_gui->loading_viewport) return;
-    request_viewport_position(global_gui, global_gui->viewport_start_line);
-}
 
-static int get_page_size(int total_lines) {
-    if (total_lines > 4000) return 250;
-    if (total_lines > 2000) return 300;
-    return 400;
-}
-
-void request_viewport_position(AppGui *gui, int abs_line) {
-    if (!gui) return;
-
-    int current_local_line = -1;
-    int current_local_col = -1;
-    int current_abs_line = -1;
-    gdouble current_scroll_value = 0.0;
-    gdouble current_vadjustment = 0.0;
-    if (gui->source_view) {
-        GtkTextBuffer *buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(gui->source_view));
-        GtkTextIter cursor_iter;
-        gtk_text_buffer_get_iter_at_mark(buf, &cursor_iter, gtk_text_buffer_get_insert(buf));
-        current_local_line = gtk_text_iter_get_line(&cursor_iter);
-        current_local_col = gtk_text_iter_get_line_offset(&cursor_iter);
-        current_abs_line = gui->viewport_start_line + current_local_line;
-    }
-    if (gui->vadjustment) {
-        current_scroll_value = gtk_adjustment_get_value(gui->vadjustment);
-        current_vadjustment = gtk_adjustment_get_page_size(gui->vadjustment);
-    }
-
-    int top_h = 0, bottom_h = 0;
-    if (gui->top_spacer || gui->bottom_spacer) {
-        gtk_widget_get_size_request(gui->top_spacer, NULL, &top_h);
-        gtk_widget_get_size_request(gui->bottom_spacer, NULL, &bottom_h);
-    }
-
-    g_print(
-        "REQUEST_VIEWPORT_POSITION requested_line=%d current_local_line=%d current_local_col=%d current_abs_line=%d current_scroll_value=%g current_vadjustment=%g viewport=%d-%d top_spacer=%d bottom_spacer=%d\n",
-        abs_line,
-        current_local_line,
-        current_local_col,
-        current_abs_line,
-        current_scroll_value,
-        current_vadjustment,
-        gui->viewport_start_line,
-        gui->viewport_end_line,
-        top_h,
-        bottom_h
-    );
-
-    if (gui->loading_viewport) {
-        gui->pending_line = abs_line;
-        return;
-    }
-
-    int page_size = get_page_size(gui->total_virtual_lines);
-    int margin = page_size / 5;
-    if (abs_line >= gui->viewport_start_line + margin &&
-        abs_line <  gui->viewport_end_line   - margin) {
-        return;
-    }
-
-    int new_start = MAX(0, abs_line - (page_size / 2));
-    int new_end   = MIN(gui->total_virtual_lines, new_start + page_size);
-    
-    if (new_end >= gui->total_virtual_lines) {
-        new_end = gui->total_virtual_lines;
-        new_start = MAX(0, new_end - 400);
-    }
-
-    if (new_start == gui->viewport_start_line &&
-        new_end   == gui->viewport_end_line) {
-        return;
-    }
-
-    g_print(
-        "REQUEST_VIEWPORT_POSITION chosen_viewport_start=%d chosen_viewport_end=%d\n",
-        new_start,
-        new_end
-    );
-
-    load_viewport_page(gui, new_start);
-}
 
 void on_buffer_changed(GtkTextBuffer *buf, gpointer user_data) {
     AppGui *gui = (AppGui *)user_data;
@@ -1417,7 +1332,7 @@ void on_insert_text_before(GtkTextBuffer *buf, GtkTextIter *location, gchar *tex
         gchar both_chars[3] = { c, closing, 0 };
         Position pos = iter_to_position(location);
         zig_insert_text(pos, both_chars);
-        request_viewport_position(global_gui, global_gui->viewport_start_line);
+        gui_reload_full_buffer();
         gui_set_cursor_position(pos.line + 1, pos.col + 1);
         zig_undo_commit();
         g_signal_stop_emission_by_name(buf, "insert-text");
@@ -1510,7 +1425,7 @@ static void on_paste_plain_text_received(GObject *source_object, GAsyncResult *r
         Position start_pos = iter_to_position(&start);
         Position end_pos = iter_to_position(&end);
         zig_replace_range(start_pos, end_pos, text);
-        request_viewport_position(gui, gui->viewport_start_line);
+        gui_reload_full_buffer();
 
         Position cursor_pos = advance_position(start_pos, text);
         gui_set_cursor_position(cursor_pos.line + 1, cursor_pos.col);
@@ -1652,7 +1567,7 @@ void clear_selection_formatting(GtkTextBuffer *buf) {
         Position start_pos = iter_to_position(&start);
         Position end_pos = iter_to_position(&end);
         zig_replace_range(start_pos, end_pos, cleaned->str);
-        request_viewport_position(global_gui, global_gui->viewport_start_line);
+        gui_reload_full_buffer();
 
         Position select_end = advance_position(start_pos, cleaned->str);
         select_position_range(global_gui, start_pos, select_end);
@@ -2108,7 +2023,7 @@ void insert_text_pair(GtkTextBuffer *buf, const char *open, const char *close) {
         Position start_pos = iter_to_position(&start);
         Position end_pos = iter_to_position(&end);
         zig_replace_range(start_pos, end_pos, wrapped);
-        request_viewport_position(gui, gui->viewport_start_line);
+        gui_reload_full_buffer();
         select_position_range(gui, start_pos, advance_position(start_pos, wrapped));
         zig_undo_commit();
 
@@ -2120,7 +2035,7 @@ void insert_text_pair(GtkTextBuffer *buf, const char *open, const char *close) {
         gchar *pair = g_strconcat(open, close, NULL);
         Position cursor_pos = iter_to_position(&cursor);
         zig_insert_text(cursor_pos, pair);
-        request_viewport_position(gui, gui->viewport_start_line);
+        gui_reload_full_buffer();
         Position after_open = advance_position(cursor_pos, open);
         gui_set_cursor_position(after_open.line + 1, after_open.col);
         zig_undo_commit();
@@ -2165,7 +2080,7 @@ gboolean maybe_delete_empty_pair(GtkTextBuffer *buf) {
         Position start_pos = iter_to_position(&prev);
         Position end_pos = iter_to_position(&next);
         zig_delete_range(start_pos, end_pos);
-        request_viewport_position(global_gui, global_gui->viewport_start_line);
+        gui_reload_full_buffer();
         gui_set_cursor_position(start_pos.line + 1, start_pos.col);
         zig_undo_commit();
     }
@@ -2178,7 +2093,7 @@ void toggle_comment_current_line(GtkTextBuffer *buf) {
     (void)buf;
     GtkTextIter cursor_iter;
     gtk_text_buffer_get_iter_at_mark(buf, &cursor_iter, gtk_text_buffer_get_insert(buf));
-    int abs_line = global_gui->viewport_start_line + gtk_text_iter_get_line(&cursor_iter);
+    int abs_line = gtk_text_iter_get_line(&cursor_iter);
     int col = gtk_text_iter_get_line_offset(&cursor_iter);
 
     int len = 0;
@@ -2231,7 +2146,7 @@ void toggle_comment_current_line(GtkTextBuffer *buf) {
     g_free(new_text);
 
     // Reload viewport
-    request_viewport_position(global_gui, global_gui->viewport_start_line);
+    gui_reload_full_buffer();
 
     // Place cursor
     gui_set_cursor_position(abs_line + 1, col);
@@ -2250,7 +2165,7 @@ void on_insert_text_after(GtkTextBuffer *buf, GtkTextIter *location, gchar *text
     GtkTextIter start_iter;
     debug_get_iter_at_offset(buf, &start_iter, start_offset, "on_insert_text_after");
 
-    int start_line = gui->viewport_start_line + gtk_text_iter_get_line(&start_iter);
+    int start_line = gtk_text_iter_get_line(&start_iter);
     int start_col = gtk_text_iter_get_line_offset(&start_iter);
 
     Position pos = { start_line, start_col };
@@ -2270,10 +2185,10 @@ void on_delete_range_before(GtkTextBuffer *buf, GtkTextIter *start, GtkTextIter 
     AppGui *gui = (AppGui *)user_data;
     if (gui && gui->loading_viewport) return;
 
-    int start_line = gui->viewport_start_line + gtk_text_iter_get_line(start);
+    int start_line = gtk_text_iter_get_line(start);
     int start_col = gtk_text_iter_get_line_offset(start);
 
-    int end_line = gui->viewport_start_line + gtk_text_iter_get_line(end);
+    int end_line = gtk_text_iter_get_line(end);
     int end_col = gtk_text_iter_get_line_offset(end);
 
     Position p_start = { start_line, start_col };
@@ -2463,16 +2378,8 @@ static void on_files_clicked(GtkButton *btn, gpointer user_data) {
 static void on_wrap_toggled(GtkCheckButton *btn, gpointer user_data) {
     GtkTextView *view = GTK_TEXT_VIEW(user_data);
 
-    if (global_gui && global_gui->virtual_scroll_enabled) {
-        /* Virtual scrolling uses fixed logical line heights, so soft wrap must stay off. */
-        g_signal_handlers_block_by_func(btn, G_CALLBACK(on_wrap_toggled), user_data);
-        gtk_check_button_set_active(btn, FALSE);
-        g_signal_handlers_unblock_by_func(btn, G_CALLBACK(on_wrap_toggled), user_data);
-        gtk_text_view_set_wrap_mode(view, GTK_WRAP_NONE);
-    } else {
-        gboolean active = gtk_check_button_get_active(btn);
-        gtk_text_view_set_wrap_mode(view, active ? GTK_WRAP_WORD_CHAR : GTK_WRAP_NONE);
-    }
+    gboolean active = gtk_check_button_get_active(btn);
+    gtk_text_view_set_wrap_mode(view, active ? GTK_WRAP_WORD_CHAR : GTK_WRAP_NONE);
 }
 
 
@@ -3012,253 +2919,6 @@ static void gui_reset_preferred_x(AppGui *gui) {
     gtk_text_buffer_place_cursor(buf, &iter);
 }
 
-static void set_spacers_with_compensation(AppGui *gui, int new_top_h, int new_bottom_h);
-static void viewport_set_range(AppGui *gui, int start_line, int end_line);
-void load_viewport_page(
-    AppGui *gui,
-    int new_start
-) {
-
-    if (!gui) return;
-    if (gui->loading_viewport) return;
-
-    gui->buffer_generation++;
-
-    int saved_abs_line = -1;
-    int saved_abs_col = 0;
-    int current_local_line = -1;
-    int current_local_col = -1;
-    if (gui->source_view) {
-        GtkTextBuffer *buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(gui->source_view));
-        GtkTextIter cursor_iter;
-        gtk_text_buffer_get_iter_at_mark(buf, &cursor_iter, gtk_text_buffer_get_insert(buf));
-        current_local_line = gtk_text_iter_get_line(&cursor_iter);
-        current_local_col = gtk_text_iter_get_line_offset(&cursor_iter);
-        saved_abs_line = gui->viewport_start_line + current_local_line;
-        saved_abs_col = gtk_text_iter_get_line_offset(&cursor_iter);
-    }
-
-    g_print(
-        "BEFORE_RELOAD old_viewport_start=%d old_viewport_end=%d current_local_line=%d current_local_col=%d saved_abs_line=%d saved_abs_col=%d pending_line=%d pending_col=%d\n",
-        gui->viewport_start_line,
-        gui->viewport_end_line,
-        current_local_line,
-        current_local_col,
-        saved_abs_line,
-        saved_abs_col,
-        gui->pending_line,
-        gui->pending_col
-    );
-
-    gdouble saved_scroll = 0;
-    if (gui->vadjustment) {
-        g_signal_handler_block(gui->vadjustment, gui->scroll_signal_id);
-        g_object_freeze_notify(G_OBJECT(gui->vadjustment));
-        saved_scroll = gtk_adjustment_get_value(gui->vadjustment);
-    }
-    gui->loading_viewport = TRUE;
-
-    int page_size = get_page_size(gui->total_virtual_lines);
-    int new_end = new_start + page_size;
-
-    if (new_end > gui->total_virtual_lines) {
-        new_end = gui->total_virtual_lines;
-        new_start = MAX(0, new_end - page_size);
-    }
-
-    gui->last_scroll_requested_line = -1;
-
-    extern const char *zig_get_text_for_line_range(
-        int start_line,
-        int end_line,
-        int *out_len
-    );
-
-    int new_len = 0;
-
-    const char *new_text =
-        zig_get_text_for_line_range(
-            new_start,
-            new_end,
-            &new_len
-        );
-
-    GtkTextBuffer *buf =
-        gtk_text_view_get_buffer(
-            GTK_TEXT_VIEW(gui->source_view)
-        );
-    g_print(
-    	"LOAD_VIEWPORT start=%d end=%d\n",
-    	new_start,
-    	new_end
-	);
-
-    g_print(
-        "VIEWPORT_CONTENT start=%d end=%d len=%d first80=\"%.80s\"\n",
-        new_start,
-        new_end,
-        new_len,
-        new_text ? new_text : "(null)"
-    );
-
-    viewport_set_range(gui, new_start, new_end);
-
-    gtk_text_buffer_set_text(buf, new_text ? new_text : "", new_len);
-
-    HrRenderData *hr_d = g_new0(HrRenderData, 1);
-    hr_d->gui = gui;
-    hr_d->generation = gui->buffer_generation;
-    g_idle_add(idle_render_hrs_cb, hr_d);
-
-    update_all_paragraphs_direction(buf);
-    apply_wiki_link_tags(buf);
-
-    if (saved_abs_line >= 0) {
-        int rel_line = saved_abs_line - new_start;
-        int line_count = gtk_text_buffer_get_line_count(buf);
-        if (line_count > 0) {
-            if (rel_line < 0) rel_line = 0;
-            if (rel_line >= line_count) rel_line = line_count - 1;
-
-            GtkTextIter iter;
-            gtk_text_buffer_get_iter_at_line(buf, &iter, rel_line);
-            int line_bytes = gtk_text_iter_get_bytes_in_line(&iter);
-            int safe_col = saved_abs_col;
-            if (safe_col < 0) safe_col = 0;
-            if (safe_col > line_bytes) safe_col = line_bytes;
-            gtk_text_buffer_get_iter_at_line_offset(buf, &iter, rel_line, safe_col);
-            gtk_text_buffer_select_range(buf, &iter, &iter);
-
-            g_print(
-                "AFTER_RELOAD new_viewport_start=%d new_viewport_end=%d restored_rel_line=%d restored_rel_col=%d restored_abs_line=%d pending_line=%d pending_col=%d\n",
-                new_start,
-                new_end,
-                rel_line,
-                safe_col,
-                new_start + rel_line,
-                gui->pending_line,
-                gui->pending_col
-            );
-        }
-    }
-
-    gui->loading_viewport = FALSE;
-
-    if (gui->vadjustment) {
-        gtk_adjustment_set_value(gui->vadjustment, saved_scroll);
-        g_object_thaw_notify(G_OBJECT(gui->vadjustment));
-
-        UnblockData *d = g_new(UnblockData, 1);
-        d->vadj   = gui->vadjustment;
-        d->sig_id = gui->scroll_signal_id;
-        g_idle_add(unblock_scroll_idle, d);
-    }
-
-    if (gui->pending_line >= 0) {
-        int line = gui->pending_line;
-        int col = gui->pending_col;
-        g_print(
-            "LOAD_VIEWPORT_PENDING before_gui_set_cursor_position pending_line=%d pending_col=%d line=%d col=%d\n",
-            gui->pending_line,
-            gui->pending_col,
-            line,
-            col
-        );
-        gui->pending_line = -1;
-        gui->pending_col = -1;
-        gui_set_cursor_position(line + 1, col < 0 ? 0 : col);
-    }
-}
-
-static int   last_loaded_start = -1;
-static guint scroll_timer_id   = 0;
-static int   queued_line       = -1;
-static gint64 last_load_time_ms  = 0;
-static int    last_load_direction = 0;
-
-static gboolean fire_scroll(gpointer user_data) {
-    AppGui *gui = user_data;
-    scroll_timer_id = 0;
-
-    if (queued_line >= 0) {
-        int line = queued_line;
-        queued_line = -1;
-        
-        int page_size = get_page_size(gui->total_virtual_lines);
-        int new_start = MAX(0, line - (page_size / 2));
-        int direction = (new_start > last_loaded_start) ? 1 : -1;
-
-        gint64 now = g_get_monotonic_time() / 1000;
-
-        // Only apply direction lock if we have a valid previous load
-        if (last_loaded_start >= 0 && (direction != last_load_direction) && (now - last_load_time_ms) < 200) {
-            return G_SOURCE_REMOVE;
-        }
-        
-        if (new_start == last_loaded_start) return G_SOURCE_REMOVE;
-        
-        last_loaded_start   = new_start;
-        last_load_direction = direction;
-        last_load_time_ms   = now;
-        
-        request_viewport_position(gui, gui->viewport_start_line + line);
-    }
-    return G_SOURCE_REMOVE;
-}
-
-static void on_scroll_changed(GtkAdjustment *adj, gpointer user_data) {
-    AppGui *gui = (AppGui *)user_data;
-    if (!gui->virtual_scroll_enabled) return;
-    if (gui->loading_viewport) return;
-
-    static gdouble last_value = -1.0;
-    gdouble value = gtk_adjustment_get_value(adj);
-
-    // Skip if negligible movement (layout reflow noise)
-    if (fabs(value - last_value) < 1.0) return;
-    last_value = value;
-
-    double page_size = gtk_adjustment_get_page_size(adj);
-    int center_line = get_line_at_y(gui, value + page_size / 2.0);
-    g_print("ON_SCROLL_CHANGED scroll_y=%g page_size=%g center_line=%d viewport_start_line=%d\n",
-            value, page_size, center_line, gui->viewport_start_line);
-    if (center_line == gui->last_scroll_requested_line) return;
-    
-    queued_line = center_line;
-    if (scroll_timer_id != 0) {
-        g_source_remove(scroll_timer_id);
-    }
-    scroll_timer_id = g_timeout_add(60, fire_scroll, gui);
-}
-static void set_spacers_with_compensation(AppGui *gui, int new_top_h, int new_bottom_h) {
-    if (!gui->vadjustment) {
-        gtk_widget_set_size_request(gui->top_spacer, -1, new_top_h);
-        gtk_widget_set_size_request(gui->bottom_spacer, -1, new_bottom_h);
-        return;
-    }
-    
-    int old_top_h = 0;
-    gtk_widget_get_size_request(gui->top_spacer, NULL, &old_top_h);
-    if (old_top_h < 0) old_top_h = 0;
-    
-    int delta = new_top_h - old_top_h;
-    
-    g_signal_handler_block(gui->vadjustment, gui->scroll_signal_id);
-    
-    gtk_widget_set_size_request(gui->top_spacer, -1, new_top_h);
-    gtk_widget_set_size_request(gui->bottom_spacer, -1, new_bottom_h);
-    
-    gtk_widget_queue_resize(gui->virtual_layout_box);
-    
-    
-    UnblockData *d = g_new(UnblockData, 1);
-    d->vadj   = gui->vadjustment;
-    d->sig_id = gui->scroll_signal_id;
-    g_idle_add(unblock_scroll_idle, d);
-}
-
-
-
 static void activate(GtkApplication *app, gpointer user_data) {
     (void)user_data;
     init_app_shortcuts();
@@ -3277,7 +2937,6 @@ static void activate(GtkApplication *app, gpointer user_data) {
 
     AppGui *gui = g_new0(AppGui, 1);
     gui->last_scroll_requested_line = -1;
-    gui->pending_line = -1;
     gui->window       = window;
     g_strlcpy(gui->current_en_font, "Inter", sizeof(gui->current_en_font));
     g_strlcpy(gui->current_ar_font, "Amiri", sizeof(gui->current_ar_font));
@@ -3686,7 +3345,7 @@ static void activate(GtkApplication *app, gpointer user_data) {
 
     GtkAdjustment *vadj = gtk_scrolled_window_get_vadjustment(GTK_SCROLLED_WINDOW(scrolled));
     gui->vadjustment = vadj;
-    gui->scroll_signal_id = g_signal_connect(vadj, "value-changed", G_CALLBACK(on_scroll_changed), gui);
+
 
     /* Typography & Render spacing (line height equivalent) */
     gtk_text_view_set_left_margin(GTK_TEXT_VIEW(source_view), 64);
@@ -4759,7 +4418,7 @@ void gui_get_cursor_position(int *line, int *col) {
     GtkTextMark *mark = gtk_text_buffer_get_insert(buf);
     gtk_text_buffer_get_iter_at_mark(buf, &iter, mark);
     int rel_line = gtk_text_iter_get_line(&iter);
-    *line = (global_gui ? global_gui->viewport_start_line : 0) + rel_line + 1;
+    *line = rel_line + 1;
     *col = gtk_text_iter_get_line_offset(&iter);
 }
 
@@ -4769,17 +4428,9 @@ void gui_set_cursor_position(int line, int col) {
     
     int target_abs_line = line - 1; // 0-indexed
     if (target_abs_line < 0) target_abs_line = 0;
-    
-    // Check if within active page
-  
-    if (target_abs_line < global_gui->viewport_start_line ||
-        target_abs_line >= global_gui->viewport_end_line) {
-        request_viewport_position(global_gui, target_abs_line);
-    }
-    
-    GtkTextBuffer *buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(global_source_view));
+        GtkTextBuffer *buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(global_source_view));
     GtkTextIter iter;
-    int rel_line = target_abs_line - global_gui->viewport_start_line;
+    int rel_line = target_abs_line;
     if (rel_line < 0) rel_line = 0;
     
     int total_lines = gtk_text_buffer_get_line_count(buf);
@@ -4801,117 +4452,7 @@ void gui_set_cursor_position(int line, int col) {
     gui_reset_preferred_x(global_gui);
 }
 
-static void cleanup_measurement_state(AppGui *gui)
-{
-    (void)gui;
-}
 
-static void get_spacer_heights(
-    AppGui *gui,
-    int start_line,
-    int end_line,
-    int *out_top_h,
-    int *out_bottom_h)
-{
-    int h = gui->line_height > 0 ? gui->line_height : 24;
-
-    *out_top_h = start_line * h;
-    if (*out_top_h < 1) *out_top_h = 1;
-
-    *out_bottom_h =
-        (gui->total_virtual_lines - end_line) * h;
-
-    if (*out_bottom_h < 1)
-        *out_bottom_h = 1;
-}
-
-static int get_line_at_y(AppGui *gui, double y)
-{
-    int h = gui->line_height > 0 ? gui->line_height : 24;
-    int line = (int)(y / h);
-    g_print("GET_LINE_AT_Y input_y=%g returned_line=%d line_height=%d viewport_start_line=%d\n",
-            y, line, h, gui ? gui->viewport_start_line : -1);
-    return line;
-}
-
-static double get_y_for_line(AppGui *gui, int line)
-{
-    int h = gui->line_height > 0 ? gui->line_height : 24;
-    return (double)(line * h);
-}
-
-void gui_set_virtual_scroll_mode(int enabled, int total_lines) {
-    if (!global_gui) return;
-    
-    cleanup_measurement_state(global_gui);
-    global_gui->virtual_scroll_enabled = (gboolean)enabled;
-    
-    if (enabled) {
-        gtk_widget_set_visible(global_gui->top_spacer, TRUE);
-        gtk_widget_set_visible(global_gui->bottom_spacer, TRUE);
-        gtk_text_view_set_wrap_mode(GTK_TEXT_VIEW(global_gui->source_view), GTK_WRAP_NONE);
-        
-        if (global_gui->wrap_chk) {
-            g_signal_handlers_block_by_func(global_gui->wrap_chk, G_CALLBACK(on_wrap_toggled), global_gui->source_view);
-            gtk_check_button_set_active(GTK_CHECK_BUTTON(global_gui->wrap_chk), FALSE);
-            g_signal_handlers_unblock_by_func(global_gui->wrap_chk, G_CALLBACK(on_wrap_toggled), global_gui->source_view);
-            gtk_widget_set_sensitive(global_gui->wrap_chk, FALSE);
-            gtk_widget_set_tooltip_text(global_gui->wrap_chk, "Disabled while virtual scrolling uses fixed logical line heights.");
-        }
-    } else {
-        gtk_widget_set_visible(global_gui->top_spacer, FALSE);
-        gtk_widget_set_visible(global_gui->bottom_spacer, FALSE);
-        gtk_text_view_set_wrap_mode(GTK_TEXT_VIEW(global_gui->source_view), GTK_WRAP_WORD_CHAR);
-        
-        if (global_gui->wrap_chk) {
-            g_signal_handlers_block_by_func(global_gui->wrap_chk, G_CALLBACK(on_wrap_toggled), global_gui->source_view);
-            gtk_check_button_set_active(GTK_CHECK_BUTTON(global_gui->wrap_chk), TRUE);
-            g_signal_handlers_unblock_by_func(global_gui->wrap_chk, G_CALLBACK(on_wrap_toggled), global_gui->source_view);
-            gtk_widget_set_sensitive(global_gui->wrap_chk, TRUE);
-            gtk_widget_set_tooltip_text(global_gui->wrap_chk, "Toggle word wrapping.");
-        }
-        
-        global_gui->total_virtual_lines = total_lines;
-        viewport_set_range(global_gui, 0, total_lines);
-    }
-}
-
-static void viewport_set_range(AppGui *gui, int start_line, int end_line)
-{
-    if (!gui) return;
-
-    gui->viewport_start_line = start_line;
-    gui->viewport_end_line = end_line;
-
-    int top_h = 0, bottom_h = 0;
-    get_spacer_heights(gui, start_line, end_line, &top_h, &bottom_h);
-    set_spacers_with_compensation(gui, top_h, bottom_h);
-}
-
-void gui_init_virtual_document(int total_lines, int start_line, int end_line) {
-    if (!global_gui) return;
-    
-    cleanup_measurement_state(global_gui);
-    
-    global_gui->total_virtual_lines = total_lines;
-    viewport_set_range(global_gui, start_line, end_line);
-    
-    global_gui->line_height =
-    get_line_height(global_gui->source_view);
-
-    if (global_gui->line_height <= 0)
-    global_gui->line_height = 24;
-   
-    int top_h = 0, bottom_h = 0;
-    get_spacer_heights(global_gui, start_line, end_line, &top_h, &bottom_h);
-    
-    if (global_gui->vadjustment) {
-        global_gui->in_scroll_update = TRUE;
-        gtk_adjustment_set_value(global_gui->vadjustment, (double)top_h);
-        global_gui->in_scroll_update = FALSE;
-    }
-    
-}
 
 int gui_get_absolute_cursor_line(void) {
     if (!global_gui || !global_source_view) return 1;
@@ -5040,7 +4581,7 @@ void gui_refresh_explorer(void) {
 }
 
 void gui_set_title(const char *title) {
-    gui_reset_scroll_direction_state();
+
     if (global_window)
         gtk_window_set_title(GTK_WINDOW(global_window), title);
     if (global_path_label) {
@@ -5339,33 +4880,30 @@ void gui_run_on_main_thread(GuiIdleCallback callback, void *user_data) {
     g_idle_add(idle_wrapper, id);
 }
 
-void gui_get_active_page_bounds(int *start_line, int *end_line, int *total_lines) {
-    if (!global_gui) {
-        *start_line = 0;
-        *end_line = 0;
-        *total_lines = 0;
-        return;
+
+
+void gui_reload_full_buffer(void) {
+    if (!global_gui || !global_gui->source_view) return;
+
+    int line = 1, col = 0;
+    gui_get_cursor_position(&line, &col);
+
+    extern const char *zig_get_document_text(void);
+    extern void zig_free_document_text(const char *ptr);
+
+    const char *text = zig_get_document_text();
+    if (text) {
+        global_gui->loading_viewport = TRUE;
+        GtkTextBuffer *buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(global_gui->source_view));
+        gtk_text_buffer_set_text(buf, text, -1);
+        global_gui->loading_viewport = FALSE;
+        zig_free_document_text(text);
     }
 
-
-
-
-
-
-
-
-
-
-
-
-
-    *start_line = global_gui->viewport_start_line;
-    *end_line = global_gui->viewport_end_line;
-    *total_lines = global_gui->total_virtual_lines;
+    gui_set_cursor_position(line, col);
 }
 
 void gui_prepare_tab_switch(void) {
-    if (!global_gui) return;
 
     if (global_gui->source_view) {
         GtkTextBuffer *buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(global_gui->source_view));
@@ -5377,37 +4915,12 @@ void gui_prepare_tab_switch(void) {
     }
 
     if (global_gui->vadjustment) {
-        g_signal_handler_block(global_gui->vadjustment, global_gui->scroll_signal_id);
         gtk_adjustment_set_value(global_gui->vadjustment, 0.0);
-        global_gui->viewport_start_line = 0;
-        global_gui->viewport_end_line = 0;
-        global_gui->last_scroll_requested_line = -1;
-        global_gui->pending_line = -1;
-        g_signal_handler_unblock(global_gui->vadjustment, global_gui->scroll_signal_id);
     }
     gui_reset_preferred_x(global_gui);
 }
 
-void gui_update_total_virtual_lines(int total_lines) {
-    g_print("UPDATE_TOTAL_LINES: %d\n", total_lines);
-    if (!global_gui) return;
-    if (total_lines <= 0) return;
-    if (global_gui->loading_viewport) return;
-    global_gui->total_virtual_lines = total_lines;
-    
-    int line_h = global_gui->line_height;
-    if (line_h <= 0) line_h = 24;
-    int bottom_h = (total_lines - global_gui->viewport_end_line) * line_h;
-    if (bottom_h < 0) bottom_h = 0;
-    gtk_widget_set_size_request(global_gui->bottom_spacer, -1, bottom_h);
-    gtk_widget_queue_resize(global_gui->virtual_layout_box);
-}
 
-void gui_reset_scroll_direction_state(void) {
-    last_loaded_start = -1;
-    last_load_direction = 0;
-    last_load_time_ms = 0;
-}
 
 void gui_remeasure_line_height(void) {
     if (!global_gui || !global_gui->source_view) return;
@@ -5424,13 +4937,9 @@ gboolean debug_get_iter_at(
     int line_bytes = -1;
     int line_chars = -1;
     int generation = -1;
-    int view_start = -1;
-    int view_end = -1;
 
     if (global_gui) {
         generation = (int)global_gui->buffer_generation;
-        view_start = global_gui->viewport_start_line;
-        view_end = global_gui->viewport_end_line;
     }
 
     int total_lines = gtk_text_buffer_get_line_count(buf);
@@ -5441,8 +4950,8 @@ gboolean debug_get_iter_at(
         line_chars = gtk_text_iter_get_chars_in_line(&line_start_iter);
     }
 
-    g_print("ITER_DEBUG caller=%s\nline=%d\ncol=%d\nline_bytes=%d\nline_chars=%d\ngeneration=%d\nviewport=%d-%d\n",
-            caller, rel_line, col, line_bytes, line_chars, generation, view_start, view_end);
+    g_print("ITER_DEBUG caller=%s\nline=%d\ncol=%d\nline_bytes=%d\nline_chars=%d\ngeneration=%d\n",
+            caller, rel_line, col, line_bytes, line_chars, generation);
 
     gtk_text_buffer_get_iter_at_line_offset(buf, iter, rel_line, col);
     

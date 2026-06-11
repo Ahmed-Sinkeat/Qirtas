@@ -31,7 +31,7 @@ typedef struct {
 static Position iter_to_position(GtkTextIter *iter) {
     Position pos = { 0, 0 };
     if (!global_gui || !iter) return pos;
-    pos.line = global_gui->viewport_start_line + gtk_text_iter_get_line(iter);
+    pos.line = gtk_text_iter_get_line(iter);
     pos.col = gtk_text_iter_get_line_offset(iter);
     return pos;
 }
@@ -57,8 +57,8 @@ static void select_position_range(AppGui *gui, Position start, Position end) {
     GtkTextBuffer *buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(gui->source_view));
     GtkTextIter start_iter, end_iter;
 
-    int rel_start_line = start.line - gui->viewport_start_line;
-    int rel_end_line = end.line - gui->viewport_start_line;
+    int rel_start_line = start.line;
+    int rel_end_line = end.line;
     if (rel_start_line < 0) rel_start_line = 0;
     if (rel_end_line < 0) rel_end_line = 0;
 
@@ -162,7 +162,7 @@ static void apply_format_with_saved(GtkTextBuffer *buf, const char *prefix, cons
         Position start_pos = iter_to_position(&cursor_iter);
         char *wrapped = g_strconcat(prefix, suffix, NULL);
         zig_insert_text(start_pos, wrapped);
-        load_viewport_page(gui, gui->viewport_start_line);
+        gui_reload_full_buffer();
         Position cursor_pos = advance_position(start_pos, prefix);
         gui_set_cursor_position(cursor_pos.line + 1, cursor_pos.col);
         zig_undo_commit();
@@ -176,7 +176,7 @@ static void apply_format_with_saved(GtkTextBuffer *buf, const char *prefix, cons
         Position start_pos = iter_to_position(&start);
         Position end_pos = iter_to_position(&end);
         zig_replace_range(start_pos, end_pos, new_text);
-        load_viewport_page(gui, gui->viewport_start_line);
+        gui_reload_full_buffer();
         select_position_range(gui, start_pos, advance_position(start_pos, new_text));
         zig_undo_commit();
         g_free(text);
@@ -212,7 +212,7 @@ static void apply_paragraph_format_core(GtkTextBuffer *buf, const char *prefix,
     Position start_pos = { start_line, 0 };
     Position end_pos = { end_line + 1, 0 };
     zig_replace_range(start_pos, end_pos, new_block);
-    load_viewport_page(global_gui, global_gui->viewport_start_line);
+    gui_reload_full_buffer();
     gui_set_cursor_position(end_line + 1, G_MAXINT);
     zig_undo_commit();
 
