@@ -98,6 +98,15 @@ system_keys schema). Run it before pushing anything touching `sync.zig` or
 | GtkSourceView language definition | `src/ui/qirtas_markdown.lang` |
 | Editor colour schemes | `src/ui/qirtas*.style-scheme.xml` |
 | Build configuration | `build.zig` |
+| UI string translations (English→Arabic) | `tr_table` in `src/gui.c` (`qirtas_tr`) |
+| Icon style sets (Classic/Modern) | `icon_table` in `src/gui.c` (`qirtas_icon`) |
+| Persisted editor/app preferences | `qirtas_pref_*` helpers in `src/gui/gui_cursor.c`, applied in `apply_editor_prefs` in `src/gui.c` |
+| Find & Replace | `src/gui/gui_search.c` |
+| Settings window contents | settings section of `activate()` in `src/gui.c` |
+| Status-bar menu items | `status_menu_item` block in `src/gui.c` |
+| XDG config path / legacy migration | `configDir`/`dbPathZ`/`migrateLegacyConfig` in `src/main.zig` |
+| Sync setup & troubleshooting docs | `docs/SYNC.md` |
+| Crypto threat model | `docs/SECURITY.md` |
 
 ## GUI Layout and Modules
 
