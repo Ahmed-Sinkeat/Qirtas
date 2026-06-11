@@ -5012,19 +5012,22 @@ gboolean debug_get_iter_at(
     }
 
     int total_lines = gtk_text_buffer_get_line_count(buf);
-    if (rel_line >= 0 && rel_line < total_lines) {
-        GtkTextIter line_start_iter;
-        gtk_text_buffer_get_iter_at_line(buf, &line_start_iter, rel_line);
-        line_bytes = gtk_text_iter_get_bytes_in_line(&line_start_iter);
-        line_chars = gtk_text_iter_get_chars_in_line(&line_start_iter);
-    }
+    if (rel_line < 0) rel_line = 0;
+    if (rel_line >= total_lines) rel_line = total_lines - 1;
 
-    g_print("ITER_DEBUG caller=%s\nline=%d\ncol=%d\nline_bytes=%d\nline_chars=%d\ngeneration=%d\n",
-            caller, rel_line, col, line_bytes, line_chars, generation);
+    GtkTextIter line_start_iter;
+    gtk_text_buffer_get_iter_at_line(buf, &line_start_iter, rel_line);
+    line_bytes = gtk_text_iter_get_bytes_in_line(&line_start_iter);
+    line_chars = gtk_text_iter_get_chars_in_line(&line_start_iter);
 
-    gtk_text_buffer_get_iter_at_line_offset(buf, iter, rel_line, col);
+    g_print("LINE_INDEX_CHECK caller=%s requested=%d available=%d available_chars=%d\n",
+            caller, col, line_bytes, line_chars);
+
+    int requested_index = col;
+    requested_index = CLAMP(requested_index, 0, line_bytes);
+
+    gtk_text_buffer_get_iter_at_line_offset(buf, iter, rel_line, requested_index);
     
-    g_print("ITER_DEBUG SUCCESS caller=%s\n", caller);
     return TRUE;
 }
 
@@ -5045,9 +5048,16 @@ void debug_set_line_offset(
     int offset,
     const char *caller
 ) {
-    g_print("ITER_DEBUG_SET_LINE_OFFSET before caller=%s offset=%d\n", caller, offset);
-    gtk_text_iter_set_line_offset(iter, offset);
-    g_print("ITER_DEBUG_SET_LINE_OFFSET SUCCESS caller=%s\n", caller);
+    int bytes = gtk_text_iter_get_bytes_in_line(iter);
+    int chars = gtk_text_iter_get_chars_in_line(iter);
+
+    g_print("LINE_INDEX_CHECK caller=%s requested=%d available=%d available_chars=%d\n",
+            caller, offset, bytes, chars);
+
+    int requested_index = offset;
+    requested_index = CLAMP(requested_index, 0, bytes);
+
+    gtk_text_iter_set_line_offset(iter, requested_index);
 }
 
 #undef gtk_text_buffer_place_cursor
