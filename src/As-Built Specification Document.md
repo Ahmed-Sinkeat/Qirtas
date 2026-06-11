@@ -335,7 +335,7 @@ Default typography: **Inter** (premium writing experience). Tabs are consolidate
 `zig build test` builds and runs the Zig test suite (`build.zig` wires the
 GTK/sqlite linkage for it). Coverage as of 2026-06-12:
 
-- `main.zig` — system_keys schema shape test
+- `main.zig` — system_keys schema shape test, file encryption round-trip, atomic-write round-trip (content + no leftover tmp file)
 - `sync.zig` — token crypto round-trip (encrypt→decrypt identity), tamper
   rejection (modified ciphertext must fail authentication), ISO-8601
   timestamp parsing, conflict filename generation, syncable-file filter,
@@ -353,6 +353,12 @@ recovery round-trip; no fuzzing of `parse_json_value` in `gui_sync.c`.
 | Item | Status |
 |---|---|
 | Debug instrumentation (ITER_DEBUG, MARK_SET, IDLE_CALLBACK_*, CallbackMetric, etc.) | **Removed.** All `g_print`/`debug_*` helpers and the SIGUSR1 metrics handler are gone from `gui.c` and `gui/*.c`. `g_printerr` error logging in `gui_theme.c` is unaffected (legitimate error reporting, not debug instrumentation). |
+| **Non-atomic saves (truncate-then-write)** | **Fixed (2026-06-12).** All three write paths (`zig_save_document`, `zig_save_active_page`, sync downloads) now go through `atomicWriteFile`: tmp file in same dir → fsync → `rename()`. Crash/power-loss mid-save leaves the original note intact. Covered by test. |
+| **External-file reload dead (`RELOAD_BLOCKED_TEST` stub)** | **Fixed (2026-06-12).** Stub removed; reload is live again with a guard: if the GTK buffer has unsaved edits, reload is skipped and the status bar shows "File changed on disk (unsaved edits kept)" instead of clobbering the user's work. This also closes the sync amplifier where a stale buffer re-saved over freshly synced content. |
+| **Autosave thread never spawned (doc fiction)** | **Fixed (2026-06-12).** The 30-second autosave loop is enabled — safe now that saves are atomic. |
+| Leftover `SAVE_PAGE` / `RELOAD_BLOCKED_TEST` debug prints in `main.zig` | **Removed (2026-06-12).** The earlier "instrumentation removed" claim only covered the C side. |
+| `file_open_in_progress` cross-thread data race (plain `bool` read by inotify thread) | **Fixed (2026-06-12).** Now `std.atomic.Value(bool)` with acquire/release ordering, matching the neighboring `global_wd` atomics. |
+| Undo snapshots unbounded by size (100 full-document heap copies) | **Mitigated (2026-06-12).** Stacks are byte-capped at 64 MB total, oldest evicted. Docs no longer claim "mmap-backed". |
 | `idle_scroll_to_cursor` accumulation | **Fixed.** `scroll_queued` flag added to `AppGui`; `on_mark_set` only schedules `idle_scroll_to_cursor` if not already queued, and the callback clears the flag on entry. |
 | Dead duplicate code in `gui.c` | **Removed.** Three copies of `apply_paragraph_alignment` and a dead duplicate `on_paste_plain_text_received` existed across `gui.c`/`gui_editor.c`/`gui_popover.c`; `gui.c`'s copies were unused and deleted, the live copies kept in `gui_editor.c` (paste handler) and `gui_popover.c` (alignment helper, now exported via `gui_internal.h`). Also removed unused duplicate `apply_regex_conceal`/`apply_regex_conceal_local`/`replace_anchors_with_hrs` from `gui.c` (live copies remain in `gui_conceal.c`). |
 | Cursor position char/byte unit mismatch | **Fixed.** See §4.4. |

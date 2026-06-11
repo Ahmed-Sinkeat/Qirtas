@@ -80,7 +80,7 @@ system_keys schema). Run it before pushing anything touching `sync.zig` or
 | What you want to change | File to edit |
 |---|---|
 | App behaviour, file I/O, autosave, inotify | `src/main.zig` |
-| Undo stack, mmap-backed snapshots, save/restore, text edit APIs | `src/main.zig` |
+| Undo stack (heap snapshots, capped at 64 MB total), save/restore, text edit APIs | `src/main.zig` |
 | BIP-39 recovery phrase helpers | `src/bip39.zig` |
 | Cloud sync logic | `src/sync.zig` |
 | GTK UI layout, window setup, key handling | `src/gui.c` |

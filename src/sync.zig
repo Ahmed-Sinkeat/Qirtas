@@ -519,28 +519,10 @@ fn read_file_content(allocator: std.mem.Allocator, filename: []const u8) ![]cons
 }
 
 fn write_file_mmap(filename: []const u8, content: []const u8) !void {
-    const gpa = std.heap.page_allocator;
-    const filename_z = try gpa.dupeZ(u8, filename);
-    defer gpa.free(filename_z);
-
-    const fd = c.open(filename_z.ptr, c.O_RDWR | c.O_CREAT | c.O_TRUNC, @as(c.mode_t, 0o644));
-    if (fd < 0) return error.CreateFileFailed;
-    defer _ = c.close(fd);
-
-    if (content.len == 0) {
-        return;
-    }
-
-    if (c.ftruncate(fd, @as(c_long, @intCast(content.len))) < 0) {
-        return error.FtruncateFailed;
-    }
-
-    const ptr = c.mmap(null, content.len, c.PROT_READ | c.PROT_WRITE, c.MAP_SHARED, fd, 0);
-    if (ptr == c.MAP_FAILED) return error.MmapFailed;
-    defer _ = c.munmap(ptr, content.len);
-
-    const mmap_slice: [*]u8 = @ptrCast(ptr);
-    @memcpy(mmap_slice[0..content.len], content);
+    // Despite the legacy name this is now an ATOMIC write (tmp + fsync +
+    // rename via main.atomicWriteFile) — sync downloads must never be able
+    // to leave a half-written note on crash/power loss either.
+    try main.atomicWriteFile(filename, content);
 }
 
 fn is_transient_error(status: std.http.Status) bool {
