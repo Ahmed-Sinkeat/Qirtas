@@ -53,7 +53,8 @@ static AppShortcut app_shortcuts[] = {
     { "blockquote", "Blockquote", "<Control>q", 0, 0 },
     { "math", "Math", "<Control>m", 0, 0 },
     { "ordered_list", "Ordered list", "<Control><Shift>o", 0, 0 },
-    { "task_list", "Task list", "<Control><Shift>t", 0, 0 }
+    { "task_list", "Task list", "<Control><Shift>t", 0, 0 },
+    { "insert_hr", "Insert horizontal rule", "<Control><Shift>minus", 0, 0 }
 };
 #define NUM_APP_SHORTCUTS (sizeof(app_shortcuts)/sizeof(app_shortcuts[0]))
 

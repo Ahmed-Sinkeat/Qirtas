@@ -1,33 +1,40 @@
 /* ============================================================
- *  Qirtas — Modern Ink Theme
+ *  Qirtas — Paper & Ink (Light)
  *  theme-qirtas-light.css
+ *
+ *  White paper, dark ink — matches the light logo: an ink-wash
+ *  splash on bright paper. The editor card is the sheet of paper
+ *  (#f6f3eb, same as the qirtas source scheme); the window around
+ *  it is the desk. Caret and accents are ink, not UI blue.
  * ============================================================ */
 
 :root {
   --ui-font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
-  --editor-font-family: 'Inter', 'Noto Sans Arabic', 'Segoe UI', sans-serif;
+  --editor-font-family: 'Lora', 'Inter', 'Noto Naskh Arabic', 'Segoe UI', serif;
 
-  --bg-window: #f6f7f9;
-  --bg-sidebar: #ffffff;
-  --bg-card: #ffffff;
-  --bg-hover: #eef2f6;
-  --bg-active: #e7edf5;
-  --border: #d9e0e8;
-  --border-focus: #1f6feb;
-  --accent: #1f6feb;
-  --accent-light: #0f4f9e;
+  --bg-window: #e9e3d4;
+  --bg-sidebar: #f1ecdf;
+  --bg-card: #f6f3eb;
+  --bg-hover: #eae4d3;
+  --bg-active: #e5dbbe;
+  --border: #d6cdb6;
+  --border-focus: #142d4c;
+  --accent: #16324f;
+  --accent-light: #142d4c;
 
-  --text-primary: #18202a;
-  --text-muted: #5d6875;
-  --text-dim: #7c8794;
-  --cyan: #0e7490;
+  --text-primary: #1b1816;
+  --text-muted: #4d463f;
+  --text-dim: #726861;
+  --cyan: #145a6e;
 
-  --folder-icon: #d97706;
-  --file-icon: #64748b;
-  --md-icon: #1f6feb;
+  --folder-icon: #8a6d3b;
+  --file-icon: #726861;
+  --md-icon: #16324f;
 
-  --status-saved: #16a34a;
-  --status-saving: #0e7490;
-  --status-failed: #dc2626;
-  --dirty-dot-color: #000000;
+  --status-saved: #3f6f3f;
+  --status-saving: #145a6e;
+  --status-failed: #9b2c2c;
+  --dirty-dot-color: #1b1816;
+
+  --caret-color: #1b1816;
 }

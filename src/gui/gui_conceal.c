@@ -36,7 +36,7 @@ gboolean idle_scroll_to_cursor(gpointer user_data) {
     gint offset = d->offset;
     g_free(d);
 
-    if (!gui || !gui->source_view || !gui->vadjustment || !gui->virtual_layout_box)
+    if (!gui || !gui->source_view)
         return G_SOURCE_REMOVE;
     if (gui->primary_button_down && !gui->mouse_dragging)
         return G_SOURCE_REMOVE;
@@ -44,57 +44,26 @@ gboolean idle_scroll_to_cursor(gpointer user_data) {
         return G_SOURCE_REMOVE;
 
     GtkTextBuffer *buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(gui->source_view));
+
+    /* offset == -1 means "scroll to wherever the insert mark is NOW" —
+     * always current even if more cursor moves landed since queuing. */
+    if (offset < 0) {
+        gtk_text_view_scroll_to_mark(GTK_TEXT_VIEW(gui->source_view),
+                                     gtk_text_buffer_get_insert(buf),
+                                     0.12, FALSE, 0.0, 0.0);
+        return G_SOURCE_REMOVE;
+    }
+
     GtkTextIter iter;
     gtk_text_buffer_get_iter_at_offset(buf, &iter, offset);
 
-    GdkRectangle rect;
-    gtk_text_view_get_iter_location(GTK_TEXT_VIEW(gui->source_view), &iter, &rect);
-
-    int win_x = 0, win_y = 0;
-    gtk_text_view_buffer_to_window_coords(GTK_TEXT_VIEW(gui->source_view),
-                                          GTK_TEXT_WINDOW_WIDGET,
-                                          rect.x, rect.y,
-                                          &win_x, &win_y);
-
-    graphene_point_t p, out_p;
-    p.x = (float)win_x;
-    p.y = (float)win_y;
-    if (gtk_widget_compute_point(gui->source_view,
-                                 gui->virtual_layout_box,
-                                 &p, &out_p)) {
-        double dest_y    = out_p.y;
-        double value     = gtk_adjustment_get_value(gui->vadjustment);
-        double page_size = gtk_adjustment_get_page_size(gui->vadjustment);
-        double cursor_y  = dest_y;
-        double cursor_h  = (double)rect.height;
-
-        int line_h = get_line_height(gui->source_view);
-        if (line_h <= 0) line_h = 24;
-
-        double top_cushion    = 3.0 * line_h;
-        double bottom_cushion = 5.0 * line_h;
-
-        if (top_cushion + bottom_cushion > page_size) {
-            top_cushion    = page_size / 4.0;
-            bottom_cushion = page_size / 4.0;
-        }
-
-        double target_value = value;
-        if (cursor_y < value + top_cushion) {
-            target_value = cursor_y - top_cushion;
-        } else if (cursor_y + cursor_h > value + page_size - bottom_cushion) {
-            target_value = cursor_y + cursor_h - page_size + bottom_cushion;
-        }
-
-        double lower = gtk_adjustment_get_lower(gui->vadjustment);
-        double upper = gtk_adjustment_get_upper(gui->vadjustment);
-        if (target_value < lower) target_value = lower;
-        if (target_value > upper - page_size) target_value = upper - page_size;
-
-        if (target_value != value) {
-            gtk_adjustment_set_value(gui->vadjustment, target_value);
-        }
-    }
+    /* The source view is a native scrollable now — let GtkTextView do
+     * the scroll math. within_margin keeps a cushion of context around
+     * the cursor (old behavior: 3–5 lines). */
+    GtkTextMark *mark = gtk_text_buffer_create_mark(buf, NULL, &iter, FALSE);
+    gtk_text_view_scroll_to_mark(GTK_TEXT_VIEW(gui->source_view), mark,
+                                 0.12, FALSE, 0.0, 0.0);
+    gtk_text_buffer_delete_mark(buf, mark);
     return G_SOURCE_REMOVE;
 }
 
@@ -262,6 +231,13 @@ static void apply_regex_conceal_local(GtkTextBuffer *buf, const gchar *text, gin
 static gboolean local_conceal_queued = FALSE;
 static gboolean global_conceal_queued = FALSE;
 
+/* NOTE: conceal must NOT use the "invisible" tag property. GTK4's
+ * visible-line-index bookkeeping is broken for lines mixing invisible
+ * segments with multi-byte UTF-8 (Arabic!) — internal pixel->iter
+ * conversions (mouse clicks, vertical cursor motion) then abort with
+ * "Byte index N is off the end of the line". Shrinking to 1% scale with
+ * fully transparent ink hides the markers without creating invisible
+ * text, so that GTK code path is never taken. */
 static void update_conceal_markdown_all_impl(GtkTextBuffer *buf) {
     if (global_gui && global_gui->in_conceal_update) return;
     if (global_gui) global_gui->in_conceal_update = TRUE;
@@ -269,8 +245,14 @@ static void update_conceal_markdown_all_impl(GtkTextBuffer *buf) {
     GtkTextTagTable *table = gtk_text_buffer_get_tag_table(buf);
     GtkTextTag *conceal_tag = gtk_text_tag_table_lookup(table, "conceal");
     if (!conceal_tag) {
-        conceal_tag = gtk_text_buffer_create_tag(buf, "conceal", "invisible", TRUE, NULL);
+        conceal_tag = gtk_text_buffer_create_tag(buf, "conceal",
+                                                 "scale", 0.01,
+                                                 "foreground", "rgba(0,0,0,0)",
+                                                 NULL);
     }
+    /* Conceal must outrank heading/syntax tags or their scale wins. */
+    gtk_text_tag_set_priority(conceal_tag,
+        gtk_text_tag_table_get_size(table) - 1);
     GtkTextTag *h1_tag = gtk_text_buffer_get_tag_table(buf);
     GtkTextTag *h1_tag_lookup = gtk_text_tag_table_lookup(table, "heading1");
     if (!h1_tag_lookup) h1_tag_lookup = gtk_text_buffer_create_tag(buf, "heading1", "scale", 2.0, NULL);
@@ -418,8 +400,14 @@ static void update_conceal_markdown_impl(GtkTextBuffer *buf) {
     GtkTextTagTable *table = gtk_text_buffer_get_tag_table(buf);
     GtkTextTag *conceal_tag = gtk_text_tag_table_lookup(table, "conceal");
     if (!conceal_tag) {
-        conceal_tag = gtk_text_buffer_create_tag(buf, "conceal", "invisible", TRUE, NULL);
+        conceal_tag = gtk_text_buffer_create_tag(buf, "conceal",
+                                                 "scale", 0.01,
+                                                 "foreground", "rgba(0,0,0,0)",
+                                                 NULL);
     }
+    /* Conceal must outrank heading/syntax tags or their scale wins. */
+    gtk_text_tag_set_priority(conceal_tag,
+        gtk_text_tag_table_get_size(table) - 1);
     GtkTextTag *h1_tag = gtk_text_tag_table_lookup(table, "heading1");
     if (!h1_tag) h1_tag = gtk_text_buffer_create_tag(buf, "heading1", "scale", 2.0, NULL);
     GtkTextTag *h2_tag = gtk_text_tag_table_lookup(table, "heading2");
@@ -538,9 +526,10 @@ void on_buffer_modified_changed(GtkTextBuffer *buf, gpointer user_data) {
 }
 
 void on_mark_set(GtkTextBuffer *buf, GtkTextIter *location, GtkTextMark *mark, gpointer user_data) {
+    (void)location;
     AppGui *gui = (AppGui *)user_data;
     if (gui->in_scroll_update) return;
-    if (!gui->vadjustment || !gui->source_view || !gui->virtual_layout_box) return;
+    if (!gui->source_view) return;
 
     GtkTextMark *insert_mark = gtk_text_buffer_get_insert(buf);
 
@@ -550,14 +539,21 @@ void on_mark_set(GtkTextBuffer *buf, GtkTextIter *location, GtkTextMark *mark, g
 
         if (!gtk_widget_get_realized(gui->source_view)) return;
         if (gui->primary_button_down && !gui->mouse_dragging) return;
+        if (gui->loading_viewport) return;
         if (gui->scroll_queued) return;
 
+        /* Defer to a high-priority idle: mark-set fires while the text
+         * btree is mid-mutation; scrolling synchronously here validates
+         * layout against a stale byte index and aborts with
+         * "Byte index N is off the end of the line". HIGH_IDLE+15 runs
+         * after GTK layout (+10) but before paint (+20), so the
+         * viewport still moves in the same frame the caret is drawn. */
         gui->scroll_queued = TRUE;
         ScrollToCursorData *d = g_new(ScrollToCursorData, 1);
         d->gui = gui;
-        d->offset = gtk_text_iter_get_offset(location);
+        d->offset = -1; /* idle scrolls to the live insert mark */
         d->generation = gui->buffer_generation;
-        g_idle_add(idle_scroll_to_cursor, d);
+        g_idle_add_full(G_PRIORITY_HIGH_IDLE + 15, idle_scroll_to_cursor, d, NULL);
     }
 }
 

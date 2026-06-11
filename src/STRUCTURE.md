@@ -31,10 +31,11 @@ Qirtas/
 │       └── gui_sync.c                   ← Cloud credentials and sync event UI
 │   └── ui/
 │       ├── themes/
-│       │   ├── base.css                 ← Shared layout, spacing, widget styles
+│       │   ├── base.css                 ← Shared layout, spacing, widget styles (incl. compact-ui, paper card)
 │       │   ├── theme-dark.css
 │       │   ├── theme-midnight.css
-│       │   ├── theme-qirtas-light.css
+│       │   ├── theme-qirtas-light.css   ← Paper & Ink light (matches light logo)
+│       │   ├── theme-qirtas-dark.css    ← Paper & Ink dark (matches dark logo)
 │       │   ├── theme-sepia.css
 │       │   ├── theme-things.css
 │       │   ├── theme-typewriter-dark.css
@@ -42,7 +43,7 @@ Qirtas/
 │       │   └── README.md
 │       ├── icons/
 │       ├── qirtas_markdown.lang         ← GtkSourceView language definition
-│       └── qirtas*.style-scheme.xml     ← Editor colour schemes
+│       └── qirtas*.style-scheme.xml     ← Editor colour schemes (qirtas = ink light, qirtas-night = ink dark)
 ├── scratch/                             ← Developer profiling and test scripts
 │   └── profile_cursor_movement.py      ← Cursor movement profiling harness (SIGUSR1-based)
 ├── assets/
@@ -104,9 +105,20 @@ Qirtas/
 
 ## Buffer Model
 
-**Current:** Full-buffer GTK editor. `GtkTextBuffer` holds the entire document. GTK handles scrolling natively via `GtkScrolledWindow`. No virtual paging.
+**Current:** Full-buffer GTK editor. `GtkTextBuffer` holds the entire document. The `GtkSourceView` is the **direct scrollable child** of the `GtkScrolledWindow` — GTK validates Pango layout lazily (visible lines only) and its native scroll-to-cursor logic works. Do **not** wrap the view in a box: that allocates it at full document height, forcing whole-document layout on open (multi-second freeze on big files).
 
-**Removed:** A virtual viewport prototype (`viewport-prototype` git tag) that loaded only a 300-line window was developed but removed. It required buffer-generation guards, spacer widgets, and complex position remapping. The prototype is preserved at the git tag `viewport-prototype` for reference.
+**Removed:** A virtual viewport prototype (`viewport-prototype` git tag) that loaded only a 300-line window was developed but removed. Its leftover spacer-box wrapper around the source view was also removed (2026-06-12).
+
+## Preferences Store
+
+`app_prefs` key/value table in the vault SQLite DB (`qirtas_pref_get_int/set_int/get_string/set_string` in `gui_cursor.c`, declared in `gui_internal.h`). Holds editor prefs (wrap, line numbers, highlight line, right margin, overview map, restore session, compact mode), `app_language` (0 = English, 1 = Arabic RTL), `icon_style` (0 = Classic, 1 = Modern), and `last_file` for session restore. Never extend the zig-owned `session_state` schema from C — use this table.
+
+## Localization & Icons
+
+- `qirtas_tr(en)` in `gui.c` translates UI strings via an in-file English→Arabic table; wrap any new user-visible literal in it.
+- `qirtas_icon(key)` maps logical icon keys ("search", "folder", …) to Classic/Modern symbolic names.
+- Arabic mode flips the whole app RTL via `gtk_widget_set_default_direction`; the bottom status bar is pinned LTR.
+- Markdown conceal must NEVER use the `invisible` tag property (GTK4 aborts on invisible + multi-byte lines); it uses 1% scale + transparent foreground at max tag priority instead.
 
 ## Buffer-Generation Guard Pattern
 

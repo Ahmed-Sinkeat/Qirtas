@@ -43,7 +43,8 @@ static int theme_name_to_index(const char *theme_name) {
     if (strcmp(theme_name, "typewriter-light") == 0) return 4;
     if (strcmp(theme_name, "typewriter-dark") == 0) return 5;
     if (strcmp(theme_name, "qirtas") == 0) return 6;
-    if (strcmp(theme_name, "custom") == 0) return 7;
+    if (strcmp(theme_name, "qirtas-dark") == 0) return 7;
+    if (strcmp(theme_name, "custom") == 0) return 8;
     return 0;
 }
 
@@ -58,18 +59,32 @@ void update_editor_font(AppGui *gui) {
             GTK_STYLE_PROVIDER(gui->font_provider),
             GTK_STYLE_PROVIDER_PRIORITY_APPLICATION + 1);
     }
+    /* This provider sits at APPLICATION+1, above the theme provider —
+     * the caret color it emits always wins, so the custom pointer color
+     * must be honored HERE (emitting it only in the theme provider made
+     * the setting a no-op). */
+    char caret_value[64];
+    if (gui->use_custom_pointer_color) {
+        gchar *rgba_str = gdk_rgba_to_string(&gui->custom_pointer_color);
+        g_strlcpy(caret_value, rgba_str, sizeof(caret_value));
+        g_free(rgba_str);
+    } else {
+        g_strlcpy(caret_value, "var(--caret-color, var(--accent))", sizeof(caret_value));
+    }
+
     char css[1024];
     snprintf(css, sizeof(css),
         "textview text, textview.sourceview text, textview {\n"
         "    font-family: \"%s\", \"%s\", \"serif\";\n"
         "    font-size: %.0fpx;\n"
         "    line-height: 1.45;\n"
-        "    caret-color: var(--caret-color, var(--accent));\n"
+        "    caret-color: %s;\n"
         "}\n"
         "h1, h2, h3 {\n"
         "    font-family: \"Cairo\", \"Inter\", \"system-ui\", sans-serif;\n"
         "}",
-        gui->current_en_font, gui->current_ar_font, gui->current_font_size);
+        gui->current_en_font, gui->current_ar_font, gui->current_font_size,
+        caret_value);
     gtk_css_provider_load_from_string(gui->font_provider, css);
     gui_remeasure_line_height();
 }
@@ -227,9 +242,13 @@ void apply_theme(AppGui *gui, const char *theme_name) {
         active_num_color = "#ff4d4d";
         theme_css_path   = "src/ui/themes/theme-typewriter-dark.css";
     } else if (strcmp(theme_name, "qirtas") == 0) {
-        gutter_color     = "#888888";
-        active_num_color = "#111111";
+        gutter_color     = "#8a8173";
+        active_num_color = "#1b1816";
         theme_css_path   = "src/ui/themes/theme-qirtas-light.css";
+    } else if (strcmp(theme_name, "qirtas-dark") == 0) {
+        gutter_color     = "#6e675c";
+        active_num_color = "#ece7db";
+        theme_css_path   = "src/ui/themes/theme-qirtas-dark.css";
     } else if (strcmp(theme_name, "custom") == 0) {
         gutter_color     = "#555555";
         active_num_color = "#2e80f2";
@@ -364,6 +383,10 @@ void apply_theme(AppGui *gui, const char *theme_name) {
             scheme = gtk_source_style_scheme_manager_get_scheme(sm, "qirtas");
             if (!scheme) scheme = gtk_source_style_scheme_manager_get_scheme(sm, "classic");
             if (!scheme) scheme = gtk_source_style_scheme_manager_get_scheme(sm, "solarized-light");
+        } else if (strcmp(theme_name, "qirtas-dark") == 0) {
+            scheme = gtk_source_style_scheme_manager_get_scheme(sm, "qirtas-night");
+            if (!scheme) scheme = gtk_source_style_scheme_manager_get_scheme(sm, "qirtas-dark");
+            if (!scheme) scheme = gtk_source_style_scheme_manager_get_scheme(sm, "adwaita-dark");
         } else if (strcmp(theme_name, "custom") == 0) {
             scheme = gtk_source_style_scheme_manager_get_scheme(sm, "qirtas-dark");
             if (!scheme) scheme = gtk_source_style_scheme_manager_get_scheme(sm, "adwaita-dark");
@@ -427,8 +450,10 @@ void on_theme_dropdown_changed(GObject *gobject, GParamSpec *pspec, gpointer use
     } else if (selected == 6) {
         apply_theme(gui, "qirtas");
     } else if (selected == 7) {
+        apply_theme(gui, "qirtas-dark");
+    } else if (selected == 8) {
         GtkFileDialog *dialog = gtk_file_dialog_new();
-        gtk_file_dialog_set_title(dialog, "Select Custom Theme CSS");
+        gtk_file_dialog_set_title(dialog, qirtas_tr("Select Custom Theme CSS"));
         
         GtkFileFilter *filter = gtk_file_filter_new();
         gtk_file_filter_set_name(filter, "CSS Files (*.css)");

@@ -1,8 +1,8 @@
 # Qirtas — As-Built Specification Document
 
-**Version:** 0.9.3-dev
+**Version:** 0.9.4-dev
 **Branch:** full-buffer-editor-v2
-**Updated:** 2026-06-11
+**Updated:** 2026-06-12
 
 ---
 
@@ -47,17 +47,21 @@ Sync fires only on: Save, App Close, or "Sync Now". Supports Google Drive, Dropb
 
 ## 3. Architecture: Buffer Model
 
-### 3.1 Current State (Full Buffer)
+### 3.1 Current State (Full Buffer, Native Scrollable)
 
-The GTK `GtkTextBuffer` holds the **entire document**. GTK manages scrolling natively. Pango computes layout coordinates for each line.
+The GTK `GtkTextBuffer` holds the **entire document**. Since 2026-06-12 the `GtkSourceView` is the **direct scrollable child** of the `GtkScrolledWindow` (the leftover virtual-layout spacer box was removed). GTK therefore validates Pango layout **lazily** — only visible lines — so big files open instantly, and GtkTextView's native scroll-to-cursor works.
 
 ```
 Document (owned by Zig backend)
 ↓ zig_get_document_text()
 GtkTextBuffer (entire file)
-↓ GtkSourceView → GTK scroll
+↓ GtkSourceView (direct GtkScrollable child) → lazy line validation
 Visible viewport (native GTK scroll position)
 ```
+
+**Do not re-wrap the source view in a GtkBox** — that allocates it at full document height and forces whole-document layout on open (multi-second UI freeze, choppy pointer).
+
+Per-keystroke costs are debounced: word/char count + full-buffer conceal pass run once per 220 ms typing pause (`buffer_stats_timeout_cb`), not per keystroke. Local conceal around the cursor stays instant via `on_mark_set`.
 
 ### 3.2 Virtual Scroll (Removed)
 
@@ -91,7 +95,7 @@ This guard remains active even in full-buffer mode as a safety net.
 Every cursor movement fires `on_mark_set` for both `insert` and `selection_bound` marks. Each `on_mark_set` call schedules:
 
 - `idle_local_conceal_cb` — re-conceals the current line only
-- `idle_scroll_to_cursor` — scrolls the view to keep cursor visible
+- `idle_scroll_to_cursor` — scrolls the view to keep cursor visible. Runs at `G_PRIORITY_HIGH_IDLE + 15` (after GTK layout at +10, before paint at +20) so the viewport moves in the same frame the caret is drawn. It calls `gtk_text_view_scroll_to_mark` on the live insert mark (offset −1 sentinel) — **never scroll synchronously inside `mark-set`**: the signal fires while the text btree is mid-mutation and synchronous layout validation there aborts.
 
 ### 4.2 Conceal Callback Model
 
@@ -167,6 +171,24 @@ This matches the user's hypothesis: it **is** a real iterator out-of-bounds bug 
 
 **Verified:** rebuilt, ran under gdb with a scripted mouse sweep over a doc containing the repository-layout box-drawing block (the exact reproduction case) — no crash, no `Gtk-ERROR`, process stayed alive.
 
+### 4.6 Final Fix: Conceal No Longer Uses `invisible` (2026-06-12)
+
+The §4.5 fix patched our own call sites, but the same buggy GTK path (`gtk_text_iter_set_visible_line_index`) is also reachable from **GTK-internal** pixel→iter conversions (mouse-click cursor placement, vertical cursor motion) that application code cannot intercept. The crash recurred (`Byte index 49/89 is off the end of the line`).
+
+**Definitive fix:** the markdown `conceal` tag no longer sets `invisible`. It hides markers with `scale = 0.01` + fully transparent `foreground` (`rgba(0,0,0,0)`), with tag priority forced above heading/syntax tags. With zero invisible text in the buffer, GTK never enters its visible-line-index bookkeeping, so the whole bug class is unreachable. Rule for future work: **never apply an `invisible` text tag in this codebase.**
+
+---
+
+## 4b. Preferences, Localization, Icons (2026-06-12)
+
+- **`app_prefs` store** — generic key/value table in the vault DB (`qirtas_pref_*` helpers, `gui_cursor.c`). Holds: `wrap_lines`, `show_line_numbers`, `highlight_current_line`, `show_right_margin`, `right_margin_pos`, `show_overview_map`, `restore_session`, `compact_mode`, `app_language`, `icon_style`, `last_file`.
+- **Settings** moved out of the sidebar into the status-bar menu (☰ → Preferences, Ctrl+,). New entries: line numbers, highlight current line, overview map (GtkSourceMap overlay on the editor card), right margin + position, restore session, compact layout, language, icon style.
+- **Status-bar menu** also carries: Copy File (puts the active `.md` on the clipboard as a `text/uri-list` file), Save As, Find/Replace, Fullscreen, Keyboard Shortcuts, Quit (for environments without window decorations).
+- **Find & Replace** — second row in the search bar; uses `gtk_source_search_context_replace[_all]`.
+- **Localization** — `qirtas_tr()` English→Arabic table in `gui.c`; Arabic mode flips app RTL (`gtk_widget_set_default_direction`), status bar pinned LTR. Labels apply on next launch; direction flips live.
+- **Icon styles** — `qirtas_icon()` logical-key lookup, Classic/Modern symbolic sets; main bar + explorer icons swap live, popovers on next launch.
+- **Caret color fix** — custom pointer color is emitted from the font provider (`APPLICATION+1`); emitting it only from the theme provider was silently overridden.
+
 ---
 
 ## 5. Repository Layout
@@ -204,7 +226,8 @@ Qirtas/
 │       │   ├── base.css                 ← Shared layout, spacing, widget styles
 │       │   ├── theme-dark.css
 │       │   ├── theme-midnight.css
-│       │   ├── theme-qirtas-light.css
+│       │   ├── theme-qirtas-light.css   ← Paper & Ink light
+│       │   ├── theme-qirtas-dark.css    ← Paper & Ink dark
 │       │   ├── theme-sepia.css
 │       │   ├── theme-things.css
 │       │   ├── theme-typewriter-dark.css
