@@ -1,130 +1,264 @@
-# As-Built Specification — Qirtas v0.9.1
+# Qirtas — As-Built Specification Document
 
-## Architecture Invariants
-
-1. Zig owns canonical document content and all edit mutations.
-2. GTK renders only the visible viewport slice plus interaction surfaces.
-3. `request_viewport_position(gui, abs_line)` is the **single entry point** for all viewport requests (scroll, cursor, open-file). Nothing else initiates a page reload.
-4. `load_viewport_page(gui, start, end)` performs raw slice retrieval and viewport range update, snapshots current absolute cursor position, and restores that cursor into the new slice before releasing `loading_viewport`.
-5. `loading_viewport` blocks re-entrant refresh while slice data is changing.
-6. `gui_set_cursor_position(line, col)` routes through `request_viewport_position` and clamps `col` to `gtk_text_iter_get_bytes_in_line()` before setting the iterator — preventing `Byte index N is off the end of the line` aborts.
-7. `load_viewport_page()` increments `buffer_generation` before replacing viewport text. Every deferred idle callback checks this counter and self-cancels if it has changed.
-8. `fire_scroll()` converts viewport-local scroll line to absolute document line before calling `request_viewport_position()`.
+**Version:** 0.9.2-dev
+**Branch:** measure-cursor-v3
+**Updated:** 2026-06-11
 
 ---
 
-## Subsystem: Virtual Viewport (v0.9.1 stable)
+## 1. Project Summary
 
-### What Was Fixed in v0.9.0 → v0.9.1
+Qirtas is a focused, privacy-first markdown notebook for Linux. It combines a Zig backend for file I/O, autosave, encryption, and cloud sync with a C GTK4/Adwaita frontend for native rendering and editing.
 
-#### Bug: Stale `GtkTextIter` → `Byte index N is off the end of the line` crash
-
-**Root cause:** Modules (`gui_conceal.c`, `gui_wiki.c`, `gui_popover.c`) scheduled `g_idle_add` callbacks that captured a `GtkTextBuffer` pointer. Between schedule and execution, `load_viewport_page` could replace the buffer's text entirely. The old iters then pointed into invalidated content — GTK's Pango renderer aborted.
-
-**Fix — `buffer_generation` counter:**
-- `gui_internal.h`: Added `guint buffer_generation` to `AppGui`.
-- `gui.c / load_viewport_page`: Increments `buffer_generation` before every buffer text replacement.
-- All deferred idle callbacks (`ConcealData`, `WikiData`, `ScrollToCursorData`, `HrRenderData`) now store the generation at schedule time. If `d->generation != d->gui->buffer_generation` when the callback fires, it frees itself and returns `G_SOURCE_REMOVE` silently.
-
-Affected call sites:
-- `gui_conceal.c` — `idle_global_conceal_cb`, `idle_local_conceal_cb`, `idle_scroll_to_cursor`
-- `gui_wiki.c` — `idle_wiki_global_cb`, `idle_wiki_local_cb`
-- `gui_popover.c` — `idle_scroll_to_cursor`
-- `gui_hr.c` — `idle_render_hrs_cb`
-
-#### Bug: Scroll jumps backward one page (2191 → 2075 regression)
-
-**Root cause:** When the bottom spacer collapsed to 0 height at end-of-file, GTK's layout engine re-fired `on_scroll_changed` with a slightly different `vadj` value. The 60ms debounce had already committed to line 2191, but the spacer-triggered re-fire computed a different start (2075), passing the `last_loaded_start != new_start` guard and triggering a redundant backward load.
-
-**Fix — direction reversal lock in `fire_scroll`:**
-- Added `last_load_direction` (+1 / -1) and `last_load_time_ms` static locals.
-- If an incoming scroll request contradicts the direction of the immediately preceding load AND less than 200ms have passed, the request is dropped.
-- The direction lock is only applied if `last_loaded_start >= 0` (indicating a valid previous load exists).
-- Added `gui_reset_scroll_direction_state()` to clear direction tracking upon document switch / title change (called in `gui_set_title`).
-- This prevents the spacer-collapse feedback loop from triggering useless reverse page fetches.
-
-#### Bug: `Segmentation fault at 0x100000018` — corrupted pointer crash
-
-**Root cause:** Spacer widgets were being set to 0px height, causing GTK to schedule a layout invalidation. This invalidation could fire while a viewport load was in progress, resulting in a GObject method call on a partially-freed widget handle (`0x100000018` = small integer + garbage high bits).
-
-**Fix — 1px minimum spacer:**
-- `get_spacer_heights()` enforces a floor of 1px for both top and bottom spacers.
-- Spacers are never destroyed and recreated — only resized.
-
-#### Bug: Cursor column crash after page swap
-
-**Root cause:** Cursor restore used a character-offset `col` saved against the old buffer page. After a page swap, the new page's corresponding line could be shorter in bytes, causing `gtk_text_buffer_get_iter_at_line_offset` to abort.
-
-**Fix — byte-clamped cursor restore:**
-- `gui_set_cursor_position` now calls `gtk_text_buffer_get_iter_at_line`, then reads `gtk_text_iter_get_bytes_in_line(&iter)` and clamps `safe_col` to that value before advancing.
-
-#### Bug: Cursor drift after viewport reload
-
-**Root cause:** Reload changed GTK slice without preserving absolute cursor position. The buffer insert mark could stay pinned to old viewport-local rows, so later navigation continued from already visited content.
-
-**Fix — transient absolute cursor snapshot during reload:**
-- `load_viewport_page()` stores `saved_abs_line` and `saved_abs_col` before buffer swap.
-- After new slice loads, it remaps that absolute position into new viewport and re-selects it before `loading_viewport` clears.
-- This keeps viewport-local cursor state aligned with document position without adding persistent cursor architecture.
-
-#### Optimization: Adaptive page size
-
-- `get_page_size(total_lines)` returns 400 / 300 / 250 lines depending on document scale.
-- Reduces GTK buffer churn on very large files without slowing small documents.
-
-#### Optimization: 60ms scroll debounce
-
-- `on_scroll_changed` queues a `g_timeout_add(60, fire_scroll, gui)` instead of loading immediately.
-- `queued_line` always holds the most recent target — intermediate positions during fast scrolls are discarded.
+**Design Principles:**
+- Native GTK4 rendering, no Electron
+- Zig backend owns all persistent state
+- C frontend is a pure presentation layer
+- ChaCha20Poly1305 encryption for local vault files
+- On-demand cloud sync (not continuous)
 
 ---
 
-## Scroll Signal Path
+## 2. Core Technology Decisions
+
+### 2.1 Backend: Zig
+
+- **Seamless C FFI:** Zig exports C-linkage functions consumed by GTK4/Adwaita without wrapper overhead.
+- **Unified Build:** `build.zig` compiles both Zig and C sources into a single executable.
+- **File I/O Ownership:** The Zig backend owns the full document text, inotify watches, undo stack, autosave timer, and crypto vault.
+
+### 2.2 Frontend: C GTK4 & Libadwaita
+
+- **Native UI Performance:** Hardware-accelerated GTK4 rendering. No web-based overhead.
+- **GtkSourceView:** Provides syntax highlighting, custom colour schemes, and markdown language definitions.
+- **Full-Buffer Model:** The GTK `GtkTextBuffer` holds the entire document. Virtual scroll was prototyped and removed. GTK handles natural scrolling natively.
+
+### 2.3 Local Cryptography: ChaCha20Poly1305
+
+- Files encrypted with a random 32-byte Master Key.
+- Master Key stored in `system_keys`, unlocked via `machine-id`-derived key.
+- Recovery uses a 24-word BIP-39 mnemonic with optional passphrase.
+
+### 2.4 Cloud Sync: On-Demand Event-Driven
+
+Sync fires only on: Save, App Close, or "Sync Now". Supports Google Drive, Dropbox, GitHub (Device Flow), and Local folder sync.
+
+---
+
+## 3. Architecture: Buffer Model
+
+### 3.1 Current State (Full Buffer)
+
+The GTK `GtkTextBuffer` holds the **entire document**. GTK manages scrolling natively. Pango computes layout coordinates for each line.
 
 ```
-User scrolls / cursor moves
-        │
-        ▼
-on_scroll_changed(vadj)
-  │  [if in_scroll_update: skip]
-  │  [if loading_viewport: skip]
-  ▼
-queued_line = computed_target_line
-  ▼
-g_timeout_add(60ms) → fire_scroll(gui)
-  │  [if direction reversal within 200ms: drop]
-  │  [if new_start == last_loaded_start: skip]
-  ▼
-request_viewport_position(gui, line)
-  │  [if within safe margins: skip]
-  ▼
-load_viewport_page(gui, start, end)
-  ├─ buffer_generation++
-  ├─ cancel pending conceal/highlight/hr idles  (via generation counter)
-  ├─ signal_handler_block(vadj)
-  ├─ viewport_set_range(gui, start, end)    (spacers ≥ 1px)
-  ├─ gtk_text_buffer_set_text(buf, content, len)
-  └─ g_timeout_add(10ms) → unblock vadj signal
+Document (owned by Zig backend)
+↓ zig_get_document_text()
+GtkTextBuffer (entire file)
+↓ GtkSourceView → GTK scroll
+Visible viewport (native GTK scroll position)
+```
+
+### 3.2 Virtual Scroll (Removed)
+
+A virtual viewport prototype was developed that loaded only a window of ~300 lines into GTK buffer. This required buffer-generation guards, spacer widgets, and complex position remapping.
+
+**Status: Fully removed.** The code was reverted to full-buffer mode. The prototype remains tagged as `viewport-prototype` in git.
+
+### 3.3 Buffer-Generation Guard Pattern
+
+Deferred `g_idle_add` callbacks that walk `GtkTextIter` capture `buffer_generation` at schedule time and discard themselves if the buffer was swapped:
+
+```c
+// Snapshot on schedule:
+d->generation = gui->buffer_generation;
+
+// Check on execute:
+if (d->generation != d->gui->buffer_generation) {
+    g_free(d);
+    return G_SOURCE_REMOVE;
+}
+```
+
+This guard remains active even in full-buffer mode as a safety net.
+
+---
+
+## 4. Cursor Movement Architecture
+
+### 4.1 Mark-Set Chain
+
+Every cursor movement fires `on_mark_set` for both `insert` and `selection_bound` marks. Each `on_mark_set` call schedules:
+
+- `idle_local_conceal_cb` — re-conceals the current line only
+- `idle_scroll_to_cursor` — scrolls the view to keep cursor visible
+
+### 4.2 Conceal Callback Model
+
+| Callback | Trigger | Scope |
+|---|---|---|
+| `idle_local_conceal_cb` | Every cursor move | Current line only |
+| `idle_global_conceal_cb` | File open / large buffer change | Entire buffer |
+| `idle_wiki_local_cb` | Cursor move | Current paragraph |
+| `idle_wiki_global_cb` | File open | Entire buffer |
+
+### 4.3 Profiling Results (2026-06-11)
+
+Measured on `measure-cursor-v3` branch. Test: hold Down Arrow ~100 presses over 5 seconds. Metrics written via SIGUSR1 signal handler.
+
+**1000-line file:**
+
+| Callback | Calls | Total ms | Avg ms | Max ms |
+|---|---|---|---|---|
+| `on_mark_set` | 31 | 0.043 | 0.001 | 0.011 |
+| `idle_local_conceal_cb` | 1 | 0.197 | 0.197 | 0.197 |
+| `idle_global_conceal_cb` | 0 | 0.000 | — | — |
+| `idle_wiki_local_cb` | 0 | 0.000 | — | — |
+| `idle_wiki_global_cb` | 1 | 0.041 | 0.041 | 0.041 |
+
+**5000-line file:**
+
+| Callback | Calls | Total ms | Avg ms | Max ms |
+|---|---|---|---|---|
+| `on_mark_set` | 37 | 0.084 | 0.002 | 0.015 |
+| `idle_local_conceal_cb` | 3 | 0.759 | 0.253 | 0.323 |
+| `idle_global_conceal_cb` | 0 | 0.000 | — | — |
+| `idle_wiki_local_cb` | 0 | 0.000 | — | — |
+| `idle_wiki_global_cb` | 1 | 0.057 | 0.057 | 0.057 |
+
+**Interpretation:**
+- `on_mark_set` itself is negligible (< 0.015 ms max).
+- `idle_local_conceal_cb` is the heaviest per-keypress cost. Max 0.323 ms at 5000 lines.
+- Global passes (`idle_global_conceal_cb`, `idle_wiki_global_cb`) do not run on cursor movement — only on file open.
+- Total cursor-movement overhead per keypress: **< 0.35 ms** at 5000 lines. Not a bottleneck.
+- Low idle_local call count (1–3) for ~100 key presses indicates the virtual-scroll viewport residual code was limiting cursor travel. Full-buffer mode should see higher counts.
+
+---
+
+## 5. Repository Layout
+
+```
+Qirtas/
+├── build.zig
+├── build.zig.zon
+├── src/
+│   ├── main.zig                         ← Zig app root, file I/O, undo, autosave, FFI exports
+│   ├── bip39.zig                        ← BIP-39 recovery phrase helpers
+│   ├── sync.zig                         ← Cloud sync (Google Drive, Dropbox, GitHub, local)
+│   ├── root.zig                         ← Zig module root
+│   ├── gui.c                            ← GTK layout, window setup, scroll, key handling
+│   ├── gui_internal.h                   ← UI-only shared state, AppGui struct, module hooks
+│   ├── gui_shared.h                     ← Zig-facing FFI declarations
+│   ├── STRUCTURE.md                     ← Source layout and edit guide
+│   ├── As-Built Specification Document.md  ← This file
+│   └── gui/
+│       ├── gui_theme.c                  ← CSS loading, theme switching, font selection
+│       ├── gui_cursor.c                 ← Cursor trail animations
+│       ├── gui_editor.c                 ← Editing, buffer events, gestures, shortcuts
+│       ├── gui_popover.c                ← Markdown formatting popup, undo sealing
+│       ├── gui_conceal.c                ← Markdown concealment passes, heading tags, idle guard
+│       ├── gui_wiki.c                   ← Wiki-link parsing and navigation, idle guard
+│       ├── gui_hr.c                     ← Horizontal rule renderer
+│       ├── gui_search.c                 ← Inline search bar overlay
+│       ├── gui_explorer.c               ← Directory tree and active files drawer
+│       ├── gui_tabs.c                   ← Document tab controls in status bar
+│       └── gui_sync.c                   ← Cloud credentials and sync event UI
+│   └── ui/
+│       ├── themes/
+│       │   ├── base.css                 ← Shared layout, spacing, widget styles
+│       │   ├── theme-dark.css
+│       │   ├── theme-midnight.css
+│       │   ├── theme-qirtas-light.css
+│       │   ├── theme-sepia.css
+│       │   ├── theme-things.css
+│       │   ├── theme-typewriter-dark.css
+│       │   └── theme-typewriter-light.css
+│       ├── icons/
+│       ├── qirtas_markdown.lang         ← GtkSourceView language definition
+│       └── qirtas*.style-scheme.xml     ← Editor colour schemes
+├── scratch/                             ← Developer profiling and test scripts
+│   └── profile_cursor_movement.py      ← Cursor movement profiling harness
+├── assets/
+│   └── style.css
+└── .agents/
 ```
 
 ---
 
-## Invariants: What Must Never Happen
+## 6. FFI Bridge
 
-| Forbidden | Consequence |
+C and Zig communicate via C-linkage exports. The Zig backend is the source of truth for document state.
+
+### 6.1 C Functions Called from Zig
+
+| Function | Purpose |
 |---|---|
-| `gui_set_text` called off the main thread | Asserted via `g_assert(g_main_context_is_owner(...))` |
-| Spacer height set to 0 | GTK layout invalidation → corrupted widget pointer crash |
-| `GtkTextIter` used after buffer replacement | Undefined behaviour — use generation counter to cancel |
-| Any module calling `load_viewport_page` directly | Bypasses safe-margin guard and re-entrancy check |
-| Cursor col set without byte-clamping | `Byte index N is off the end of the line` abort |
+| `gui_set_text(text, len)` | Sets GtkTextBuffer from Zig-owned content |
+| `gui_set_title(title)` | Updates window title and active tab |
+| `gui_set_sync_status(status)` | Updates status pill |
+| `gui_show_editor()` | Switches to editor view |
+| `gui_show_recovery_dialog()` | Opens vault recovery modal |
+| `gui_get_cursor_position(line, col)` | Gets current cursor position |
+| `gui_set_cursor_position(line, col)` | Restores cursor (clamped) |
+| `gui_refresh_explorer()` | Refreshes directory tree |
+| `gui_trigger_autosave()` | Invokes autosave flush |
+| `gui_update_sync_status(ok, text)` | Updates Google Drive status |
+| `gui_update_dropbox_status(ok, text)` | Updates Dropbox status |
+| `gui_update_github_status(ok, text)` | Updates GitHub status |
+| `gui_update_local_sync_status(ok, text)` | Updates local sync status |
+| `gui_tabs_close(gui, index)` | Closes a document tab |
+| `gui_tabs_add_or_select(gui, path)` | Opens or focuses tab |
+| `gui_run_on_main_thread(cb, data)` | Runs callback on GTK main thread |
+
+### 6.2 Zig Functions Called from C
+
+| Function | Purpose |
+|---|---|
+| `zig_on_gui_ready()` | Signals UI setup completion |
+| `zig_has_active_master_key()` | Checks vault unlock state |
+| `zig_open_file(filename)` | Opens file, updates watches |
+| `zig_open_vault(dir_path)` | Toggles project directory |
+| `zig_search_workspace(query)` | Searches local files |
+| `zig_get_search_snippet(path)` | Gets search result preview |
+| `zig_get_search_rank(path)` | Ranks search results |
+| `zig_set_cursor_trail(enabled)` | Saves cursor animation config |
+| `zig_get_cursor_trail()` | Gets cursor animation config |
+| `zig_open_wiki_link(note_name)` | Resolves/creates wiki link file |
+| `zig_create_new_file(filename)` | Creates new notebook doc |
+| `zig_on_shutdown()` | Saves state on window close |
+| `zig_force_save()` | Immediate disk flush |
+| `zig_set_editor_border(enabled)` | Configures layout margins |
+| `zig_get_editor_border()` | Gets margin config |
+| `zig_dropbox_check_status()` | Checks Dropbox connection |
+| `zig_github_check_status()` | Checks GitHub connection |
 
 ---
 
-## Notes
+## 7. Theme System
 
-1. Scroll, cursor, and open-file paths must not each decide viewport reload independently. All go through `request_viewport_position`.
-2. `request_viewport_position` is the only place that tunes safe margins and centering offsets. It also logs request context and chosen viewport window for cursor/scroll debugging.
-3. `get_line_at_y()` returns viewport-local line from pixel Y. `fire_scroll()` converts it to absolute document line before asking for reload.
-4. Edge `Down` navigation at last visible line bypasses scroll and directly requests next absolute line, then restores cursor after reload.
-5. The `buffer_generation` pattern is the contract for all deferred buffer access — every new `g_idle_add` that touches the buffer must follow it.
+Themes use two CSS layers:
+
+1. `src/ui/themes/theme-<name>.css` — Color tokens per theme
+2. `src/ui/themes/base.css` — Shared layout, spacing, and widget styles
+
+Default typography: **Inter** (premium writing experience). Tabs are consolidated inside the status bar to minimize vertical clutter.
+
+### Adding a Theme
+
+1. Copy `src/ui/themes/theme-dark.css`.
+2. Update color tokens.
+3. Add branch in `apply_theme()` in `src/gui.c`.
+4. Add to settings dropdown.
+5. Optionally add matching GtkSourceView style scheme.
+
+---
+
+## 8. Known Technical Debt
+
+| Item | Status |
+|---|---|
+| Debug instrumentation (ITER_DEBUG, MARK_SET, etc.) | Partially removed — some log lines remain from profiling session |
+| `idle_scroll_to_cursor` accumulation | Investigated — multiple callbacks can queue per cursor move; needs dedup |
+| Virtual scroll residuals in `gui.c` | Some virtual-scroll functions may remain; audit needed |
+| `test_*.md` files in root | Temporary profiling files, should be gitignored |
+| `.bak` and `.step*` files in `src/` | Backup artifacts, should be cleaned up |

@@ -10,6 +10,7 @@
 #include <unistd.h>
 #include <libgen.h>
 #include <limits.h>
+#include <signal.h>
 #include "gui_internal.h"
 #include "gui_shared.h"
 
@@ -851,9 +852,97 @@ static void on_popover_closed(GtkPopover *popover, gpointer user_data) {
     gtk_editable_set_text(GTK_EDITABLE(w->entry_name), "");
 }
 
+typedef struct {
+    uint64_t count;
+    double total_ms;
+    double max_ms;
+} CallbackMetric;
+
+extern CallbackMetric metric_on_mark_set;
+extern CallbackMetric metric_local_conceal;
+extern CallbackMetric metric_global_conceal;
+extern CallbackMetric metric_wiki_local;
+extern CallbackMetric metric_wiki_global;
+
+static void sigusr1_handler(int sig) {
+    (void)sig;
+    FILE *f = fopen("/tmp/qirtas_profile.txt", "w");
+    if (!f) return;
+    fprintf(f, "=== CURSOR MOVEMENT PROFILING REPORT ===\n");
+    fprintf(f, "on_mark_set:\n");
+    fprintf(f, "  call count: %lu\n", (unsigned long)metric_on_mark_set.count);
+    fprintf(f, "  total time: %.3f ms\n", metric_on_mark_set.total_ms);
+    fprintf(f, "  avg time  : %.3f ms\n", metric_on_mark_set.count ? (metric_on_mark_set.total_ms / metric_on_mark_set.count) : 0.0);
+    fprintf(f, "  max time  : %.3f ms\n", metric_on_mark_set.max_ms);
+    fprintf(f, "idle_local_conceal_cb:\n");
+    fprintf(f, "  call count: %lu\n", (unsigned long)metric_local_conceal.count);
+    fprintf(f, "  total time: %.3f ms\n", metric_local_conceal.total_ms);
+    fprintf(f, "  avg time  : %.3f ms\n", metric_local_conceal.count ? (metric_local_conceal.total_ms / metric_local_conceal.count) : 0.0);
+    fprintf(f, "  max time  : %.3f ms\n", metric_local_conceal.max_ms);
+    fprintf(f, "idle_global_conceal_cb:\n");
+    fprintf(f, "  call count: %lu\n", (unsigned long)metric_global_conceal.count);
+    fprintf(f, "  total time: %.3f ms\n", metric_global_conceal.total_ms);
+    fprintf(f, "  avg time  : %.3f ms\n", metric_global_conceal.count ? (metric_global_conceal.total_ms / metric_global_conceal.count) : 0.0);
+    fprintf(f, "  max time  : %.3f ms\n", metric_global_conceal.max_ms);
+    fprintf(f, "idle_wiki_local_cb:\n");
+    fprintf(f, "  call count: %lu\n", (unsigned long)metric_wiki_local.count);
+    fprintf(f, "  total time: %.3f ms\n", metric_wiki_local.total_ms);
+    fprintf(f, "  avg time  : %.3f ms\n", metric_wiki_local.count ? (metric_wiki_local.total_ms / metric_wiki_local.count) : 0.0);
+    fprintf(f, "  max time  : %.3f ms\n", metric_wiki_local.max_ms);
+    fprintf(f, "idle_wiki_global_cb:\n");
+    fprintf(f, "  call count: %lu\n", (unsigned long)metric_wiki_global.count);
+    fprintf(f, "  total time: %.3f ms\n", metric_wiki_global.total_ms);
+    fprintf(f, "  avg time  : %.3f ms\n", metric_wiki_global.count ? (metric_wiki_global.total_ms / metric_wiki_global.count) : 0.0);
+    fprintf(f, "  max time  : %.3f ms\n", metric_wiki_global.max_ms);
+    fprintf(f, "========================================\n");
+    fclose(f);
+}
+
+static void print_profiling_report(void) {
+    g_print("\n=== CURSOR MOVEMENT PROFILING REPORT ===\n");
+    g_print("on_mark_set:\n");
+    g_print("  call count: %lu\n", (unsigned long)metric_on_mark_set.count);
+    g_print("  total time: %.3f ms\n", metric_on_mark_set.total_ms);
+    g_print("  avg time  : %.3f ms\n", metric_on_mark_set.count ? (metric_on_mark_set.total_ms / metric_on_mark_set.count) : 0.0);
+    g_print("  max time  : %.3f ms\n", metric_on_mark_set.max_ms);
+
+    g_print("idle_local_conceal_cb:\n");
+    g_print("  call count: %lu\n", (unsigned long)metric_local_conceal.count);
+    g_print("  total time: %.3f ms\n", metric_local_conceal.total_ms);
+    g_print("  avg time  : %.3f ms\n", metric_local_conceal.count ? (metric_local_conceal.total_ms / metric_local_conceal.count) : 0.0);
+    g_print("  max time  : %.3f ms\n", metric_local_conceal.max_ms);
+
+    g_print("idle_global_conceal_cb:\n");
+    g_print("  call count: %lu\n", (unsigned long)metric_global_conceal.count);
+    g_print("  total time: %.3f ms\n", metric_global_conceal.total_ms);
+    g_print("  avg time  : %.3f ms\n", metric_global_conceal.count ? (metric_global_conceal.total_ms / metric_global_conceal.count) : 0.0);
+    g_print("  max time  : %.3f ms\n", metric_global_conceal.max_ms);
+
+    g_print("idle_wiki_local_cb:\n");
+    g_print("  call count: %lu\n", (unsigned long)metric_wiki_local.count);
+    g_print("  total time: %.3f ms\n", metric_wiki_local.total_ms);
+    g_print("  avg time  : %.3f ms\n", metric_wiki_local.count ? (metric_wiki_local.total_ms / metric_wiki_local.count) : 0.0);
+    g_print("  max time  : %.3f ms\n", metric_wiki_local.max_ms);
+
+    g_print("idle_wiki_global_cb:\n");
+    g_print("  call count: %lu\n", (unsigned long)metric_wiki_global.count);
+    g_print("  total time: %.3f ms\n", metric_wiki_global.total_ms);
+    g_print("  avg time  : %.3f ms\n", metric_wiki_global.count ? (metric_wiki_global.total_ms / metric_wiki_global.count) : 0.0);
+    g_print("  max time  : %.3f ms\n", metric_wiki_global.max_ms);
+    g_print("========================================\n\n");
+}
+
+static void on_app_shutdown(GApplication *app, gpointer user_data) {
+    (void)app;
+    (void)user_data;
+    print_profiling_report();
+    zig_on_shutdown();
+}
+
 static gboolean on_window_close_request(GtkWindow *window, gpointer user_data) {
     (void)window;
-    zig_on_shutdown();
+    (void)user_data;
+    /* Report now printed in on_app_shutdown via 'shutdown' signal */
     return FALSE; // Allow window closure
 }
 
@@ -3169,40 +3258,6 @@ static void set_spacers_with_compensation(AppGui *gui, int new_top_h, int new_bo
 }
 
 
-gboolean simulate_crash_cb(gpointer user_data) {
-    static int state = 0;
-    AppGui *gui = (AppGui *)user_data;
-    extern void zig_open_file(const char *filename);
-
-    switch (state) {
-        case 0:
-            g_print("\nSTEP 1\nAction:\nOpen large file (gui.c)\n\n");
-            zig_open_file("gui.c");
-            state = 1;
-            break;
-        case 1:
-            g_print("\nSTEP 2\nAction:\nMove cursor to long line (line 679 column 305)\n\n");
-            gui_set_cursor_position(679, 305);
-            state = 2;
-            break;
-        case 2:
-            g_print("\nSTEP 3\nAction:\nSwitch to small file (As-Built Specification Document.md)\n\n");
-            zig_open_file("As-Built Specification Document.md");
-            state = 3;
-            break;
-        default:
-            if (state >= 3 && state < 35) {
-                g_print("\nSTEP 4.%d\nAction:\nTrigger vertical navigation Down key\n\n", state - 2);
-                g_signal_emit_by_name(gui->source_view, "move-cursor", GTK_MOVEMENT_DISPLAY_LINES, 1, FALSE);
-                state++;
-            } else {
-                g_print("\nSTEP 5\nAction:\nDone with steps\n\n");
-                return G_SOURCE_REMOVE;
-            }
-            break;
-    }
-    return G_SOURCE_CONTINUE;
-}
 
 static void activate(GtkApplication *app, gpointer user_data) {
     (void)user_data;
@@ -4404,8 +4459,8 @@ static void activate(GtkApplication *app, gpointer user_data) {
     int gh_connected = zig_github_check_status();
     gui_update_github_status(gh_connected, gh_connected ? "Connected" : "Disconnected");
 
-    g_timeout_add(1000, simulate_crash_cb, gui);
 }
+
 
 /* ============================================================
  * APPLICATION ENTRY POINT
@@ -4416,7 +4471,9 @@ int run_gui(int argc, char **argv) {
     adw_init();
     AdwApplication *app = adw_application_new("org.qirtas.notebook",
                                                G_APPLICATION_DEFAULT_FLAGS);
+    signal(SIGUSR1, sigusr1_handler);
     g_signal_connect(app, "activate", G_CALLBACK(activate), NULL);
+    g_signal_connect(app, "shutdown", G_CALLBACK(on_app_shutdown), NULL);
     int status = g_application_run(G_APPLICATION(app), argc, argv);
     g_object_unref(app);
     gtk_source_finalize();

@@ -360,7 +360,18 @@ typedef struct {
     guint generation;
 } ConcealData;
 
+typedef struct {
+    uint64_t count;
+    double total_ms;
+    double max_ms;
+} CallbackMetric;
+
+CallbackMetric metric_on_mark_set = {0, 0.0, 0.0};
+CallbackMetric metric_local_conceal = {0, 0.0, 0.0};
+CallbackMetric metric_global_conceal = {0, 0.0, 0.0};
+
 static gboolean idle_global_conceal_cb(gpointer user_data) {
+    gint64 start_time = g_get_monotonic_time();
     g_print("IDLE_CALLBACK_START idle_global_conceal_cb\n");
     ConcealData *d = user_data;
     global_conceal_queued = FALSE;
@@ -376,6 +387,12 @@ static gboolean idle_global_conceal_cb(gpointer user_data) {
     }
     g_free(d);
     g_print("IDLE_CALLBACK_END idle_global_conceal_cb SUCCESS\n");
+
+    double elapsed = (double)(g_get_monotonic_time() - start_time) / 1000.0;
+    metric_global_conceal.count++;
+    metric_global_conceal.total_ms += elapsed;
+    if (elapsed > metric_global_conceal.max_ms) metric_global_conceal.max_ms = elapsed;
+
     return G_SOURCE_REMOVE;
 }
 
@@ -504,6 +521,7 @@ static void update_conceal_markdown_impl(GtkTextBuffer *buf) {
 }
 
 static gboolean idle_local_conceal_cb(gpointer user_data) {
+    gint64 start_time = g_get_monotonic_time();
     g_print("IDLE_CALLBACK_START idle_local_conceal_cb\n");
     ConcealData *d = user_data;
     local_conceal_queued = FALSE;
@@ -519,6 +537,12 @@ static gboolean idle_local_conceal_cb(gpointer user_data) {
     }
     g_free(d);
     g_print("IDLE_CALLBACK_END idle_local_conceal_cb SUCCESS\n");
+
+    double elapsed = (double)(g_get_monotonic_time() - start_time) / 1000.0;
+    metric_local_conceal.count++;
+    metric_local_conceal.total_ms += elapsed;
+    if (elapsed > metric_local_conceal.max_ms) metric_local_conceal.max_ms = elapsed;
+
     return G_SOURCE_REMOVE;
 }
 
@@ -544,6 +568,7 @@ void on_buffer_modified_changed(GtkTextBuffer *buf, gpointer user_data) {
 }
 
 void on_mark_set(GtkTextBuffer *buf, GtkTextIter *location, GtkTextMark *mark, gpointer user_data) {
+    gint64 start_time = g_get_monotonic_time();
     AppGui *gui = (AppGui *)user_data;
     if (gui->in_scroll_update) return;
     if (!gui->vadjustment || !gui->source_view || !gui->virtual_layout_box) return;
@@ -570,6 +595,11 @@ void on_mark_set(GtkTextBuffer *buf, GtkTextIter *location, GtkTextMark *mark, g
     } else if (mark == bound_mark) {
         g_print("MARK_SET selection_bound line=%d col=%d generation=%d\n", line, col, gen);
     }
+
+    double elapsed = (double)(g_get_monotonic_time() - start_time) / 1000.0;
+    metric_on_mark_set.count++;
+    metric_on_mark_set.total_ms += elapsed;
+    if (elapsed > metric_on_mark_set.max_ms) metric_on_mark_set.max_ms = elapsed;
 }
 
 void on_cursor_position_changed(GObject *object, GParamSpec *pspec, gpointer user_data) {
