@@ -2,6 +2,11 @@
 #include <gtksourceview/gtksource.h>
 #include "gui_internal.h"
 
+/* Legacy "editor look" export: GtkSourcePrintCompositor renders the buffer
+ * exactly as the editor shows it (syntax colors, monolithic). Themed export
+ * lives in gui_export.c, which owns the qirtas_export_to_pdf entry point
+ * and offers this path as the "Editor look" card. */
+
 static gboolean on_print_paginate(GtkPrintOperation *operation, GtkPrintContext *context, gpointer user_data) {
     GtkSourcePrintCompositor *compositor = GTK_SOURCE_PRINT_COMPOSITOR(user_data);
     if (gtk_source_print_compositor_paginate(compositor, context)) {
@@ -78,7 +83,7 @@ static void on_pdf_save_response(GObject *source_object, GAsyncResult *res, gpoi
     }
 }
 
-void qirtas_export_to_pdf(AppGui *gui) {
+void qirtas_export_editor_look(AppGui *gui) {
     if (!gui || !gui->window) return;
 
     GtkFileDialog *dialog = gtk_file_dialog_new();
