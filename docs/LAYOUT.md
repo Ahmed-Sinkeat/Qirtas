@@ -99,6 +99,7 @@ close) and replace (entry, Replace, All). Built in `gui.c`, logic in
 |---|---|---|
 | Preferences ("settings sheet", 500×620) | ☰ menu / Ctrl+, | `gui.c` (pop_box…settings_win) |
 | Quick Switcher (480×380, fuzzy file open) | Ctrl+P | `src/gui/gui_switcher.c` |
+| Export theme chooser (4 themed cards + Editor look) | ☰ Export PDF / Ctrl+Shift+P | `src/gui/gui_export.c` |
 | Keyboard Shortcuts reference | ☰ menu / Ctrl+? | `src/gui/gui_shortcuts.c` |
 | GitHub device-code dialog | Sync card Connect | `src/gui/gui_sync.c` |
 | Vault recovery modal | backend request | `gui.c` |
