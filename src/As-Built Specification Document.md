@@ -188,6 +188,27 @@ The §4.5 fix patched our own call sites, but the same buggy GTK path (`gtk_text
 
 ---
 
+## 4a. Undo Architecture — single system, GTK's disabled
+
+Undo/redo is owned **entirely by the Zig backend**: full-document heap
+snapshots (`captureUndoEntry`) on commit boundaries, 100 entries max and
+64 MB total per stack, oldest evicted first.
+
+GTK's built-in delta-based undo is **explicitly disabled** right after the
+buffer is created (`gtk_text_buffer_set_enable_undo(buf, FALSE)` in
+`gui.c`) — do not re-enable it. Two parallel histories would double memory
+cost and make Ctrl+Z behavior depend on which system catches the keystroke
+first. `on_editor_key_pressed` intercepts Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y and
+routes them to `zig_undo()` / `zig_redo()`, returning TRUE so GTK's (no-op
+but still bound) `text.undo` action never fires.
+
+If a new editable GtkTextView is ever added (dialogs etc.), GTK4 enables its
+undo by default — that's fine for throwaway entry widgets, but any view
+showing *document* content must have it disabled and route through the Zig
+stack.
+
+---
+
 ## 4b. Preferences, Localization, Icons (2026-06-12)
 
 - **`app_prefs` store** — generic key/value table in the vault DB (`qirtas_pref_*` helpers, `gui_cursor.c`). Holds: `wrap_lines`, `show_line_numbers`, `highlight_current_line`, `show_right_margin`, `right_margin_pos`, `show_overview_map`, `restore_session`, `compact_mode`, `app_language`, `icon_style`, `last_file`.

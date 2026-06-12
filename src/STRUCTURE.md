@@ -81,6 +81,7 @@ system_keys schema). Run it before pushing anything touching `sync.zig` or
 |---|---|
 | App behaviour, file I/O, autosave, inotify | `src/main.zig` |
 | Undo stack (heap snapshots, capped at 64 MB total), save/restore, text edit APIs | `src/main.zig` |
+| Undo keybinding routing (GTK built-in undo is disabled — keep it that way) | `on_editor_key_pressed` in `src/gui/gui_editor.c`, `set_enable_undo(FALSE)` in `src/gui.c` |
 | BIP-39 recovery phrase helpers | `src/bip39.zig` |
 | Cloud sync logic | `src/sync.zig` |
 | GTK UI layout, window setup, key handling | `src/gui.c` |
