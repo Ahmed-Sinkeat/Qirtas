@@ -194,6 +194,7 @@ typedef struct {
     gboolean  restore_session;
     gboolean  compact_mode;
     GtkWidget *source_map;
+    GtkWidget *outline_box;
 } AppGui;
 
 /* Language / icon style (loaded from app_prefs at startup) */
@@ -201,6 +202,18 @@ extern int qirtas_app_language; /* 0 = English, 1 = Arabic */
 extern int qirtas_icon_style;   /* 0 = Classic, 1 = Modern */
 const char *qirtas_tr(const char *en);
 const char *qirtas_icon(const char *key);
+
+void show_quick_switcher(AppGui *gui);
+void gui_outline_refresh(AppGui *gui);
+
+/* Perf observability: QIRTAS_PERF=1 logs main-loop callbacks > 8 ms. */
+extern int qirtas_perf_enabled;
+#define QIRTAS_PERF_BEGIN gint64 _qp_t0 = qirtas_perf_enabled ? g_get_monotonic_time() : 0
+#define QIRTAS_PERF_END(name) do { \
+    if (qirtas_perf_enabled) { \
+        gint64 _qp_d = g_get_monotonic_time() - _qp_t0; \
+        if (_qp_d > 8000) g_printerr("[perf] %s took %.1f ms\n", (name), _qp_d / 1000.0); \
+    } } while (0)
 
 /* Arabic search normalization (implemented in Zig, single source) */
 char *zig_normalize_arabic(const char *text);

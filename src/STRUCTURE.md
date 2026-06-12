@@ -110,6 +110,11 @@ system_keys schema). Run it before pushing anything touching `sync.zig` or
 | Crypto threat model | `docs/SECURITY.md` |
 | Arabic search normalization | `normalizeArabicAlloc` in `src/main.zig` (C side via `zig_normalize_arabic`) |
 | Paragraph direction detection | `detect_rtl` in `src/gui/gui_conceal.c` (first-strong-char, markdown-aware) |
+| Quick Switcher (Ctrl+P) | `src/gui/gui_switcher.c` |
+| Outline panel (heading TOC) | `src/gui/gui_outline.c` |
+| UI layout map (what is where on screen) | `docs/LAYOUT.md` |
+| CI workflow | `.github/workflows/ci.yml` |
+| Flatpak manifest (untested draft) | `packaging/org.qirtas.Qirtas.yml` |
 
 ## GUI Layout and Modules
 
