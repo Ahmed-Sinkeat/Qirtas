@@ -5,9 +5,9 @@ Four sync providers, all **on-demand** (fire on Save, app close, or the ● Sync
 | Provider | Mechanism | Where files go |
 |---|---|---|
 | Google Drive | OAuth loopback (port 12345) + Drive `appDataFolder` API, native Zig HTTP | Hidden app-data folder in your Drive |
-| Dropbox | OAuth loopback (port 5173), upload via `~/.config/qirtas/dropbox_sync.sh` | Your Dropbox app folder |
-| GitHub | Device flow (code shown in dialog), push via `~/.config/qirtas/github_sync.sh` | Repo `lawh-notes` (hardcoded) |
-| Local folder | Plain newest-wins file copy | `~/QirtasSync` (override: `QIRTAS_LOCAL_SYNC_DIR`) |
+| Dropbox | OAuth loopback (port 5173), native Zig HTTP (Dropbox API v2) | `/lawh` folder in your Dropbox app scope |
+| GitHub | Device flow (code shown in dialog), native Zig HTTP (Contents API) | Repo `lawh-notes` (hardcoded), one commit per changed file |
+| Local folder | 3-way compared file copy | `~/QirtasSync` (override: `QIRTAS_LOCAL_SYNC_DIR`) |
 
 Synced file types: `.md .txt .zig .zon .c .h` in the **current working directory** of the app.
 Tokens are stored in the vault DB encrypted with ChaCha20Poly1305 under a key derived from `/etc/machine-id` (= tokens don't survive copying the DB to another machine — by design).
@@ -78,21 +78,38 @@ The status text on each sync card is the primary diagnostic. Run the app from a 
 | `Error: auth expired. reconnect.` | Provider returned 401/403 or `invalid_grant`; tokens were auto-cleared | Reconnect. Google: test-mode OAuth apps get refresh tokens that expire after 7 days — publish the app or reconnect weekly |
 | `Error: missing refresh token.` | Access token expired and no refresh token stored. Google only issues a refresh token on the *first* consent — if you connected before without `prompt=consent`, it was never stored | Disconnect, reconnect, approve again |
 | `Error: token refresh failed.` | Refresh HTTP call failed (network or provider). Terminal shows status + body | If body says `invalid_grant` → reconnect; otherwise check network |
-| `Error: database unavailable.` | Could not open the vault DB (currently hardcoded `/home/.config/lawh/vault.db`) | Ensure path exists and is writable; see "Known limitations" |
+| `Error: database unavailable.` | Could not open the vault DB at `~/.config/qirtas/vault.db` | Ensure the directory exists and is writable |
 | `Error: Google Drive list/download/update/upload/metadata failed.` | The specific Drive API call failed after 3 retries (transient 5xx/429 are retried with backoff) | Terminal shows the HTTP status per attempt. 403 with valid auth = Drive API not enabled for your project |
 | `Error: connection refused / unknown host / network unreachable / connection reset / no network addresses.` | Plain network failure at that step | Check connectivity/DNS/VPN |
-| `Error: dropbox_sync.sh missing.` / `Error: github_sync.sh missing.` | Helper script absent or not executable at `~/.config/qirtas/` (checked with `access(X_OK)`) | Restore the script, `chmod +x` it |
-| `Error: Dropbox sync failed.` / `Error: GitHub sync failed.` | Helper script ran but exited non-zero | Run it by hand to see why: `bash -x /home/.config/lawh/github_sync.sh <token> lawh-notes .` |
+| `Error: Dropbox list/download/upload failed.` | The specific Dropbox API call failed; terminal shows HTTP status + body | 401 → reconnect; 409 with `not_found` on download = file deleted remotely mid-sync, resync |
+| `Error: GitHub auth check / list / download / upload failed.` | The specific Contents-API call failed; terminal shows status + body | 401/403 → token revoked or missing `repo` scope — reconnect; 404 on list = empty repo (normal first run) |
+| `Error: GitHub upload conflict, resync.` | Remote blob sha changed between list and upload (simultaneous sync from another machine) | Press Sync Now again — second pass resolves via the 3-way logic |
 | `Error: cannot open folder.` | `opendir(".")` failed — app's working directory vanished or lacks permission | Launch from a valid directory |
 | `Error: cannot create sync folder.` / `sync target is not a directory.` | `~/QirtasSync` (or `QIRTAS_LOCAL_SYNC_DIR`) couldn't be created, or exists as a file | Remove/rename the blocking file |
 | `Error: sync failed.` | Anything not mapped above | Terminal output has the real error name |
 
-### ⚠️ Conflict behavior — READ THIS, it differs per backend
+### Conflict behavior — unified (2026-06-12)
 
-What happens when the same note changed on two machines since the last sync:
+All four backends now use the same 3-way model: per-file last-synced state is
+stored in the vault DB (`file_metadata` for Drive, `dropbox_sync_meta`,
+`github_sync_meta`, `local_sync_meta`). On each sync:
 
-| Backend | Behavior on conflict | Can it lose your edits? |
-|---|---|---|
+- changed locally only → upload/copy out
+- changed remotely only → download/copy in (open buffer reloads if clean)
+- changed on BOTH sides → contents are compared first; if they actually
+  differ, your local version is preserved as `<name>_conflict.<ext>` and the
+  remote version takes the original filename. The status card shows
+  `Synced ✓ (N conflicts saved)`. Merge by hand.
+
+No backend silently discards edits anymore. History: before 2026-06-12 the
+Dropbox script downloaded remote over local unconditionally and Local was
+newest-mtime-wins — both could destroy edits. That code is gone (the bash
+helper scripts were replaced by native Zig HTTP entirely).
+
+GitHub bonus: every upload is a commit, so even conflict losers remain
+recoverable from repo history.
+
+---|---|---|
 | **Google Drive** | True 3-way detection (local mtime + Drive modifiedTime vs `file_metadata.last_modified` in the vault DB). Cloud version takes the original filename, your local version is preserved as `<name>_conflict.<ext>`. Merge by hand. | No — both versions kept |
 | **Dropbox** | **No conflict detection at all.** The script downloads every remote `.md`/`.txt` over your local files FIRST, then uploads. Any local edit made since the other machine's last upload is **silently overwritten by the remote copy**, and the overwritten file is then re-uploaded. | **YES — local edits since last sync are destroyed** |
 | **GitHub** | `git pull --rebase --strategy-option=theirs` — on conflicting lines the **remote side silently wins**, then your (now-merged) state is pushed. Non-conflicting changes survive; conflicting hunks of your local edit are lost. Old versions remain recoverable in git history. | Partially — conflicting hunks lost from working copy, recoverable via `git log` in `~/.config/qirtas/github_sync` |
@@ -108,9 +125,10 @@ metadata comparison (+`_conflict` copies) to the other three backends.
 ## 3. Known limitations / sharp edges
 
 1. ~~Hardcoded DB path~~ **Fixed (2026-06-12):** everything now lives in `$XDG_CONFIG_HOME/qirtas/` (default `~/.config/qirtas/`) — vault.db and the sync scripts. On first launch the app automatically copies (never deletes) any data found at the old `/home/.config/lawh/` location. Path is resolved once in `main.zig` (`configDir()`/`dbPathZ()`) and exported to C as `zig_db_path()`.
-2. **Helper-script dependency**: Dropbox/GitHub data transfer happens in shell scripts at `~/.config/qirtas/`, outside the repo — not installed by the build; a fresh machine will hit the "script missing" error.
+2. ~~Helper-script dependency~~ **Fixed (2026-06-12):** Dropbox and GitHub sync are native Zig HTTP — no bash, no curl/jq, nothing outside the binary. (`curl` is still used by the GitHub *connect* device flow in `gui_sync.c`; sync itself needs nothing.) Leftover scripts in `~/.config/qirtas/` are unused and can be deleted.
 3. **GitHub repo hardcoded** to `lawh-notes`; repo entry field in the UI is not wired.
 4. `zig_github_connect()` in sync.zig writes a mock token to a nonexistent column — dead code (the real flow is the C device flow); harmless but should be deleted.
 5. Sync scans only the app's **current working directory**, non-recursive.
+6. Deletion does not propagate: removing a file on one side resurrects it from the other on next sync.
 6. Tokens are machine-bound (`/etc/machine-id` key derivation): restoring vault.db onto new hardware silently invalidates all sync credentials → `Error: missing credentials.` after decryption fails.
 7. Diagnostics print to stdout only — launch from a terminal (`zig build run` or `./zig-out/bin/qirtas`) when investigating.

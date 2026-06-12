@@ -550,6 +550,14 @@ fn sync_error_message(err: anyerror) []const u8 {
         error.DriveCreateFailed => "Error: Google Drive upload failed.",
         error.DriveListFailed => "Error: Google Drive list failed.",
         error.DriveMetaFailed => "Error: Google Drive metadata failed.",
+        error.GithubUserFailed => "Error: GitHub auth check failed.",
+        error.GithubListFailed => "Error: GitHub list failed.",
+        error.GithubDownloadFailed => "Error: GitHub download failed.",
+        error.GithubUploadFailed => "Error: GitHub upload failed.",
+        error.GithubShaConflict => "Error: GitHub upload conflict, resync.",
+        error.DropboxListFailed => "Error: Dropbox list failed.",
+        error.DropboxDownloadFailed => "Error: Dropbox download failed.",
+        error.DropboxUploadFailed => "Error: Dropbox upload failed.",
         error.ConnectionRefused => "Error: connection refused.",
         error.UnknownHostName => "Error: unknown host.",
         error.ConnectionReset => "Error: connection reset.",
@@ -966,7 +974,7 @@ fn local_sync_worker() void {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
 
-    local_sync_impl(arena.allocator()) catch |err| {
+    const conflicts = local_sync_impl(arena.allocator()) catch |err| {
         std.debug.print("Local sync failed: {}\n", .{err});
         var msg_buf: [128]u8 = undefined;
         gui_update_local_sync_status(0, sync_error_message_z(err, &msg_buf));
@@ -974,41 +982,92 @@ fn local_sync_worker() void {
     };
 
     gui_refresh_explorer();
-    gui_update_local_sync_status(1, "~/QirtasSync");
+    if (conflicts > 0) {
+        var buf: [64]u8 = undefined;
+        const msg = std.fmt.bufPrintZ(&buf, "Synced ({d} conflict{s} saved)", .{ conflicts, if (conflicts == 1) "" else "s" }) catch "~/QirtasSync";
+        gui_update_local_sync_status(1, msg);
+    } else {
+        gui_update_local_sync_status(1, "~/QirtasSync");
+    }
 }
 
-fn local_sync_impl(allocator: std.mem.Allocator) !void {
+/// Local folder sync, 3-way like the cloud backends: per-file last-synced
+/// mtimes in local_sync_meta. Both-changed → local saved as _conflict copy,
+/// the sync-folder version wins the original name (consistent with Drive:
+/// "remote" wins). Content is compared first so equal files never produce
+/// a false conflict.
+fn local_sync_impl(allocator: std.mem.Allocator) !u32 {
+    var conflicts: u32 = 0;
+    var num_buf: [24]u8 = undefined;
+
     const target_dir = try local_sync_dir_path(allocator);
     try ensure_directory(target_dir);
 
-    const local_dir = c.opendir(".");
-    if (local_dir == null) return error.OpenDirFailed;
-    defer _ = c.closedir(local_dir);
+    var local_map = try collect_local_files(allocator);
+    defer local_map.deinit();
 
-    while (true) {
-        const entry = c.readdir(local_dir);
-        if (entry == null) break;
-        const name = std.mem.span(@as([*:0]const u8, @ptrCast(&entry.*.d_name)));
-        if (!is_syncable_file(name)) continue;
-
+    var local_it = local_map.iterator();
+    while (local_it.next()) |entry| {
+        const name = entry.key_ptr.*;
+        const local_mtime = entry.value_ptr.*;
         const target_path = try join_path(allocator, target_dir, name);
-        const local_stat = stat_path(name) orelse continue;
-        const target_stat = stat_path(target_path);
+        defer allocator.free(target_path);
 
-        if (target_stat) |remote_stat| {
-            if (local_stat.st_mtim.tv_sec > remote_stat.st_mtim.tv_sec) {
+        if (stat_path(target_path)) |remote_stat| {
+            const remote_mtime = remote_stat.st_mtim.tv_sec;
+            const meta = sync_meta_get("local_sync_meta", allocator, name);
+            defer if (meta) |m| allocator.free(m.remote_marker);
+
+            const stored_local: i64 = if (meta) |m| m.local_mtime else -1;
+            const stored_remote: i64 = if (meta) |m|
+                std.fmt.parseInt(i64, m.remote_marker, 10) catch -1
+            else
+                -1;
+            const local_changed = local_mtime != stored_local;
+            const remote_changed = remote_mtime != stored_remote;
+
+            if (local_changed and remote_changed) {
+                const local_content = try read_file_content(allocator, name);
+                defer allocator.free(local_content);
+                const remote_content = try read_file_content(allocator, target_path);
+                defer allocator.free(remote_content);
+
+                if (!std.mem.eql(u8, local_content, remote_content)) {
+                    try preserve_local_as_conflict(allocator, name);
+                    conflicts += 1;
+                    try write_file_mmap(name, remote_content);
+                    const name_z = try allocator.dupeZ(u8, name);
+                    defer allocator.free(name_z);
+                    gui_index_file(name_z.ptr);
+                    main.alert_file_updated();
+                }
+                const new_st = stat_path(name) orelse continue;
+                sync_meta_set("local_sync_meta", allocator, name, new_st.st_mtim.tv_sec, i64_to_text(&num_buf, remote_mtime));
+            } else if (local_changed) {
                 try copy_file_path(allocator, name, target_path);
-            } else if (remote_stat.st_mtim.tv_sec > local_stat.st_mtim.tv_sec) {
+                const new_remote = stat_path(target_path) orelse continue;
+                sync_meta_set("local_sync_meta", allocator, name, local_mtime, i64_to_text(&num_buf, new_remote.st_mtim.tv_sec));
+            } else if (remote_changed) {
                 try copy_file_path(allocator, target_path, name);
                 const name_z = try allocator.dupeZ(u8, name);
+                defer allocator.free(name_z);
                 gui_index_file(name_z.ptr);
+                main.alert_file_updated();
+                const new_st = stat_path(name) orelse continue;
+                sync_meta_set("local_sync_meta", allocator, name, new_st.st_mtim.tv_sec, i64_to_text(&num_buf, remote_mtime));
+            } else if (meta == null) {
+                sync_meta_set("local_sync_meta", allocator, name, local_mtime, i64_to_text(&num_buf, remote_mtime));
             }
         } else {
             try copy_file_path(allocator, name, target_path);
+            const new_remote = stat_path(target_path) orelse continue;
+            sync_meta_set("local_sync_meta", allocator, name, local_mtime, i64_to_text(&num_buf, new_remote.st_mtim.tv_sec));
         }
     }
 
+    // Sync-folder-only files → copy in
     const remote_dir_z = try allocator.dupeZ(u8, target_dir);
+    defer allocator.free(remote_dir_z);
     const remote_dir = c.opendir(remote_dir_z.ptr);
     if (remote_dir == null) return error.OpenDirFailed;
     defer _ = c.closedir(remote_dir);
@@ -1018,14 +1077,22 @@ fn local_sync_impl(allocator: std.mem.Allocator) !void {
         if (entry == null) break;
         const name = std.mem.span(@as([*:0]const u8, @ptrCast(&entry.*.d_name)));
         if (!is_syncable_file(name)) continue;
+        if (local_map.contains(name)) continue;
 
         if (stat_path(name) == null) {
             const source_path = try join_path(allocator, target_dir, name);
+            defer allocator.free(source_path);
             try copy_file_path(allocator, source_path, name);
             const name_z = try allocator.dupeZ(u8, name);
+            defer allocator.free(name_z);
             gui_index_file(name_z.ptr);
+            const new_st = stat_path(name) orelse continue;
+            const rs = stat_path(source_path) orelse continue;
+            sync_meta_set("local_sync_meta", allocator, name, new_st.st_mtim.tv_sec, i64_to_text(&num_buf, rs.st_mtim.tv_sec));
         }
     }
+
+    return conflicts;
 }
 
 // FFI: Trigger manual backup sync
@@ -1437,6 +1504,220 @@ pub fn decryptToken(allocator: std.mem.Allocator, hex_token: []const u8) ![]u8 {
     return pt_buf;
 }
 
+
+// ─────────────────────────────────────────────────────────────
+// Shared sync infrastructure: HTTP fetch, per-file sync metadata,
+// encoders. Used by the native Dropbox / GitHub / Local backends.
+// ─────────────────────────────────────────────────────────────
+
+const HttpResult = struct {
+    status: std.http.Status,
+    body: []u8,
+};
+
+/// One-shot HTTP request collecting the whole response body.
+/// Caller frees result.body.
+fn http_fetch(
+    allocator: std.mem.Allocator,
+    method: std.http.Method,
+    url: []const u8,
+    headers: []const std.http.Header,
+    body: ?[]const u8,
+) !HttpResult {
+    var client = std.http.Client{ .allocator = allocator, .io = main.global_io };
+    defer client.deinit();
+
+    const uri = try std.Uri.parse(url);
+    var req = try client.request(method, uri, .{ .extra_headers = headers });
+    defer req.deinit();
+
+    if (body) |b| {
+        const buf = try allocator.dupe(u8, b);
+        defer allocator.free(buf);
+        try req.sendBodyComplete(buf);
+    } else {
+        try req.sendBodiless();
+    }
+
+    var redirect_buf: [2048]u8 = undefined;
+    var response = try req.receiveHead(&redirect_buf);
+    const status = response.head.status;
+
+    var transfer_buf: [4096]u8 = undefined;
+    const rdr = response.reader(&transfer_buf);
+    var list: std.ArrayList(u8) = .empty;
+    errdefer list.deinit(allocator);
+    while (true) {
+        var chunk: [4096]u8 = undefined;
+        const n = rdr.readSliceShort(&chunk) catch |err| {
+            if (err == error.EndOfStream) break;
+            return err;
+        };
+        if (n == 0) break;
+        try list.appendSlice(allocator, chunk[0..n]);
+    }
+    return .{ .status = status, .body = try list.toOwnedSlice(allocator) };
+}
+
+/// Per-file last-synced state. `remote_marker` is backend-defined: a decimal
+/// mtime for Dropbox/Local, a git blob sha for GitHub. The 3-way decision is
+/// always: local_changed = (local mtime != stored), remote_changed = (remote
+/// marker != stored). Both changed → conflict copy, remote wins original.
+const SyncMeta = struct {
+    local_mtime: i64,
+    remote_marker: []u8,
+};
+
+fn sync_meta_ensure(comptime table: []const u8, db: *c.sqlite3) void {
+    _ = c.sqlite3_exec(db,
+        "CREATE TABLE IF NOT EXISTS " ++ table ++
+            " (filepath TEXT PRIMARY KEY, local_mtime INTEGER, remote_marker TEXT);",
+        null, null, null);
+}
+
+fn sync_meta_get(comptime table: []const u8, allocator: std.mem.Allocator, filepath: []const u8) ?SyncMeta {
+    var db: ?*c.sqlite3 = null;
+    if (c.sqlite3_open(dbp(), &db) != c.SQLITE_OK) {
+        if (db != null) _ = c.sqlite3_close(db);
+        return null;
+    }
+    defer _ = c.sqlite3_close(db);
+    _ = c.sqlite3_busy_timeout(db, 5000);
+    sync_meta_ensure(table, db.?);
+
+    const sql = "SELECT local_mtime, remote_marker FROM " ++ table ++ " WHERE filepath = ?;";
+    var stmt: ?*c.sqlite3_stmt = null;
+    if (c.sqlite3_prepare_v2(db, sql.ptr, -1, &stmt, null) != c.SQLITE_OK) return null;
+    defer _ = c.sqlite3_finalize(stmt);
+
+    const fp_z = allocator.dupeZ(u8, filepath) catch return null;
+    defer allocator.free(fp_z);
+    _ = c.sqlite3_bind_text(stmt, 1, fp_z.ptr, -1, null);
+
+    if (c.sqlite3_step(stmt) == c.SQLITE_ROW) {
+        const lm = c.sqlite3_column_int64(stmt, 0);
+        const rm = c.sqlite3_column_text(stmt, 1);
+        const rm_dup = allocator.dupe(u8, if (rm != null) std.mem.span(rm) else "") catch return null;
+        return SyncMeta{ .local_mtime = lm, .remote_marker = rm_dup };
+    }
+    return null;
+}
+
+fn sync_meta_set(comptime table: []const u8, allocator: std.mem.Allocator, filepath: []const u8, local_mtime: i64, remote_marker: []const u8) void {
+    var db: ?*c.sqlite3 = null;
+    if (c.sqlite3_open(dbp(), &db) != c.SQLITE_OK) {
+        if (db != null) _ = c.sqlite3_close(db);
+        return;
+    }
+    defer _ = c.sqlite3_close(db);
+    _ = c.sqlite3_busy_timeout(db, 5000);
+    sync_meta_ensure(table, db.?);
+
+    const sql = "INSERT OR REPLACE INTO " ++ table ++ " (filepath, local_mtime, remote_marker) VALUES (?, ?, ?);";
+    var stmt: ?*c.sqlite3_stmt = null;
+    if (c.sqlite3_prepare_v2(db, sql.ptr, -1, &stmt, null) != c.SQLITE_OK) return;
+    defer _ = c.sqlite3_finalize(stmt);
+
+    const fp_z = allocator.dupeZ(u8, filepath) catch return;
+    defer allocator.free(fp_z);
+    const rm_z = allocator.dupeZ(u8, remote_marker) catch return;
+    defer allocator.free(rm_z);
+
+    _ = c.sqlite3_bind_text(stmt, 1, fp_z.ptr, -1, null);
+    _ = c.sqlite3_bind_int64(stmt, 2, local_mtime);
+    _ = c.sqlite3_bind_text(stmt, 3, rm_z.ptr, -1, null);
+    _ = c.sqlite3_step(stmt);
+}
+
+fn i64_to_text(buf: []u8, v: i64) []const u8 {
+    return std.fmt.bufPrint(buf, "{d}", .{v}) catch "0";
+}
+
+/// Percent-encode a path segment (everything except unreserved chars).
+fn percent_encode(allocator: std.mem.Allocator, s: []const u8) ![]u8 {
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(allocator);
+    for (s) |ch| {
+        const unreserved = (ch >= 'A' and ch <= 'Z') or (ch >= 'a' and ch <= 'z') or
+            (ch >= '0' and ch <= '9') or ch == '-' or ch == '.' or ch == '_' or ch == '~';
+        if (unreserved) {
+            try out.append(allocator, ch);
+        } else {
+            var hex: [3]u8 = undefined;
+            _ = std.fmt.bufPrint(&hex, "%{X:0>2}", .{ch}) catch unreachable;
+            try out.appendSlice(allocator, &hex);
+        }
+    }
+    return out.toOwnedSlice(allocator);
+}
+
+/// Escape a string for use inside HTTP-header JSON (Dropbox-API-Arg):
+/// quotes/backslash/control escaped, all non-ASCII as \uXXXX (UTF-16,
+/// surrogate pairs for astral chars) — headers must stay ASCII.
+fn json_escape_header(allocator: std.mem.Allocator, s: []const u8) ![]u8 {
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(allocator);
+    var it = (std.unicode.Utf8View.init(s) catch return error.InvalidUtf8).iterator();
+    while (it.nextCodepoint()) |cp| {
+        if (cp == '"' or cp == '\\') {
+            try out.append(allocator, '\\');
+            try out.append(allocator, @intCast(cp));
+        } else if (cp < 0x20) {
+            var esc: [6]u8 = undefined;
+            _ = std.fmt.bufPrint(&esc, "\\u{X:0>4}", .{cp}) catch unreachable;
+            try out.appendSlice(allocator, &esc);
+        } else if (cp < 0x80) {
+            try out.append(allocator, @intCast(cp));
+        } else if (cp <= 0xFFFF) {
+            var esc: [6]u8 = undefined;
+            _ = std.fmt.bufPrint(&esc, "\\u{X:0>4}", .{cp}) catch unreachable;
+            try out.appendSlice(allocator, &esc);
+        } else {
+            const v = cp - 0x10000;
+            const hi = 0xD800 + (v >> 10);
+            const lo = 0xDC00 + (v & 0x3FF);
+            var esc: [12]u8 = undefined;
+            const w = std.fmt.bufPrint(&esc, "\\u{X:0>4}\\u{X:0>4}", .{ hi, lo }) catch unreachable;
+            try out.appendSlice(allocator, w);
+        }
+    }
+    return out.toOwnedSlice(allocator);
+}
+
+/// Scan the workspace for syncable files → name→mtime map. Keys are
+/// allocator-owned.
+fn collect_local_files(allocator: std.mem.Allocator) !std.StringHashMap(i64) {
+    var map = std.StringHashMap(i64).init(allocator);
+    errdefer map.deinit();
+    const dir_handle = c.opendir(".");
+    if (dir_handle == null) return error.OpenDirFailed;
+    defer _ = c.closedir(dir_handle);
+    while (true) {
+        const entry = c.readdir(dir_handle);
+        if (entry == null) break;
+        const name = std.mem.span(@as([*:0]const u8, @ptrCast(&entry.*.d_name)));
+        if (!is_syncable_file(name)) continue;
+        if (stat_path(name)) |st| {
+            const key = try allocator.dupe(u8, name);
+            try map.put(key, st.st_mtim.tv_sec);
+        }
+    }
+    return map;
+}
+
+/// Save the local version under <name>_conflict.<ext> before the remote
+/// version takes the original filename.
+fn preserve_local_as_conflict(allocator: std.mem.Allocator, filename: []const u8) !void {
+    const conflict_name = try make_conflict_filename(allocator, filename);
+    defer allocator.free(conflict_name);
+    const local_content = try read_file_content(allocator, filename);
+    defer allocator.free(local_content);
+    try write_file_mmap(conflict_name, local_content);
+    const z = try allocator.dupeZ(u8, conflict_name);
+    defer allocator.free(z);
+    gui_index_file(z.ptr);
+}
+
 pub export fn zig_save_dropbox_credentials(client_id_ptr: [*:0]const u8, client_secret_ptr: [*:0]const u8) callconv(.c) void {
     var db: ?*c.sqlite3 = null;
     if (c.sqlite3_open(dbp(), &db) != c.SQLITE_OK) {
@@ -1825,8 +2106,226 @@ pub export fn zig_dropbox_now() callconv(.c) void {
     };
 }
 
+// ─────────────────────────────────────────────────────────────
+// Native Dropbox sync (no shell script). 3-way conflict detection
+// matching the Google Drive backend: per-file last-synced state in
+// dropbox_sync_meta; both-changed → local saved as _conflict copy,
+// remote wins the original name.
+// ─────────────────────────────────────────────────────────────
+
+const DBX_FOLDER = "/lawh"; // keep legacy folder so existing users' data is found
+
+const DbxListResp = struct {
+    entries: []struct {
+        @".tag": []const u8 = "",
+        name: []const u8 = "",
+        server_modified: []const u8 = "",
+    },
+    cursor: []const u8 = "",
+    has_more: bool = false,
+};
+
+const DbxFileMeta = struct {
+    server_modified: []const u8 = "",
+};
+
+fn dropbox_remote_list(allocator: std.mem.Allocator, token: []const u8) !std.StringHashMap(i64) {
+    var map = std.StringHashMap(i64).init(allocator);
+    errdefer map.deinit();
+
+    const auth = try std.fmt.allocPrint(allocator, "Bearer {s}", .{token});
+    defer allocator.free(auth);
+
+    var first = true;
+    var cursor: []u8 = try allocator.dupe(u8, "");
+    defer allocator.free(cursor);
+
+    while (true) {
+        const url = if (first)
+            "https://api.dropboxapi.com/2/files/list_folder"
+        else
+            "https://api.dropboxapi.com/2/files/list_folder/continue";
+        const body = if (first)
+            try std.fmt.allocPrint(allocator, "{{\"path\": \"{s}\"}}", .{DBX_FOLDER})
+        else
+            try std.fmt.allocPrint(allocator, "{{\"cursor\": \"{s}\"}}", .{cursor});
+        defer allocator.free(body);
+
+        const res = try http_fetch(allocator, .POST, url, &[_]std.http.Header{
+            .{ .name = "Authorization", .value = auth },
+            .{ .name = "Content-Type", .value = "application/json" },
+        }, body);
+        defer allocator.free(res.body);
+
+        if (res.status != .ok) {
+            // path/not_found = empty folder on first sync
+            if (first and std.mem.indexOf(u8, res.body, "not_found") != null) return map;
+            if (res.status == .unauthorized) return error.AuthenticationExpired;
+            std.debug.print("Dropbox list failed {}: {s}\n", .{ res.status, res.body });
+            return error.DropboxListFailed;
+        }
+
+        const parsed = try std.json.parseFromSlice(DbxListResp, allocator, res.body, .{ .ignore_unknown_fields = true });
+        defer parsed.deinit();
+
+        for (parsed.value.entries) |e| {
+            if (!std.mem.eql(u8, e.@".tag", "file")) continue;
+            if (!is_syncable_file(e.name)) continue;
+            const t = parse_iso8601_to_unix(e.server_modified) catch 0;
+            const key = try allocator.dupe(u8, e.name);
+            try map.put(key, t);
+        }
+
+        if (!parsed.value.has_more) break;
+        allocator.free(cursor);
+        cursor = try allocator.dupe(u8, parsed.value.cursor);
+        first = false;
+    }
+    return map;
+}
+
+fn dropbox_api_arg_path(allocator: std.mem.Allocator, filename: []const u8) ![]u8 {
+    const esc = try json_escape_header(allocator, filename);
+    defer allocator.free(esc);
+    return std.fmt.allocPrint(allocator, "{{\"path\": \"{s}/{s}\"}}", .{ DBX_FOLDER, esc });
+}
+
+fn dropbox_download(allocator: std.mem.Allocator, token: []const u8, filename: []const u8) ![]u8 {
+    const auth = try std.fmt.allocPrint(allocator, "Bearer {s}", .{token});
+    defer allocator.free(auth);
+    const arg = try dropbox_api_arg_path(allocator, filename);
+    defer allocator.free(arg);
+
+    const res = try http_fetch(allocator, .POST, "https://content.dropboxapi.com/2/files/download", &[_]std.http.Header{
+        .{ .name = "Authorization", .value = auth },
+        .{ .name = "Dropbox-API-Arg", .value = arg },
+    }, "");
+    if (res.status != .ok) {
+        defer allocator.free(res.body);
+        std.debug.print("Dropbox download {s} failed {}: {s}\n", .{ filename, res.status, res.body });
+        return error.DropboxDownloadFailed;
+    }
+    return res.body;
+}
+
+/// Upload (overwrite) and return the new server_modified unix time.
+fn dropbox_upload(allocator: std.mem.Allocator, token: []const u8, filename: []const u8, content: []const u8) !i64 {
+    const auth = try std.fmt.allocPrint(allocator, "Bearer {s}", .{token});
+    defer allocator.free(auth);
+    const esc = try json_escape_header(allocator, filename);
+    defer allocator.free(esc);
+    const arg = try std.fmt.allocPrint(allocator,
+        "{{\"path\": \"{s}/{s}\", \"mode\": \"overwrite\", \"mute\": true}}", .{ DBX_FOLDER, esc });
+    defer allocator.free(arg);
+
+    const res = try http_fetch(allocator, .POST, "https://content.dropboxapi.com/2/files/upload", &[_]std.http.Header{
+        .{ .name = "Authorization", .value = auth },
+        .{ .name = "Dropbox-API-Arg", .value = arg },
+        .{ .name = "Content-Type", .value = "application/octet-stream" },
+    }, content);
+    defer allocator.free(res.body);
+    if (res.status != .ok) {
+        std.debug.print("Dropbox upload {s} failed {}: {s}\n", .{ filename, res.status, res.body });
+        return error.DropboxUploadFailed;
+    }
+    const parsed = try std.json.parseFromSlice(DbxFileMeta, allocator, res.body, .{ .ignore_unknown_fields = true });
+    defer parsed.deinit();
+    return parse_iso8601_to_unix(parsed.value.server_modified) catch 0;
+}
+
+fn dropbox_sync_impl(allocator: std.mem.Allocator, token: []const u8) !u32 {
+    var conflicts: u32 = 0;
+    var num_buf: [24]u8 = undefined;
+
+    var remote_map = try dropbox_remote_list(allocator, token);
+    defer remote_map.deinit();
+    var local_map = try collect_local_files(allocator);
+    defer local_map.deinit();
+
+    var local_it = local_map.iterator();
+    while (local_it.next()) |entry| {
+        const filename = entry.key_ptr.*;
+        const local_mtime = entry.value_ptr.*;
+
+        if (remote_map.get(filename)) |remote_time| {
+            const meta = sync_meta_get("dropbox_sync_meta", allocator, filename);
+            defer if (meta) |m| allocator.free(m.remote_marker);
+
+            const stored_local: i64 = if (meta) |m| m.local_mtime else -1;
+            const stored_remote: i64 = if (meta) |m|
+                std.fmt.parseInt(i64, m.remote_marker, 10) catch -1
+            else
+                -1;
+            const local_changed = local_mtime != stored_local;
+            const remote_changed = remote_time != stored_remote;
+
+            if (local_changed and remote_changed) {
+                const remote_content = try dropbox_download(allocator, token, filename);
+                defer allocator.free(remote_content);
+                const local_content = try read_file_content(allocator, filename);
+                defer allocator.free(local_content);
+
+                if (!std.mem.eql(u8, remote_content, local_content)) {
+                    // Real conflict: keep both, remote wins the name.
+                    try preserve_local_as_conflict(allocator, filename);
+                    conflicts += 1;
+                    try write_file_mmap(filename, remote_content);
+                    const fz = try allocator.dupeZ(u8, filename);
+                    defer allocator.free(fz);
+                    gui_index_file(fz.ptr);
+                    main.alert_file_updated();
+                }
+                const new_st = stat_path(filename) orelse continue;
+                sync_meta_set("dropbox_sync_meta", allocator, filename, new_st.st_mtim.tv_sec, i64_to_text(&num_buf, remote_time));
+            } else if (local_changed) {
+                const local_content = try read_file_content(allocator, filename);
+                defer allocator.free(local_content);
+                const new_remote = try dropbox_upload(allocator, token, filename, local_content);
+                sync_meta_set("dropbox_sync_meta", allocator, filename, local_mtime, i64_to_text(&num_buf, new_remote));
+            } else if (remote_changed) {
+                const remote_content = try dropbox_download(allocator, token, filename);
+                defer allocator.free(remote_content);
+                try write_file_mmap(filename, remote_content);
+                const fz = try allocator.dupeZ(u8, filename);
+                defer allocator.free(fz);
+                gui_index_file(fz.ptr);
+                main.alert_file_updated();
+                const new_st = stat_path(filename) orelse continue;
+                sync_meta_set("dropbox_sync_meta", allocator, filename, new_st.st_mtim.tv_sec, i64_to_text(&num_buf, remote_time));
+            } else if (meta == null) {
+                sync_meta_set("dropbox_sync_meta", allocator, filename, local_mtime, i64_to_text(&num_buf, remote_time));
+            }
+        } else {
+            // Local only → upload
+            const local_content = try read_file_content(allocator, filename);
+            defer allocator.free(local_content);
+            const new_remote = try dropbox_upload(allocator, token, filename, local_content);
+            sync_meta_set("dropbox_sync_meta", allocator, filename, local_mtime, i64_to_text(&num_buf, new_remote));
+        }
+    }
+
+    var remote_it = remote_map.iterator();
+    while (remote_it.next()) |entry| {
+        const filename = entry.key_ptr.*;
+        if (local_map.contains(filename)) continue;
+        const remote_content = try dropbox_download(allocator, token, filename);
+        defer allocator.free(remote_content);
+        try write_file_mmap(filename, remote_content);
+        const fz = try allocator.dupeZ(u8, filename);
+        defer allocator.free(fz);
+        gui_index_file(fz.ptr);
+        const new_st = stat_path(filename) orelse continue;
+        sync_meta_set("dropbox_sync_meta", allocator, filename, new_st.st_mtim.tv_sec, i64_to_text(&num_buf, entry.value_ptr.*));
+    }
+
+    return conflicts;
+}
+
 fn dropbox_sync_worker() void {
-    const allocator = std.heap.page_allocator;
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
     var creds = get_dropbox_credentials(allocator) catch {
         gui_update_dropbox_status(0, "Error: missing credentials.");
         return;
@@ -1842,41 +2341,25 @@ fn dropbox_sync_worker() void {
         allocator.free(token);
     }
 
-    var script_buf: [600]u8 = undefined;
-    const script = std.fmt.bufPrintZ(&script_buf, "{s}/dropbox_sync.sh", .{main.configDir()}) catch {
-        gui_update_dropbox_status(1, "Error: Dropbox sync start failed.");
-        return;
-    };
-    if (c.access(script.ptr, c.X_OK) != 0) {
-        gui_update_dropbox_status(1, "Error: dropbox_sync.sh missing.");
-        return;
-    }
-
-    var child = std.process.spawn(main.global_io, .{
-        .argv = &[_][]const u8{ script, token, "." },
-    }) catch {
-        gui_update_dropbox_status(1, "Error: Dropbox sync start failed.");
+    const conflicts = dropbox_sync_impl(allocator, token) catch |err| {
+        std.debug.print("Dropbox sync failed: {}\n", .{err});
+        if (err == error.AuthenticationExpired) {
+            zig_dropbox_disconnect();
+            gui_update_dropbox_status(0, "Error: auth expired. reconnect.");
+            return;
+        }
+        var msg_buf: [128]u8 = undefined;
+        gui_update_dropbox_status(1, sync_error_message_z(err, &msg_buf));
         return;
     };
 
-    const term = child.wait(main.global_io) catch {
-        gui_update_dropbox_status(1, "Error: Dropbox sync wait failed.");
-        return;
-    };
-
-    @memset(@constCast(token), 0);
-
-    switch (term) {
-        .exited => |code| {
-            if (code == 0) {
-                gui_update_dropbox_status(1, "Synced ✓");
-            } else {
-                gui_update_dropbox_status(1, "Error: Dropbox sync failed.");
-            }
-        },
-        else => {
-            gui_update_dropbox_status(1, "Error: Dropbox sync failed.");
-        },
+    gui_refresh_explorer();
+    if (conflicts > 0) {
+        var buf: [64]u8 = undefined;
+        const msg = std.fmt.bufPrintZ(&buf, "Synced ✓ ({d} conflict{s} saved)", .{ conflicts, if (conflicts == 1) "" else "s" }) catch "Synced ✓";
+        gui_update_dropbox_status(1, msg);
+    } else {
+        gui_update_dropbox_status(1, "Synced ✓");
     }
 }
 
@@ -1996,8 +2479,236 @@ pub export fn zig_github_now() callconv(.c) void {
     };
 }
 
+// ─────────────────────────────────────────────────────────────
+// Native GitHub sync via the Contents API (no shell script, no git
+// binary). 3-way conflict detection keyed on blob SHAs stored in
+// github_sync_meta. Both-changed → _conflict copy, remote wins.
+// ─────────────────────────────────────────────────────────────
+
+const GhUser = struct { login: []const u8 = "" };
+const GhEntry = struct {
+    name: []const u8 = "",
+    sha: []const u8 = "",
+    type: []const u8 = "",
+};
+const GhPutResp = struct {
+    content: struct { sha: []const u8 = "" } = .{},
+};
+
+const GhRemote = struct { sha: []u8 };
+
+fn gh_headers(auth: []const u8) [4]std.http.Header {
+    return .{
+        .{ .name = "Authorization", .value = auth },
+        .{ .name = "Accept", .value = "application/vnd.github+json" },
+        .{ .name = "User-Agent", .value = "qirtas-sync" },
+        .{ .name = "X-GitHub-Api-Version", .value = "2022-11-28" },
+    };
+}
+
+fn github_owner_login(allocator: std.mem.Allocator, auth: []const u8) ![]u8 {
+    const hdrs = gh_headers(auth);
+    const res = try http_fetch(allocator, .GET, "https://api.github.com/user", &hdrs, null);
+    defer allocator.free(res.body);
+    if (res.status == .unauthorized or res.status == .forbidden) return error.AuthenticationExpired;
+    if (res.status != .ok) return error.GithubUserFailed;
+    const parsed = try std.json.parseFromSlice(GhUser, allocator, res.body, .{ .ignore_unknown_fields = true });
+    defer parsed.deinit();
+    if (parsed.value.login.len == 0) return error.GithubUserFailed;
+    return allocator.dupe(u8, parsed.value.login);
+}
+
+fn github_ensure_repo(allocator: std.mem.Allocator, auth: []const u8, repo_name: []const u8) void {
+    const hdrs = gh_headers(auth);
+    const body = std.fmt.allocPrint(allocator,
+        "{{\"name\":\"{s}\",\"private\":true,\"auto_init\":true}}", .{repo_name}) catch return;
+    defer allocator.free(body);
+    const res = http_fetch(allocator, .POST, "https://api.github.com/user/repos", &hdrs, body) catch return;
+    allocator.free(res.body); // 201 created or 422 already-exists — both fine
+}
+
+fn github_remote_list(allocator: std.mem.Allocator, auth: []const u8, owner: []const u8, repo: []const u8) !std.StringHashMap(GhRemote) {
+    var map = std.StringHashMap(GhRemote).init(allocator);
+    errdefer map.deinit();
+    const hdrs = gh_headers(auth);
+    const url = try std.fmt.allocPrint(allocator, "https://api.github.com/repos/{s}/{s}/contents/", .{ owner, repo });
+    defer allocator.free(url);
+    const res = try http_fetch(allocator, .GET, url, &hdrs, null);
+    defer allocator.free(res.body);
+    if (res.status == .not_found) return map; // empty repo
+    if (res.status == .unauthorized or res.status == .forbidden) return error.AuthenticationExpired;
+    if (res.status != .ok) return error.GithubListFailed;
+
+    const parsed = try std.json.parseFromSlice([]GhEntry, allocator, res.body, .{ .ignore_unknown_fields = true });
+    defer parsed.deinit();
+    for (parsed.value) |e| {
+        if (!std.mem.eql(u8, e.type, "file")) continue;
+        if (!is_syncable_file(e.name)) continue;
+        const key = try allocator.dupe(u8, e.name);
+        try map.put(key, .{ .sha = try allocator.dupe(u8, e.sha) });
+    }
+    return map;
+}
+
+fn github_download_raw(allocator: std.mem.Allocator, auth: []const u8, owner: []const u8, repo: []const u8, filename: []const u8) ![]u8 {
+    const enc = try percent_encode(allocator, filename);
+    defer allocator.free(enc);
+    const url = try std.fmt.allocPrint(allocator, "https://api.github.com/repos/{s}/{s}/contents/{s}", .{ owner, repo, enc });
+    defer allocator.free(url);
+    const hdrs = [_]std.http.Header{
+        .{ .name = "Authorization", .value = auth },
+        .{ .name = "Accept", .value = "application/vnd.github.raw" },
+        .{ .name = "User-Agent", .value = "qirtas-sync" },
+        .{ .name = "X-GitHub-Api-Version", .value = "2022-11-28" },
+    };
+    const res = try http_fetch(allocator, .GET, url, &hdrs, null);
+    if (res.status != .ok) {
+        defer allocator.free(res.body);
+        std.debug.print("GitHub download {s} failed {}\n", .{ filename, res.status });
+        return error.GithubDownloadFailed;
+    }
+    return res.body;
+}
+
+/// PUT a file; existing_sha empty = create. Returns the new blob sha.
+fn github_upload(allocator: std.mem.Allocator, auth: []const u8, owner: []const u8, repo: []const u8, filename: []const u8, content: []const u8, existing_sha: []const u8) ![]u8 {
+    const enc = try percent_encode(allocator, filename);
+    defer allocator.free(enc);
+    const url = try std.fmt.allocPrint(allocator, "https://api.github.com/repos/{s}/{s}/contents/{s}", .{ owner, repo, enc });
+    defer allocator.free(url);
+
+    const b64_len = std.base64.standard.Encoder.calcSize(content.len);
+    const b64 = try allocator.alloc(u8, b64_len);
+    defer allocator.free(b64);
+    _ = std.base64.standard.Encoder.encode(b64, content);
+
+    const body = if (existing_sha.len > 0)
+        try std.fmt.allocPrint(allocator,
+            "{{\"message\":\"qirtas sync\",\"content\":\"{s}\",\"sha\":\"{s}\"}}", .{ b64, existing_sha })
+    else
+        try std.fmt.allocPrint(allocator,
+            "{{\"message\":\"qirtas sync\",\"content\":\"{s}\"}}", .{b64});
+    defer allocator.free(body);
+
+    const hdrs = gh_headers(auth);
+    const res = try http_fetch(allocator, .PUT, url, &hdrs, body);
+    defer allocator.free(res.body);
+    if (res.status != .ok and res.status != .created) {
+        std.debug.print("GitHub upload {s} failed {}: {s}\n", .{ filename, res.status, res.body });
+        if (res.status == .conflict) return error.GithubShaConflict;
+        return error.GithubUploadFailed;
+    }
+    const parsed = try std.json.parseFromSlice(GhPutResp, allocator, res.body, .{ .ignore_unknown_fields = true });
+    defer parsed.deinit();
+    return allocator.dupe(u8, parsed.value.content.sha);
+}
+
+fn github_sync_impl(allocator: std.mem.Allocator, token: []const u8, repo_in: []const u8) !u32 {
+    var conflicts: u32 = 0;
+
+    const auth = try std.fmt.allocPrint(allocator, "Bearer {s}", .{token});
+    defer allocator.free(auth);
+
+    // owner/repo resolution mirrors the old script
+    var owner: []u8 = undefined;
+    var repo: []const u8 = undefined;
+    if (std.mem.indexOfScalar(u8, repo_in, '/')) |slash| {
+        owner = try allocator.dupe(u8, repo_in[0..slash]);
+        repo = repo_in[slash + 1 ..];
+    } else {
+        owner = try github_owner_login(allocator, auth);
+        repo = if (repo_in.len == 0 or std.mem.eql(u8, repo_in, owner)) "lawh-notes" else repo_in;
+    }
+    defer allocator.free(owner);
+
+    github_ensure_repo(allocator, auth, repo);
+
+    var remote_map = try github_remote_list(allocator, auth, owner, repo);
+    defer remote_map.deinit();
+    var local_map = try collect_local_files(allocator);
+    defer local_map.deinit();
+
+    var local_it = local_map.iterator();
+    while (local_it.next()) |entry| {
+        const filename = entry.key_ptr.*;
+        const local_mtime = entry.value_ptr.*;
+
+        if (remote_map.get(filename)) |remote| {
+            const meta = sync_meta_get("github_sync_meta", allocator, filename);
+            defer if (meta) |m| allocator.free(m.remote_marker);
+
+            const stored_local: i64 = if (meta) |m| m.local_mtime else -1;
+            const stored_sha: []const u8 = if (meta) |m| m.remote_marker else "";
+            const local_changed = local_mtime != stored_local;
+            const remote_changed = !std.mem.eql(u8, remote.sha, stored_sha);
+
+            if (local_changed and remote_changed) {
+                const remote_content = try github_download_raw(allocator, auth, owner, repo, filename);
+                defer allocator.free(remote_content);
+                const local_content = try read_file_content(allocator, filename);
+                defer allocator.free(local_content);
+
+                if (!std.mem.eql(u8, remote_content, local_content)) {
+                    try preserve_local_as_conflict(allocator, filename);
+                    conflicts += 1;
+                    try write_file_mmap(filename, remote_content);
+                    const fz = try allocator.dupeZ(u8, filename);
+                    defer allocator.free(fz);
+                    gui_index_file(fz.ptr);
+                    main.alert_file_updated();
+                }
+                const new_st = stat_path(filename) orelse continue;
+                sync_meta_set("github_sync_meta", allocator, filename, new_st.st_mtim.tv_sec, remote.sha);
+            } else if (local_changed) {
+                const local_content = try read_file_content(allocator, filename);
+                defer allocator.free(local_content);
+                const new_sha = try github_upload(allocator, auth, owner, repo, filename, local_content, remote.sha);
+                defer allocator.free(new_sha);
+                sync_meta_set("github_sync_meta", allocator, filename, local_mtime, new_sha);
+            } else if (remote_changed) {
+                const remote_content = try github_download_raw(allocator, auth, owner, repo, filename);
+                defer allocator.free(remote_content);
+                try write_file_mmap(filename, remote_content);
+                const fz = try allocator.dupeZ(u8, filename);
+                defer allocator.free(fz);
+                gui_index_file(fz.ptr);
+                main.alert_file_updated();
+                const new_st = stat_path(filename) orelse continue;
+                sync_meta_set("github_sync_meta", allocator, filename, new_st.st_mtim.tv_sec, remote.sha);
+            } else if (meta == null) {
+                sync_meta_set("github_sync_meta", allocator, filename, local_mtime, remote.sha);
+            }
+        } else {
+            const local_content = try read_file_content(allocator, filename);
+            defer allocator.free(local_content);
+            const new_sha = try github_upload(allocator, auth, owner, repo, filename, local_content, "");
+            defer allocator.free(new_sha);
+            sync_meta_set("github_sync_meta", allocator, filename, local_mtime, new_sha);
+        }
+    }
+
+    var remote_it = remote_map.iterator();
+    while (remote_it.next()) |entry| {
+        const filename = entry.key_ptr.*;
+        if (local_map.contains(filename)) continue;
+        const remote_content = try github_download_raw(allocator, auth, owner, repo, filename);
+        defer allocator.free(remote_content);
+        try write_file_mmap(filename, remote_content);
+        const fz = try allocator.dupeZ(u8, filename);
+        defer allocator.free(fz);
+        gui_index_file(fz.ptr);
+        const new_st = stat_path(filename) orelse continue;
+        sync_meta_set("github_sync_meta", allocator, filename, new_st.st_mtim.tv_sec, entry.value_ptr.sha);
+    }
+
+    return conflicts;
+}
+
 fn github_sync_worker() void {
-    const allocator = std.heap.page_allocator;
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
     const creds = get_github_credentials(allocator) catch {
         gui_update_github_status(0, "Error: missing credentials.");
         return;
@@ -2008,41 +2719,25 @@ fn github_sync_worker() void {
         allocator.free(creds.repo);
     }
 
-    var script_buf: [600]u8 = undefined;
-    const script = std.fmt.bufPrintZ(&script_buf, "{s}/github_sync.sh", .{main.configDir()}) catch {
-        gui_update_github_status(1, "Error: GitHub sync start failed.");
-        return;
-    };
-    if (c.access(script.ptr, c.X_OK) != 0) {
-        gui_update_github_status(1, "Error: github_sync.sh missing.");
-        return;
-    }
-
-    var child = std.process.spawn(main.global_io, .{
-        .argv = &[_][]const u8{ script, creds.token, creds.repo, "." },
-    }) catch {
-        gui_update_github_status(1, "Error: GitHub sync start failed.");
+    const conflicts = github_sync_impl(allocator, creds.token, creds.repo) catch |err| {
+        std.debug.print("GitHub sync failed: {}\n", .{err});
+        if (err == error.AuthenticationExpired) {
+            zig_github_disconnect();
+            gui_update_github_status(0, "Error: auth expired. reconnect.");
+            return;
+        }
+        var msg_buf: [128]u8 = undefined;
+        gui_update_github_status(1, sync_error_message_z(err, &msg_buf));
         return;
     };
 
-    const term = child.wait(main.global_io) catch {
-        gui_update_github_status(1, "Error: GitHub sync wait failed.");
-        return;
-    };
-
-    @memset(@constCast(creds.token), 0);
-
-    switch (term) {
-        .exited => |code| {
-            if (code == 0) {
-                gui_update_github_status(1, "Synced ✓");
-            } else {
-                gui_update_github_status(1, "Error: GitHub sync failed.");
-            }
-        },
-        else => {
-            gui_update_github_status(1, "Error: GitHub sync failed.");
-        },
+    gui_refresh_explorer();
+    if (conflicts > 0) {
+        var buf: [64]u8 = undefined;
+        const msg = std.fmt.bufPrintZ(&buf, "Synced ✓ ({d} conflict{s} saved)", .{ conflicts, if (conflicts == 1) "" else "s" }) catch "Synced ✓";
+        gui_update_github_status(1, msg);
+    } else {
+        gui_update_github_status(1, "Synced ✓");
     }
 }
 
@@ -2147,4 +2842,36 @@ test "config dir resolves under qirtas" {
     try std.testing.expect(std.mem.endsWith(u8, dir, "/qirtas"));
     const db = std.mem.span(main.dbPathZ());
     try std.testing.expect(std.mem.endsWith(u8, db, "/qirtas/vault.db"));
+}
+
+test "percent_encode path segments" {
+    const allocator = std.testing.allocator;
+    const a = try percent_encode(allocator, "notes file.md");
+    defer allocator.free(a);
+    try std.testing.expectEqualStrings("notes%20file.md", a);
+    const b = try percent_encode(allocator, "ملف.md");
+    defer allocator.free(b);
+    try std.testing.expectEqualStrings("%D9%85%D9%84%D9%81.md", b);
+    const c_ = try percent_encode(allocator, "safe-name_1.2~x");
+    defer allocator.free(c_);
+    try std.testing.expectEqualStrings("safe-name_1.2~x", c_);
+}
+
+test "json_escape_header ascii-safe output" {
+    const allocator = std.testing.allocator;
+    const a = try json_escape_header(allocator, "قرطاس \"x\"\\y.md");
+    defer allocator.free(a);
+    // all bytes must be printable ASCII
+    for (a) |ch| try std.testing.expect(ch >= 0x20 and ch < 0x7F);
+    try std.testing.expectEqualStrings("\\u0642\\u0631\\u0637\\u0627\\u0633 \\\"x\\\"\\\\y.md", a);
+    // astral plane → surrogate pair
+    const b = try json_escape_header(allocator, "📝");
+    defer allocator.free(b);
+    try std.testing.expectEqualStrings("\\uD83D\\uDCDD", b);
+}
+
+test "i64_to_text round-trip" {
+    var buf: [24]u8 = undefined;
+    const t = i64_to_text(&buf, 1781222400);
+    try std.testing.expectEqual(@as(i64, 1781222400), try std.fmt.parseInt(i64, t, 10));
 }
