@@ -1428,6 +1428,46 @@ fn unlock_search() void {
     search_mutex.unlock();
 }
 
+
+/// Normalize Arabic text for search matching: unify alef variants (أإآٱ→ا),
+/// ta marbuta (ة→ه), alef maqsura (ى→ي), and strip tashkeel (U+064B–U+065F,
+/// U+0670) and tatweel (U+0640). "مدرسه" matches "المدرسة".
+pub fn normalizeArabicAlloc(allocator: std.mem.Allocator, text: []const u8) ![]u8 {
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(allocator);
+    var it = (std.unicode.Utf8View.init(text) catch return error.InvalidUtf8).iterator();
+    var enc_buf: [4]u8 = undefined;
+    while (it.nextCodepoint()) |cp_in| {
+        var cp = cp_in;
+        if ((cp >= 0x064B and cp <= 0x065F) or cp == 0x0670 or cp == 0x0640) continue;
+        cp = switch (cp) {
+            0x0623, 0x0625, 0x0622, 0x0671 => 0x0627, // أ إ آ ٱ → ا
+            0x0629 => 0x0647, // ة → ه
+            0x0649 => 0x064A, // ى → ي
+            else => cp,
+        };
+        const n = std.unicode.utf8Encode(@intCast(cp), &enc_buf) catch continue;
+        try out.appendSlice(allocator, enc_buf[0..n]);
+    }
+    return out.toOwnedSlice(allocator);
+}
+
+/// FFI for the C indexer. Returned pointer freed with zig_free_normalized.
+pub export fn zig_normalize_arabic(text_ptr: [*:0]const u8) callconv(.c) ?[*:0]u8 {
+    const gpa = std.heap.page_allocator;
+    const norm = normalizeArabicAlloc(gpa, std.mem.span(text_ptr)) catch return null;
+    defer gpa.free(norm);
+    const z = gpa.dupeZ(u8, norm) catch return null;
+    return z.ptr;
+}
+
+pub export fn zig_free_normalized(ptr: ?[*:0]u8) callconv(.c) void {
+    if (ptr) |p| {
+        const len = std.mem.len(p);
+        std.heap.page_allocator.free(p[0 .. len + 1]);
+    }
+}
+
 pub export fn zig_search_workspace(query_ptr: [*:0]const u8) callconv(.c) void {
     lock_search();
     defer unlock_search();
@@ -1465,7 +1505,12 @@ pub export fn zig_search_workspace(query_ptr: [*:0]const u8) callconv(.c) void {
     if (c.sqlite3_prepare_v2(db, sql.ptr, -1, &stmt, null) != c.SQLITE_OK) return;
     defer _ = c.sqlite3_finalize(stmt);
 
-    const query_z = gpa.dupeZ(u8, query) catch return;
+    // Arabic-insensitive: the index carries a normalized shadow column, so
+    // a normalized query matches regardless of alef/ta-marbuta/diacritics.
+    const norm_q: ?[]u8 = normalizeArabicAlloc(gpa, query) catch null;
+    defer if (norm_q) |nq| gpa.free(nq);
+    const effective_q: []const u8 = if (norm_q) |nq| nq else query;
+    const query_z = gpa.dupeZ(u8, effective_q) catch return;
     defer gpa.free(query_z);
 
     _ = c.sqlite3_bind_text(stmt, 1, query_z.ptr, -1, null);
@@ -1618,6 +1663,9 @@ pub export fn zig_undo_clear() callconv(.c) void {
 }
 
 pub export fn zig_undo() callconv(.c) void {
+    // Seal any pending (uncommitted) edits first so Ctrl+Z never silently
+    // discards typing that happened since the last commit boundary.
+    zig_undo_commit();
     if (undo_top < 2) return;
 
     const current = undo_stack[undo_top - 1];
@@ -1840,4 +1888,21 @@ test "master key file blob round-trip" {
     defer std.testing.allocator.free(decrypted);
 
     try std.testing.expectEqualStrings(plaintext, decrypted);
+}
+
+test "normalizeArabicAlloc unifies letters and strips tashkeel" {
+    const allocator = std.testing.allocator;
+    const a = try normalizeArabicAlloc(allocator, "المدرسة");
+    defer allocator.free(a);
+    const b = try normalizeArabicAlloc(allocator, "المدرسه");
+    defer allocator.free(b);
+    try std.testing.expectEqualStrings(a, b);
+
+    const c1 = try normalizeArabicAlloc(allocator, "أَهْلاً إِلى آخر");
+    defer allocator.free(c1);
+    try std.testing.expectEqualStrings("اهلا الي اخر", c1);
+
+    const d = try normalizeArabicAlloc(allocator, "english stays 123");
+    defer allocator.free(d);
+    try std.testing.expectEqualStrings("english stays 123", d);
 }

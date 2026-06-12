@@ -6,6 +6,22 @@ Do not describe Qirtas as "encrypted" or "privacy-first" in user-facing
 material until the key-handling roadmap below is implemented and the crypto
 path has been reviewed by a human with security experience.**
 
+## Chosen direction (2026-06-12)
+
+Per review: Qirtas will **not** climb toward being a cipher app. The coherent,
+honest position is the one the files already imply — *your notes are plain
+markdown files you own*. The plan:
+
+1. Move **sync tokens** into the system keyring (libsecret → GNOME
+   Keyring/KWallet). That's the only secret worth real protection.
+2. The vault encryption stays as-is, quietly covering what it covers today
+   (casual browsing). Never marketed.
+3. BIP-39 machinery stays dormant; do not expand it.
+4. Marketing sentence: *"Notes are plain .md files on your disk; sync
+   credentials are stored in your system keyring."* Nothing more.
+
+The roadmap below is kept for reference but is no longer the plan of record.
+
 ## What exists today
 
 ```

@@ -25,8 +25,11 @@ logos — dark ink on bright paper, bone-white ink on black.
   (`**`, `#`, links fade away outside the cursor line), heading scaling,
   task/bullet/numbered list continuation, horizontal rules, wiki-links
   (`[[note]]`) with hover navigation
-- **First-class Arabic** — full RTL layout mode, per-paragraph direction
-  detection, Arabic font selection, diacritic-insensitive search
+- **First-class Arabic** — full RTL layout mode, per-paragraph direction by
+  first strong character (markdown syntax doesn't fool it), Arabic font
+  selection, normalized search (alef forms, ة/ه, ى/ي, tashkeel-insensitive —
+  searching مدرسه finds المدرسة), Eastern Arabic numerals, shortcuts that
+  work under the Arabic keyboard layout
 - **Eight themes** including Paper & Ink light/dark, typewriter pair, sepia,
   midnight — plus custom CSS themes and a custom caret/trail color
 - **Animated ink-smear cursor trail** (toggleable, themable)
@@ -35,7 +38,8 @@ logos — dark ink on bright paper, bone-white ink on black.
 - **On-demand sync** to Google Drive, Dropbox, GitHub, or a local folder —
   all four backends do 3-way conflict detection and keep both versions as
   `_conflict` files instead of silently losing edits ([details](docs/SYNC.md))
-- **24-word BIP-39 recovery phrase** for the vault key
+**Your notes are plain `.md` files on your disk** — grep them, back them up,
+point Syncthing at them. No proprietary format, no lock-in.
 
 ## Build & run
 

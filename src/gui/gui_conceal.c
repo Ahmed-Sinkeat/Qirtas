@@ -67,13 +67,41 @@ gboolean idle_scroll_to_cursor(gpointer user_data) {
     return G_SOURCE_REMOVE;
 }
 
+/* Paragraph base direction by FIRST STRONG character of the CONTENT —
+ * leading markdown syntax (#, -, *, +, >, digits, checkbox brackets,
+ * whitespace) is neutral and must be skipped, otherwise "# عنوان" or
+ * "- عنصر" latches onto the '#'/'-' and renders the Arabic line LTR.
+ * Previously this returned RTL if ANY Arabic char appeared anywhere in
+ * the line, which broke mixed lines like "see ملاحظة for details". */
 static gboolean detect_rtl(const gchar *text) {
     if (!text) return FALSE;
-    for (const gchar *p = text; *p; p = g_utf8_next_char(p)) {
+    const gchar *p = text;
+
+    /* skip leading markdown structure */
+    while (*p) {
         gunichar c = g_utf8_get_char(p);
-        if ((c >= 0x0590 && c <= 0x08FF) || (c >= 0xFB1D && c <= 0xFEFC)) {
-            return TRUE;
+        if (c == ' ' || c == '\t' || c == '#' || c == '>' ||
+            c == '-' || c == '*' || c == '+' ||
+            c == '[' || c == ']' || c == '.' || c == ')' ||
+            (c >= '0' && c <= '9')) {
+            p = g_utf8_next_char(p);
+            continue;
         }
+        /* checkbox "- [x] " — the x is syntax, not content */
+        if ((c == 'x' || c == 'X') && p[1] == ']') {
+            p = g_utf8_next_char(p);
+            continue;
+        }
+        break;
+    }
+
+    /* first strong directional character decides */
+    for (; *p; p = g_utf8_next_char(p)) {
+        gunichar c = g_utf8_get_char(p);
+        if ((c >= 0x0590 && c <= 0x08FF) || (c >= 0xFB1D && c <= 0xFEFC))
+            return TRUE; /* Hebrew/Arabic blocks → RTL */
+        if (g_unichar_isalpha(c))
+            return FALSE; /* any other letter → LTR */
     }
     return FALSE;
 }

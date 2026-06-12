@@ -447,7 +447,72 @@ gboolean on_editor_key_pressed(GtkEventControllerKey *ctrl,
         return TRUE;
     }
 
+    /* ── List indent / outdent with Tab ── */
+    if (keyval == GDK_KEY_Tab || keyval == GDK_KEY_ISO_Left_Tab) {
+        gboolean outdent = (keyval == GDK_KEY_ISO_Left_Tab) || shift_held;
+        GtkTextIter ins_it;
+        gtk_text_buffer_get_iter_at_mark(buf, &ins_it, gtk_text_buffer_get_insert(buf));
+        gint line_num = gtk_text_iter_get_line(&ins_it);
+        gint col = gtk_text_iter_get_line_offset(&ins_it);
+        GtkTextIter ls, le;
+        gtk_text_buffer_get_iter_at_line(buf, &ls, line_num);
+        le = ls;
+        if (!gtk_text_iter_ends_line(&le)) gtk_text_iter_forward_to_line_end(&le);
+        gchar *line_text = gtk_text_buffer_get_text(buf, &ls, &le, TRUE);
+
+        int lt_ws = 0;
+        while (line_text[lt_ws] == ' ' || line_text[lt_ws] == '\t') lt_ws++;
+        const char *lt_content = line_text + lt_ws;
+        gboolean is_list = (strncmp(lt_content, "- ", 2) == 0 ||
+                            strncmp(lt_content, "* ", 2) == 0 ||
+                            strncmp(lt_content, "+ ", 2) == 0);
+        if (!is_list) {
+            int nd = 0;
+            while (lt_content[nd] >= '0' && lt_content[nd] <= '9') nd++;
+            if (nd > 0 && lt_content[nd] == '.' && lt_content[nd + 1] == ' ') is_list = TRUE;
+        }
+
+        if (is_list) {
+            if (!outdent) {
+                Position p = { line_num, 0 };
+                zig_insert_text(p, "  ");
+                gui_reload_full_buffer();
+                gui_set_cursor_position(line_num + 1, col + 2);
+                zig_undo_commit();
+            } else if (lt_ws > 0) {
+                int remove = lt_ws >= 2 ? 2 : 1;
+                Position p0 = { line_num, 0 };
+                Position p1 = { line_num, remove };
+                zig_delete_range(p0, p1);
+                gui_reload_full_buffer();
+                int new_col = col - remove;
+                if (new_col < 0) new_col = 0;
+                gui_set_cursor_position(line_num + 1, new_col);
+                zig_undo_commit();
+            }
+            g_free(line_text);
+            return TRUE;
+        }
+        g_free(line_text);
+    }
+
     if (!keypress_has_text_modifier(state)) {
+        /* ── Wrap selection instead of replacing it ──
+         * ( [ { " ` already wrap via insert_text_pair below; * and _
+         * normally route through on_insert_text_before, which replaces. */
+        {
+            GtkTextIter sel_s, sel_e;
+            if (gtk_text_buffer_get_selection_bounds(buf, &sel_s, &sel_e)) {
+                if (keyval == GDK_KEY_asterisk) {
+                    insert_text_pair(buf, "*", "*");
+                    return TRUE;
+                }
+                if (keyval == GDK_KEY_underscore) {
+                    insert_text_pair(buf, "_", "_");
+                    return TRUE;
+                }
+            }
+        }
         if (keyval == GDK_KEY_parenleft) {
             insert_text_pair(buf, "(", ")");
             return TRUE;
@@ -568,6 +633,19 @@ gboolean on_editor_key_pressed(GtkEventControllerKey *ctrl,
         g_free(line_text);
     }
 
-    zig_undo_commit();
+    /* Word-grain undo: seal the pending snapshot on boundaries (space,
+     * Enter, punctuation, deletions), not on every keystroke — Ctrl+Z then
+     * removes a word/phrase, not one character. zig_undo() also seals
+     * before undoing, so nothing typed since the last boundary is lost. */
+    {
+        gboolean boundary = (keyval == GDK_KEY_space || keyval == GDK_KEY_Return ||
+                             keyval == GDK_KEY_KP_Enter || keyval == GDK_KEY_Tab ||
+                             keyval == GDK_KEY_BackSpace || keyval == GDK_KEY_Delete);
+        if (!boundary) {
+            gunichar uc = gdk_keyval_to_unicode(keyval);
+            if (uc != 0 && g_unichar_ispunct(uc)) boundary = TRUE;
+        }
+        if (boundary) zig_undo_commit();
+    }
     return FALSE;
 }
