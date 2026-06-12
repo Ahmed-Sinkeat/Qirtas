@@ -377,8 +377,10 @@ static gboolean idle_global_conceal_cb(gpointer user_data) {
     }
 
     if (d->gui && global_source_view) {
+        QIRTAS_PERF_BEGIN;
         GtkTextBuffer *buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(global_source_view));
         update_conceal_markdown_all_impl(buf);
+        QIRTAS_PERF_END("idle_global_conceal_cb");
     }
     g_free(d);
 
@@ -524,8 +526,10 @@ static gboolean idle_local_conceal_cb(gpointer user_data) {
     }
 
     if (d->gui && global_source_view) {
+        QIRTAS_PERF_BEGIN;
         GtkTextBuffer *buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(global_source_view));
         update_conceal_markdown_impl(buf);
+        QIRTAS_PERF_END("idle_local_conceal_cb");
     }
     g_free(d);
 

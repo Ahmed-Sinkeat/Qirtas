@@ -217,7 +217,36 @@ The §4.5 fix patched our own call sites, but the same buggy GTK path (`gtk_text
   `match_app_shortcut` already falls back to hardware-keycode matching
   through the Latin (group 0) layout for every shortcut.
 
-**Next (planned, not built):** typewriter mode (caret vertically centered),
+## 4a-ter. Navigation, Observability, Distribution (2026-06-12, round 2)
+
+- **Quick Switcher (Ctrl+P)** — fuzzy filename popup (`gui_switcher.c`):
+  recursive scan (depth 3, .md/.txt, capped 2000), subsequence scorer with
+  consecutive/word-start bonuses, both sides run through
+  `zig_normalize_arabic` so ملاحظه finds الملاحظة.md. Enter/↑↓/click;
+  Export PDF moved to Ctrl+Shift+P.
+- **Outline panel** — heading TOC in the sidebar (`gui_outline.c`), reuses
+  the conceal-style line scan, refreshed by the existing 220 ms debounce and
+  on buffer reload; hidden when the note has no headings.
+- **Session restore, all tabs** — shutdown stores every open tab
+  (`session_tabs` pref, newline-joined); startup reopens each, active file
+  last.
+- **`QIRTAS_PERF=1`** — permanent lightweight observability: wrapped
+  main-loop callbacks (stats pass, global/local conceal) log to stderr when
+  they exceed 8 ms (`QIRTAS_PERF_BEGIN/END` macros in `gui_internal.h`).
+  Optimization policy: fix what this log catches; the deferred items (delta
+  undo, viewport-limited conceal) only matter if it ever fires.
+- **CI** — `.github/workflows/ci.yml` builds + tests on every push
+  (ubuntu-24.04, GTK stack via apt, Zig 0.16.0). First run may need version
+  pin adjustments.
+- **Flatpak** — starting-point manifest at `packaging/org.qirtas.Qirtas.yml`,
+  explicitly marked untested (Zig sha256 placeholder, file-access scoping
+  to tighten).
+- **UI layout map** — `docs/LAYOUT.md` describes every screen region, the
+  widget that owns it, and where it's built.
+
+**Next (planned, not built):** spell check via libspelling + hunspell Arabic
+dictionaries (system dependency decision), Flatpak manifest verification,
+typewriter mode (caret vertically centered),
 focus-paragraph dimming (low-opacity tag outside current paragraph),
 libsecret keyring for sync tokens, smarter undo sealing on idle pause,
 conceal-vs-diacritics stress test note, kashida-free justified Arabic PDF

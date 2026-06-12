@@ -1,0 +1,38 @@
+# Flatpak manifest — STARTING POINT, NOT YET TESTED.
+# Build: flatpak-builder --user --install build-dir packaging/org.qirtas.Qirtas.yml
+# Known work remaining before this is shippable:
+#   - pin the Zig tarball sha256 for the current release
+#   - the app writes config to $XDG_CONFIG_HOME/qirtas (works in sandbox)
+#   - sync needs network; OAuth loopback needs --share=network (set below)
+#   - file access: notes live in the launch directory → needs host file access
+#     or a portal-based folder picker (currently host:home below — tighten later)
+app-id: org.qirtas.Qirtas
+runtime: org.gnome.Platform
+runtime-version: "48"
+sdk: org.gnome.Sdk
+command: qirtas
+finish-args:
+  - --share=ipc
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --device=dri
+  - --share=network
+  - --filesystem=home
+modules:
+  - name: zig
+    buildsystem: simple
+    build-commands:
+      - mkdir -p /app/zig && cp -r * /app/zig/
+    sources:
+      - type: archive
+        url: https://ziglang.org/download/0.16.0/zig-x86_64-linux-0.16.0.tar.xz
+        sha256: REPLACE_WITH_REAL_SHA256
+  - name: qirtas
+    buildsystem: simple
+    build-commands:
+      - /app/zig/zig build -Doptimize=ReleaseSafe --prefix /app
+      - install -Dm755 zig-out/bin/qirtas /app/bin/qirtas
+      - mkdir -p /app/share/qirtas && cp -r src/ui /app/share/qirtas/ui
+    sources:
+      - type: dir
+        path: ..

@@ -198,6 +198,7 @@ static char custom_theme_path[1024] = "";
 /* ── App language (0 = English, 1 = Arabic) and icon style ── */
 int qirtas_app_language = 0;
 int qirtas_icon_style   = 0;
+int qirtas_perf_enabled = 0;
 
 typedef struct { const char *en; const char *ar; } TrPair;
 static const TrPair tr_table[] = {
@@ -256,6 +257,9 @@ static const TrPair tr_table[] = {
     { "FORMAT",                  "تنسيق" },
     { "PARAGRAPH",               "فقرة" },
     { "Sync Now",                "مزامنة الآن" },
+    { "OUTLINE",                 "الفهرس" },
+    { "Quick Open",              "فتح سريع" },
+    { "Type to search files…",   "اكتب للبحث في الملفات…" },
     { "Copy File",               "نسخ الملف" },
     { "Notes",                   "الملاحظات" },
     { "Enter file name:",        "أدخل اسم الملف:" },
@@ -968,12 +972,25 @@ static void on_popover_closed(GtkPopover *popover, gpointer user_data) {
 static void on_app_shutdown(GApplication *app, gpointer user_data) {
     (void)app;
     (void)user_data;
-    /* Remember the active file so "Restore Session" can reopen it. */
-    if (global_gui && global_gui->active_tab_index != -1 &&
-        global_gui->active_tab_index < global_gui->num_tabs) {
-        const char *path = global_gui->open_tabs[global_gui->active_tab_index];
-        if (path && strcmp(path, "Untitled") != 0) {
-            qirtas_pref_set_string("last_file", path);
+    /* Remember every open tab (newline-joined) plus the active file so
+     * "Restore Session" reopens yesterday's whole workspace. */
+    if (global_gui) {
+        GString *tabs = g_string_new("");
+        for (int i = 0; i < global_gui->num_tabs; i++) {
+            const char *path = global_gui->open_tabs[i];
+            if (!path || strcmp(path, "Untitled") == 0) continue;
+            if (tabs->len) g_string_append_c(tabs, '\n');
+            g_string_append(tabs, path);
+        }
+        qirtas_pref_set_string("session_tabs", tabs->str);
+        g_string_free(tabs, TRUE);
+
+        if (global_gui->active_tab_index != -1 &&
+            global_gui->active_tab_index < global_gui->num_tabs) {
+            const char *path = global_gui->open_tabs[global_gui->active_tab_index];
+            if (path && strcmp(path, "Untitled") != 0) {
+                qirtas_pref_set_string("last_file", path);
+            }
         }
     }
     zig_on_shutdown();
@@ -1148,6 +1165,7 @@ static gboolean buffer_stats_timeout_cb(gpointer user_data) {
     AppGui *gui = (AppGui *)user_data;
     buffer_stats_timeout_id = 0;
     if (!gui || !gui->source_view) return G_SOURCE_REMOVE;
+    QIRTAS_PERF_BEGIN;
 
     GtkTextBuffer *buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(gui->source_view));
     GtkTextIter start, end;
@@ -1185,6 +1203,8 @@ static gboolean buffer_stats_timeout_cb(gpointer user_data) {
      * signal, so Pango's line-layout cache is stable — avoids the
      * "Byte index N is off the end of the line" abort). */
     update_conceal_markdown_all(buf);
+    gui_outline_refresh(gui);
+    QIRTAS_PERF_END("buffer_stats_timeout_cb");
     return G_SOURCE_REMOVE;
 }
 
@@ -2340,6 +2360,12 @@ static gboolean on_window_key_pressed(GtkEventControllerKey *ctrl,
         return TRUE;
     }
 
+    /* Quick Switcher */
+    if (match_app_shortcut("quick_switch", keyval, keycode, state)) {
+        show_quick_switcher(gui);
+        return TRUE;
+    }
+
     /* Print / Export PDF */
     if (match_app_shortcut("export_pdf", keyval, keycode, state)) {
         qirtas_export_to_pdf(gui);
@@ -2490,6 +2516,10 @@ static void activate(GtkApplication *app, gpointer user_data) {
 
     /* Language + icon style must be loaded BEFORE any widget is built —
      * qirtas_tr()/qirtas_icon() are called during UI construction. */
+    {
+        const char *perf_env = g_getenv("QIRTAS_PERF");
+        qirtas_perf_enabled = (perf_env && perf_env[0] == '1') ? 1 : 0;
+    }
     qirtas_app_language = qirtas_pref_get_int("app_language", 0);
     qirtas_icon_style   = qirtas_pref_get_int("icon_style", 0);
     if (qirtas_app_language == 1) {
@@ -2728,6 +2758,31 @@ static void activate(GtkApplication *app, gpointer user_data) {
     /* Parent the add popover to the sidebar so it can be displayed */
     gtk_widget_set_parent(w->popover, sidebar);
 
+
+    /* ── OUTLINE section: heading TOC for the open note ── */
+    {
+        GtkWidget *outline_outer = gtk_box_new(GTK_ORIENTATION_VERTICAL, 4);
+        GtkWidget *outline_title = gtk_label_new(qirtas_tr("OUTLINE"));
+        gtk_widget_add_css_class(outline_title, "explorer-title");
+        gtk_widget_set_halign(outline_title, GTK_ALIGN_START);
+        gtk_widget_set_margin_top(outline_title, 10);
+        gtk_box_append(GTK_BOX(outline_outer), outline_title);
+
+        GtkWidget *outline_scroll = gtk_scrolled_window_new();
+        gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(outline_scroll),
+                                       GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
+        gtk_scrolled_window_set_max_content_height(GTK_SCROLLED_WINDOW(outline_scroll), 180);
+        gtk_scrolled_window_set_propagate_natural_height(GTK_SCROLLED_WINDOW(outline_scroll), TRUE);
+
+        GtkWidget *outline_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 1);
+        gtk_widget_add_css_class(outline_box, "tree-container");
+        gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(outline_scroll), outline_box);
+        gui->outline_box = outline_box;
+
+        gtk_box_append(GTK_BOX(outline_outer), outline_scroll);
+        gtk_widget_set_visible(outline_outer, FALSE); /* shown when headings exist */
+        gtk_box_append(GTK_BOX(sidebar), outline_outer);
+    }
 
     /* Notes section header (Title + Count Badge) */
     GtkWidget *exp_title_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
@@ -3904,14 +3959,25 @@ static void activate(GtkApplication *app, gpointer user_data) {
     gtk_window_present(GTK_WINDOW(window));
     zig_on_gui_ready();
 
-    /* Restore Session: reopen the file from last run */
+    /* Restore Session: reopen every tab from last run, active file last */
     if (gui->restore_session) {
+        extern void zig_open_file(const char *filename);
         char *last = qirtas_pref_get_string("last_file");
+        char *tabs = qirtas_pref_get_string("session_tabs");
+        if (tabs && tabs[0] != '\0') {
+            gchar **paths = g_strsplit(tabs, "\n", -1);
+            for (int i = 0; paths[i]; i++) {
+                if (paths[i][0] == '\0') continue;
+                if (last && strcmp(paths[i], last) == 0) continue; /* opened last */
+                if (g_file_test(paths[i], G_FILE_TEST_EXISTS)) zig_open_file(paths[i]);
+            }
+            g_strfreev(paths);
+        }
         if (last && last[0] != '\0' && g_file_test(last, G_FILE_TEST_EXISTS)) {
-            extern void zig_open_file(const char *filename);
             zig_open_file(last);
         }
         g_free(last);
+        g_free(tabs);
     }
 
     apply_compact_mode(gui);
@@ -4708,6 +4774,7 @@ void gui_reload_full_buffer(void) {
     }
 
     gui_set_cursor_position(line, col);
+    gui_outline_refresh(global_gui);
 }
 
 void gui_prepare_tab_switch(void) {
