@@ -108,6 +108,8 @@ system_keys schema). Run it before pushing anything touching `sync.zig` or
 | XDG config path / legacy migration | `configDir`/`dbPathZ`/`migrateLegacyConfig` in `src/main.zig` |
 | Sync setup & troubleshooting docs | `docs/SYNC.md` |
 | Crypto threat model | `docs/SECURITY.md` |
+| Arabic search normalization | `normalizeArabicAlloc` in `src/main.zig` (C side via `zig_normalize_arabic`) |
+| Paragraph direction detection | `detect_rtl` in `src/gui/gui_conceal.c` (first-strong-char, markdown-aware) |
 
 ## GUI Layout and Modules
 

@@ -202,6 +202,10 @@ extern int qirtas_icon_style;   /* 0 = Classic, 1 = Modern */
 const char *qirtas_tr(const char *en);
 const char *qirtas_icon(const char *key);
 
+/* Arabic search normalization (implemented in Zig, single source) */
+char *zig_normalize_arabic(const char *text);
+void zig_free_normalized(char *ptr);
+
 /* Generic key/value preference store (app_prefs table in vault.db) */
 int  qirtas_pref_get_int(const char *key, int fallback);
 void qirtas_pref_set_int(const char *key, int value);

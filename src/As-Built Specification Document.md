@@ -188,6 +188,41 @@ The §4.5 fix patched our own call sites, but the same buggy GTK path (`gtk_text
 
 ---
 
+## 4a-bis. Typing Feel & Arabic Depth (2026-06-12)
+
+- **Word-grain undo** — the per-keystroke commit at the end of
+  `on_editor_key_pressed` now fires only on boundaries (space, Enter, Tab,
+  punctuation, deletions); `zig_undo()` seals pending edits before undoing so
+  nothing is lost. Ctrl+Z removes words, not characters.
+- **Tab / Shift+Tab** indents/outdents list items (bullets, checkboxes,
+  numbered) by two spaces; non-list lines keep default Tab behavior.
+- **Selection wrapping** — typing `*` or `_` with a selection wraps it
+  (`( [ { " \`` already wrapped via `insert_text_pair`).
+- **Paragraph direction by first strong char** — `detect_rtl` in
+  `gui_conceal.c` skips leading markdown syntax (`#`, `-`, digits, checkbox
+  brackets) and decides on the first strong character, instead of "any Arabic
+  char anywhere → RTL". `# عنوان` renders RTL; "see ملاحظة for details"
+  stays LTR.
+- **Arabic-normalized workspace search** — `normalizeArabicAlloc` in
+  `main.zig` (alef forms→ا, ة→ه, ى→ي, strips tashkeel/tatweel); the FTS
+  table gained a `content_norm` shadow column (auto-migrated from v1 schema,
+  forces one reindex) and queries are normalized, so مدرسه finds المدرسة.
+  Single implementation, exported to the C indexer as `zig_normalize_arabic`.
+- **Eastern Arabic numerals** in the word/char counts when the UI language
+  is Arabic.
+- **Stats perf** — char count now uses the free
+  `gtk_text_buffer_get_char_count()`; the O(n) word count is skipped above
+  500k chars instead of copying the whole buffer every typing pause.
+- **Shortcuts under the Arabic keyboard layout: verified safe** —
+  `match_app_shortcut` already falls back to hardware-keycode matching
+  through the Latin (group 0) layout for every shortcut.
+
+**Next (planned, not built):** typewriter mode (caret vertically centered),
+focus-paragraph dimming (low-opacity tag outside current paragraph),
+libsecret keyring for sync tokens, smarter undo sealing on idle pause,
+conceal-vs-diacritics stress test note, kashida-free justified Arabic PDF
+export check.
+
 ## 4a. Undo Architecture — single system, GTK's disabled
 
 Undo/redo is owned **entirely by the Zig backend**: full-document heap
