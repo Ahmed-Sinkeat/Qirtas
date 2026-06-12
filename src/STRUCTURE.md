@@ -90,7 +90,8 @@ system_keys schema). Run it before pushing anything touching `sync.zig` or
 | Formatting popovers and post-edit undo sealing | `src/gui/gui_popover.c` |
 | Markdown concealment, heading tags, buffer-generation guards | `src/gui/gui_conceal.c` |
 | Wiki-link parsing and idle guards | `src/gui/gui_wiki.c` |
-| PDF export (printing, pagination, save dialog) | `src/gui/gui_pdf.c` |
+| Themed PDF export (متن etc.), theme chooser, block renderer | `src/gui/gui_export.c` (PrintTheme struct = one theme) |
+| Legacy "Editor look" PDF export (print compositor) | `src/gui/gui_pdf.c` |
 | Keyboard shortcuts table and keybindings window | `src/gui/gui_shortcuts.c` |
 | UI-only shared state, window pointers, and module hooks | `src/gui_internal.h` |
 | Zig-facing FFI declarations | `src/gui_shared.h` |

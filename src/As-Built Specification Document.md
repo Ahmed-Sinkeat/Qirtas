@@ -244,6 +244,41 @@ The §4.5 fix patched our own call sites, but the same buggy GTK path (`gtk_text
 - **UI layout map** — `docs/LAYOUT.md` describes every screen region, the
   widget that owns it, and where it's built.
 
+## 4a-quater. Themed PDF Export (2026-06-12)
+
+`gui_export.c` owns `qirtas_export_to_pdf`: a theme chooser (last choice in
+`app_prefs.export_theme`) → cairo_pdf_surface renderer. Direct surface
+access (not GtkPrintOperation) provides PDF outline bookmarks from headings
+(`cairo_pdf_surface_add_outline`), title/creator metadata, and exact page
+control. The legacy GtkSourcePrintCompositor path survives in `gui_pdf.c`
+as the "Editor look" card.
+
+Architecture: `PrintTheme` struct (page geometry with inner/outer margins
+mirrored per page parity, fonts, scales, inks, feature flags) — a new theme
+is one static initializer. Document → blocks (heading/para/quote/list/code/
+HR, same line vocabulary as conceal), each block → a PangoLayout
+(auto-dir per paragraph, justify, line-spacing multiplier), rendered
+line-by-line with page breaks: frame and furniture redraw per page,
+≥2-line widow/orphan minimum, headings keep-with-next. Inline `**`/`*`/
+`` ` ``/`~~`/`==`/links → PangoAttrList.
+
+Themes: **متن** (classical matn GENRE — Amiri ~14.5pt × 1.9 leading,
+justified, RTL gutter, double-rule frame, rubrication: bold/headings/
+blockquote-as-matn in deep red, Eastern folios ‹ ٥ ›; deliberately our own
+take, no publisher's template), **Paper & Ink**, **Academic** (numbered
+headings), **Typewriter**. Manual test checklist: tashkeel-heavy doc,
+paragraph splitting across a framed page, justified RTL page. No kashida —
+plain justify, like modern matn editions.
+
+Settings gained **Apply & Restart** next to Language: relaunches the
+binary (g_spawn self + quit; session restore brings tabs back) because
+labels are baked at widget construction. Docs/tooltips now state this.
+
+**Editor-clobber hazard (process note):** two committed batches of gui.c
+edits were silently reverted by an external editor holding a stale buffer
+of the file. When editing this repo with agents, close `gui.c` in other
+editors; verify-after-build before committing.
+
 **Next (planned, not built):** spell check via libspelling + hunspell Arabic
 dictionaries (system dependency decision), Flatpak manifest verification,
 typewriter mode (caret vertically centered),

@@ -34,7 +34,10 @@ logos — dark ink on bright paper, bone-white ink on black.
   midnight — plus custom CSS themes and a custom caret/trail color
 - **Animated ink-smear cursor trail** (toggleable, themable)
 - **Quick switcher (Ctrl+P, Arabic-normalized fuzzy match), outline panel,
-  tabs, file-tree sidebar, find & replace, overview minimap, PDF export**
+  tabs, file-tree sidebar, find & replace, overview minimap**
+- **Themed PDF export** — متن (classical Arabic matn typesetting: Amiri naskh,
+  rubrication, framed pages, Eastern folios), Paper & Ink, Academic,
+  Typewriter — with PDF outline bookmarks from your headings
 - **Full-workspace session restore, compact layout mode, English/Arabic UI, two icon sets**
 - **On-demand sync** to Google Drive, Dropbox, GitHub, or a local folder —
   all four backends do 3-way conflict detection and keep both versions as
