@@ -260,6 +260,11 @@ static const TrPair tr_table[] = {
     { "OUTLINE",                 "الفهرس" },
     { "Quick Open",              "فتح سريع" },
     { "Type to search files…",   "اكتب للبحث في الملفات…" },
+    { "Apply & Restart",         "تطبيق وإعادة تشغيل" },
+    { "Labels are built at startup — restart to apply the language everywhere. Your tabs are restored.", "تُبنى النصوص عند بدء التشغيل — أعد التشغيل لتطبيق اللغة في كل مكان. تبويباتك ستُستعاد." },
+    { "Export to PDF",           "تصدير إلى PDF" },
+    { "Choose an export theme",  "اختر سمة التصدير" },
+    { "Editor look (syntax highlighted)", "مظهر المحرر (تلوين الصيغة)" },
     { "Copy File",               "نسخ الملف" },
     { "Notes",                   "الملاحظات" },
     { "Enter file name:",        "أدخل اسم الملف:" },
@@ -1159,6 +1164,20 @@ int gui_get_buffer_modified(void) {
 
 
 
+/* Convert ASCII digits to Eastern Arabic numerals (٠١٢٣…). */
+void arabize_digits(const char *in, char *out, size_t out_size) {
+    size_t o = 0;
+    for (const char *p = in; *p != '\0' && o + 3 < out_size; p++) {
+        if (*p >= '0' && *p <= '9') {
+            out[o++] = (char)0xD9;
+            out[o++] = (char)(0xA0 + (*p - '0'));
+        } else {
+            out[o++] = *p;
+        }
+    }
+    out[o] = '\0';
+}
+
 static guint buffer_stats_timeout_id = 0;
 
 static gboolean buffer_stats_timeout_cb(gpointer user_data) {
@@ -1168,36 +1187,45 @@ static gboolean buffer_stats_timeout_cb(gpointer user_data) {
     QIRTAS_PERF_BEGIN;
 
     GtkTextBuffer *buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(gui->source_view));
-    GtkTextIter start, end;
-    gtk_text_buffer_get_bounds(buf, &start, &end);
-    gchar *text = gtk_text_buffer_get_text(buf, &start, &end, TRUE);
 
-    glong char_count = g_utf8_strlen(text, -1);
+    /* Char count is free (buffer-maintained); only the word count needs a
+     * full text copy, so skip it past 500k chars. */
+    glong char_count = (glong)gtk_text_buffer_get_char_count(buf);
 
-    glong word_count = 0;
-    gboolean in_word = FALSE;
-    char *p = text;
-    while (*p) {
-        gunichar c = g_utf8_get_char(p);
-        if (g_unichar_isspace(c) || g_unichar_ispunct(c)) {
-            in_word = FALSE;
-        } else {
-            if (!in_word) {
-                word_count++;
-                in_word = TRUE;
+    char w_buf[64], c_buf[64];
+    if (char_count <= 500000) {
+        GtkTextIter start, end;
+        gtk_text_buffer_get_bounds(buf, &start, &end);
+        gchar *text = gtk_text_buffer_get_text(buf, &start, &end, TRUE);
+        glong word_count = 0;
+        gboolean in_word = FALSE;
+        char *p = text;
+        while (*p) {
+            gunichar c = g_utf8_get_char(p);
+            if (g_unichar_isspace(c) || g_unichar_ispunct(c)) {
+                in_word = FALSE;
+            } else {
+                if (!in_word) { word_count++; in_word = TRUE; }
             }
+            p = g_utf8_next_char(p);
         }
-        p = g_utf8_next_char(p);
+        g_free(text);
+        snprintf(w_buf, sizeof(w_buf), "%ld %s", word_count, qirtas_tr("words"));
+    } else {
+        snprintf(w_buf, sizeof(w_buf), "— %s", qirtas_tr("words"));
     }
-
-    char w_buf[32], c_buf[32];
-    snprintf(w_buf, sizeof(w_buf), "%ld %s", word_count, qirtas_tr("words"));
     snprintf(c_buf, sizeof(c_buf), "%ld %s", char_count, qirtas_tr("chars"));
 
-    if (gui->lbl_words) gtk_label_set_text(GTK_LABEL(gui->lbl_words), w_buf);
-    if (gui->lbl_chars) gtk_label_set_text(GTK_LABEL(gui->lbl_chars), c_buf);
-
-    g_free(text);
+    if (qirtas_app_language == 1) {
+        char w_ar[96], c_ar[96];
+        arabize_digits(w_buf, w_ar, sizeof(w_ar));
+        arabize_digits(c_buf, c_ar, sizeof(c_ar));
+        if (gui->lbl_words) gtk_label_set_text(GTK_LABEL(gui->lbl_words), w_ar);
+        if (gui->lbl_chars) gtk_label_set_text(GTK_LABEL(gui->lbl_chars), c_ar);
+    } else {
+        if (gui->lbl_words) gtk_label_set_text(GTK_LABEL(gui->lbl_words), w_buf);
+        if (gui->lbl_chars) gtk_label_set_text(GTK_LABEL(gui->lbl_chars), c_buf);
+    }
 
     /* Full conceal pass runs here (already deferred past the 'changed'
      * signal, so Pango's line-layout cache is stable — avoids the
@@ -1871,6 +1899,20 @@ static void on_language_changed(GObject *gobject, GParamSpec *pspec, gpointer us
                                      ? GTK_TEXT_DIR_RTL : GTK_TEXT_DIR_LTR);
     if (global_gui && global_gui->bottom_bar_widget)
         gtk_widget_set_direction(global_gui->bottom_bar_widget, GTK_TEXT_DIR_LTR);
+}
+
+/* Relaunch the app so language/icon choices baked in at widget
+ * construction take effect. Session is saved by on_app_shutdown. */
+static void on_restart_clicked(GtkButton *btn, gpointer user_data) {
+    (void)btn; (void)user_data;
+    char exe[1024] = {0};
+    ssize_t n = readlink("/proc/self/exe", exe, sizeof(exe) - 1);
+    if (n > 0) {
+        exe[n] = '\0';
+        gchar *argv[] = { exe, NULL };
+        g_spawn_async(NULL, argv, NULL, G_SPAWN_DEFAULT, NULL, NULL, NULL, NULL);
+    }
+    g_application_quit(g_application_get_default());
 }
 
 static void on_icon_style_changed(GObject *gobject, GParamSpec *pspec, gpointer user_data) {
@@ -3243,10 +3285,16 @@ static void activate(GtkApplication *app, gpointer user_data) {
     const char *languages[] = { "English", "العربية", NULL };
     GtkWidget *lang_dropdown = gtk_drop_down_new_from_strings(languages);
     gtk_drop_down_set_selected(GTK_DROP_DOWN(lang_dropdown), qirtas_app_language == 1 ? 1 : 0);
-    gtk_widget_set_tooltip_text(lang_dropdown, "Layout flips immediately; labels change on next launch");
+    gtk_widget_set_tooltip_text(lang_dropdown, "Layout flips immediately; press Apply & Restart for the labels");
     g_signal_connect(lang_dropdown, "notify::selected", G_CALLBACK(on_language_changed), gui);
     gtk_box_append(GTK_BOX(lang_row), lang_lbl);
     gtk_box_append(GTK_BOX(lang_row), lang_dropdown);
+    GtkWidget *restart_btn = gtk_button_new_with_label(qirtas_tr("Apply & Restart"));
+    gtk_widget_add_css_class(restart_btn, "pop-btn");
+    gtk_widget_set_tooltip_text(restart_btn,
+        qirtas_tr("Labels are built at startup — restart to apply the language everywhere. Your tabs are restored."));
+    g_signal_connect(restart_btn, "clicked", G_CALLBACK(on_restart_clicked), gui);
+    gtk_box_append(GTK_BOX(lang_row), restart_btn);
     gtk_box_append(GTK_BOX(pop_box), lang_row);
 
     GtkWidget *icon_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
@@ -4021,7 +4069,19 @@ void gui_index_all_files(void) {
     sqlite3_exec(db, "CREATE TABLE IF NOT EXISTS file_metadata (filepath TEXT PRIMARY KEY, last_modified INTEGER NOT NULL, drive_file_id TEXT);", NULL, NULL, NULL);
     sqlite3_exec(db, "ALTER TABLE file_metadata ADD COLUMN drive_file_id TEXT;", NULL, NULL, NULL);
     sqlite3_exec(db, "CREATE VIRTUAL TABLE IF NOT EXISTS note_search USING fts5(filepath UNINDEXED, title, content);", NULL, NULL, NULL);
-    sqlite3_exec(db, "CREATE VIRTUAL TABLE IF NOT EXISTS file_content_fts USING fts5(content, filepath UNINDEXED);", NULL, NULL, NULL);
+    sqlite3_exec(db, "CREATE VIRTUAL TABLE IF NOT EXISTS file_content_fts USING fts5(content, content_norm, filepath UNINDEXED);", NULL, NULL, NULL);
+    /* v1 tables lack content_norm (Arabic-normalized shadow column) —
+     * rebuild and force a one-time reindex. */
+    {
+        sqlite3_stmt *probe = NULL;
+        if (sqlite3_prepare_v2(db, "SELECT content_norm FROM file_content_fts LIMIT 1;", -1, &probe, NULL) != SQLITE_OK) {
+            sqlite3_exec(db, "DROP TABLE IF EXISTS file_content_fts;", NULL, NULL, NULL);
+            sqlite3_exec(db, "CREATE VIRTUAL TABLE file_content_fts USING fts5(content, content_norm, filepath UNINDEXED);", NULL, NULL, NULL);
+            sqlite3_exec(db, "DELETE FROM file_metadata;", NULL, NULL, NULL);
+        } else {
+            sqlite3_finalize(probe);
+        }
+    }
     sqlite3_exec(db, "CREATE TABLE IF NOT EXISTS sync_tokens (id INTEGER PRIMARY KEY CHECK (id = 1), client_id TEXT NOT NULL, client_secret TEXT NOT NULL, access_token TEXT, refresh_token TEXT, expiry_time INTEGER DEFAULT 0);", NULL, NULL, NULL);
 
     sqlite3_exec(db, "CREATE TABLE IF NOT EXISTS dropbox_sync_tokens (id INTEGER PRIMARY KEY CHECK (id = 1), client_id TEXT NOT NULL, client_secret TEXT NOT NULL, access_token TEXT, refresh_token TEXT, expiry_time INTEGER DEFAULT 0);", NULL, NULL, NULL);
@@ -4111,11 +4171,14 @@ void gui_index_all_files(void) {
         }
 
         sqlite3_stmt *stmt_ins_fts = NULL;
-        if (sqlite3_prepare_v2(db, "INSERT INTO file_content_fts (content, filepath) VALUES (?, ?);", -1, &stmt_ins_fts, NULL) == SQLITE_OK) {
+        if (sqlite3_prepare_v2(db, "INSERT INTO file_content_fts (content, content_norm, filepath) VALUES (?, ?, ?);", -1, &stmt_ins_fts, NULL) == SQLITE_OK) {
+            char *norm = zig_normalize_arabic(content);
             sqlite3_bind_text(stmt_ins_fts, 1, content, -1, SQLITE_TRANSIENT);
-            sqlite3_bind_text(stmt_ins_fts, 2, nm, -1, SQLITE_TRANSIENT);
+            sqlite3_bind_text(stmt_ins_fts, 2, norm ? norm : content, -1, SQLITE_TRANSIENT);
+            sqlite3_bind_text(stmt_ins_fts, 3, nm, -1, SQLITE_TRANSIENT);
             sqlite3_step(stmt_ins_fts);
             sqlite3_finalize(stmt_ins_fts);
+            if (norm) zig_free_normalized(norm);
         }
 
         sqlite3_stmt *stmt_meta = NULL;
@@ -4187,11 +4250,14 @@ void gui_index_file(const char *filename) {
     }
 
     sqlite3_stmt *stmt_ins_fts = NULL;
-    if (sqlite3_prepare_v2(db, "INSERT INTO file_content_fts (content, filepath) VALUES (?, ?);", -1, &stmt_ins_fts, NULL) == SQLITE_OK) {
+    if (sqlite3_prepare_v2(db, "INSERT INTO file_content_fts (content, content_norm, filepath) VALUES (?, ?, ?);", -1, &stmt_ins_fts, NULL) == SQLITE_OK) {
+        char *norm = zig_normalize_arabic(content);
         sqlite3_bind_text(stmt_ins_fts, 1, content, -1, SQLITE_TRANSIENT);
-        sqlite3_bind_text(stmt_ins_fts, 2, filename, -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(stmt_ins_fts, 2, norm ? norm : content, -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(stmt_ins_fts, 3, filename, -1, SQLITE_TRANSIENT);
         sqlite3_step(stmt_ins_fts);
         sqlite3_finalize(stmt_ins_fts);
+        if (norm) zig_free_normalized(norm);
     }
 
     sqlite3_stmt *stmt_meta = NULL;
