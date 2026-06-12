@@ -33,14 +33,14 @@ logos — dark ink on bright paper, bone-white ink on black.
 - **Tabs, file-tree sidebar, find & replace, overview minimap, PDF export**
 - **Session restore, compact layout mode, English/Arabic UI, two icon sets**
 - **On-demand sync** to Google Drive, Dropbox, GitHub, or a local folder —
-  see the honest [conflict-safety matrix](docs/SYNC.md) before trusting it
-  with two machines
+  all four backends do 3-way conflict detection and keep both versions as
+  `_conflict` files instead of silently losing edits ([details](docs/SYNC.md))
 - **24-word BIP-39 recovery phrase** for the vault key
 
 ## Build & run
 
-Requires Zig (recent), GTK4, Libadwaita, GtkSourceView 5, SQLite3, and
-`curl` + `jq` for the Dropbox/GitHub sync scripts.
+Requires Zig (recent), GTK4, Libadwaita, GtkSourceView 5, and SQLite3
+(`curl` is only needed for the GitHub connect dialog).
 
 ```sh
 zig build          # build
@@ -48,8 +48,8 @@ zig build run      # run
 zig build test     # test suite
 ```
 
-Config, vault DB, and sync helper scripts live in
-`$XDG_CONFIG_HOME/qirtas/` (default `~/.config/qirtas/`).
+Config and the vault DB live in `$XDG_CONFIG_HOME/qirtas/`
+(default `~/.config/qirtas/`).
 
 ## Documentation
 

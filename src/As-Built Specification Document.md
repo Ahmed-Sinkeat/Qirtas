@@ -50,7 +50,7 @@ user-facing "encrypted" claim.
 
 ### 2.4 Cloud Sync: On-Demand Event-Driven
 
-Sync fires only on: Save, App Close, or "Sync Now". Supports Google Drive, Dropbox, GitHub (Device Flow), and Local folder sync.
+Sync fires only on: Save, App Close, or "Sync Now". Supports Google Drive, Dropbox, GitHub (Device Flow), and Local folder sync. Since 2026-06-12 all four backends are native Zig HTTP/file code with unified 3-way conflict detection (`_conflict` copies, never silent loss); the external bash helper scripts are gone.
 
 ---
 
@@ -339,7 +339,7 @@ GTK/sqlite linkage for it). Coverage as of 2026-06-12:
 - `sync.zig` — token crypto round-trip (encrypt→decrypt identity), tamper
   rejection (modified ciphertext must fail authentication), ISO-8601
   timestamp parsing, conflict filename generation, syncable-file filter,
-  XDG path resolution shape
+  XDG path resolution shape, percent-encoding, header-JSON escaping (incl. surrogate pairs)
 
 Known gaps (highest value next): C-side is untested (manual memory management
 in 6k+ lines of GUI code); no integration test for the sync state machine
@@ -359,6 +359,7 @@ recovery round-trip; no fuzzing of `parse_json_value` in `gui_sync.c`.
 | Leftover `SAVE_PAGE` / `RELOAD_BLOCKED_TEST` debug prints in `main.zig` | **Removed (2026-06-12).** The earlier "instrumentation removed" claim only covered the C side. |
 | `file_open_in_progress` cross-thread data race (plain `bool` read by inotify thread) | **Fixed (2026-06-12).** Now `std.atomic.Value(bool)` with acquire/release ordering, matching the neighboring `global_wd` atomics. |
 | Undo snapshots unbounded by size (100 full-document heap copies) | **Mitigated (2026-06-12).** Stacks are byte-capped at 64 MB total, oldest evicted. Docs no longer claim "mmap-backed". |
+| **Dropbox/Local sync silently destroying conflicting edits; sync via out-of-repo bash scripts** | **Fixed (2026-06-12).** All backends ported to the Drive-style 3-way model with per-file metadata tables and `_conflict` copies; Dropbox (API v2) and GitHub (Contents API) reimplemented in native Zig HTTP — script dependency eliminated, which also removes the biggest Windows-port blocker. |
 | `idle_scroll_to_cursor` accumulation | **Fixed.** `scroll_queued` flag added to `AppGui`; `on_mark_set` only schedules `idle_scroll_to_cursor` if not already queued, and the callback clears the flag on entry. |
 | Dead duplicate code in `gui.c` | **Removed.** Three copies of `apply_paragraph_alignment` and a dead duplicate `on_paste_plain_text_received` existed across `gui.c`/`gui_editor.c`/`gui_popover.c`; `gui.c`'s copies were unused and deleted, the live copies kept in `gui_editor.c` (paste handler) and `gui_popover.c` (alignment helper, now exported via `gui_internal.h`). Also removed unused duplicate `apply_regex_conceal`/`apply_regex_conceal_local`/`replace_anchors_with_hrs` from `gui.c` (live copies remain in `gui_conceal.c`). |
 | Cursor position char/byte unit mismatch | **Fixed.** See §4.4. |

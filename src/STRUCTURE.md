@@ -71,9 +71,9 @@ system_keys schema). Run it before pushing anything touching `sync.zig` or
 - Vault crypto threat model is honest-documented in `docs/SECURITY.md` —
   currently protects against casual browsing only (machine-id-anchored key).
   No "encrypted"/"privacy-first" user-facing claims until that roadmap is done.
-- Sync conflict behavior differs per backend — `docs/SYNC.md` matrix.
-  Dropbox and Local folder sync can silently lose edits on two-machine
-  conflicts; only Google Drive makes `_conflict` copies.
+- Sync conflict behavior is unified (2026-06-12): all four backends do
+  3-way detection with per-file metadata and `_conflict` copies — no
+  silent edit loss. Details in `docs/SYNC.md`.
 
 ## Where To Edit What
 

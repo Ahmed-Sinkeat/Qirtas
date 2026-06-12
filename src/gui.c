@@ -3520,8 +3520,8 @@ static void activate(GtkApplication *app, gpointer user_data) {
     gtk_widget_set_hexpand(gui->dropbox_status_lbl, TRUE);
     gui->dropbox_connect_btn = gtk_button_new_with_label(qirtas_tr("Connect to Dropbox"));
     gtk_widget_set_tooltip_text(gui->dropbox_connect_btn,
-        "⚠ No conflict protection: edits made on another machine since its last sync "
-        "can be silently overwritten. See docs/SYNC.md before using on two machines.");
+        "Conflict-safe: if a note changed on two machines, both versions are kept "
+        "(the local one as <name>_conflict). See docs/SYNC.md.");
     gtk_widget_add_css_class(gui->dropbox_connect_btn, "pop-btn");
     gtk_widget_add_css_class(gui->dropbox_connect_btn, "sync-card-action");
     gtk_widget_set_hexpand(gui->dropbox_connect_btn, TRUE);
@@ -3595,8 +3595,8 @@ static void activate(GtkApplication *app, gpointer user_data) {
     gtk_widget_set_hexpand(gui->local_sync_status_lbl, TRUE);
     gui->local_sync_btn = gtk_button_new_with_label(qirtas_tr("Sync Folder"));
     gtk_widget_set_tooltip_text(gui->local_sync_btn,
-        "⚠ Newest-file-wins, no conflict copies: if the same note changed on both "
-        "sides, the older edit is overwritten. See docs/SYNC.md.");
+        "Conflict-safe: if a note changed on both sides, both versions are kept "
+        "(the local one as <name>_conflict). See docs/SYNC.md.");
     gtk_widget_add_css_class(gui->local_sync_btn, "pop-btn");
     gtk_widget_add_css_class(gui->local_sync_btn, "sync-card-action");
     gtk_widget_set_hexpand(gui->local_sync_btn, TRUE);
