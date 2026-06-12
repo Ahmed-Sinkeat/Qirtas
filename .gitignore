@@ -9,3 +9,4 @@ zig-out/
 test_run.log
 crash_run.log
 test_*.md
+2026-*-this-session-*.txt
