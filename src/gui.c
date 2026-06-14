@@ -2490,8 +2490,11 @@ static gboolean paper_column_tick(GtkWidget *widget, GdkFrameClock *clock, gpoin
 
     int text_w = width - QIRTAS_CARD_CHROME;
     if (text_w < QIRTAS_TEXT_COLUMN_MIN) text_w = QIRTAS_TEXT_COLUMN_MIN;
-    if (!gui->text_width_full_page && text_w > QIRTAS_TEXT_COLUMN_MAX)
-        text_w = QIRTAS_TEXT_COLUMN_MAX;
+    /* Centered mode: cap at the user's chosen column width (slider). Falls back
+     * to the old fixed max if unset. */
+    int centered_max = (gui->centered_text_width > 0) ? gui->centered_text_width : QIRTAS_TEXT_COLUMN_MAX;
+    if (!gui->text_width_full_page && text_w > centered_max)
+        text_w = centered_max;
     if (gui->read_mode && !gui->text_width_full_page && text_w > QIRTAS_READ_MODE_MAX_WIDTH)
         text_w = QIRTAS_READ_MODE_MAX_WIDTH;
     gui->text_column_width = text_w;
@@ -2944,6 +2947,16 @@ static void on_text_width_mode_changed(GObject *gobject, GParamSpec *pspec, gpoi
     }
 }
 
+static void on_width_slider_changed(GtkRange *range, gpointer user_data) {
+    AppGui *gui = (AppGui *)user_data;
+    gui->centered_text_width = (int)gtk_range_get_value(range);
+    qirtas_pref_set_int("centered_text_width", gui->centered_text_width);
+    if (gui->editor_card) {
+        s_last_paper_width = -1;
+        paper_column_tick(gui->editor_card, NULL, gui);
+    }
+}
+
 static void on_focus_mode_toggled(GtkCheckButton *chk, gpointer user_data) {
     AppGui *gui = (AppGui *)user_data;
     gboolean active = gtk_check_button_get_active(chk);
@@ -3238,6 +3251,9 @@ static void activate(GtkApplication *app, gpointer user_data) {
     gui->show_right_margin      = qirtas_pref_get_int("show_right_margin", 0) != 0;
     gui->right_margin_pos       = qirtas_pref_get_int("right_margin_pos", 80);
     gui->text_width_full_page   = qirtas_pref_get_int("text_width_full_page", 0) != 0;
+    gui->centered_text_width    = qirtas_pref_get_int("centered_text_width", QIRTAS_TEXT_COLUMN_MAX);
+    if (gui->centered_text_width < QIRTAS_TEXT_COLUMN_MIN) gui->centered_text_width = QIRTAS_TEXT_COLUMN_MIN;
+    if (gui->centered_text_width > 1400) gui->centered_text_width = 1400;
     gui->show_overview_map      = qirtas_pref_get_int("show_overview_map", 0) != 0;
     gui->restore_session        = qirtas_pref_get_int("restore_session", 1) != 0;
     gui->compact_mode           = qirtas_pref_get_int("compact_mode", 0) != 0;
@@ -4169,6 +4185,22 @@ static void activate(GtkApplication *app, gpointer user_data) {
     gtk_box_append(GTK_BOX(text_width_row), text_width_lbl);
     gtk_box_append(GTK_BOX(text_width_row), gui->text_width_dropdown);
     gtk_box_append(GTK_BOX(pop_box), text_width_row);
+
+    /* Column-width slider — sets the centered-mode max column width (px). */
+    GtkWidget *width_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
+    GtkWidget *width_lbl = gtk_label_new(qirtas_tr("Column Width"));
+    gtk_widget_set_halign(width_lbl, GTK_ALIGN_START);
+    GtkWidget *width_slider = gtk_scale_new_with_range(GTK_ORIENTATION_HORIZONTAL,
+                                                       QIRTAS_TEXT_COLUMN_MIN, 1400, 10);
+    gtk_range_set_value(GTK_RANGE(width_slider), gui->centered_text_width);
+    gtk_widget_set_hexpand(width_slider, TRUE);
+    gtk_scale_set_draw_value(GTK_SCALE(width_slider), TRUE);
+    gtk_scale_set_value_pos(GTK_SCALE(width_slider), GTK_POS_RIGHT);
+    g_signal_connect(width_slider, "value-changed", G_CALLBACK(on_width_slider_changed), gui);
+    gui->width_slider = width_slider;
+    gtk_box_append(GTK_BOX(width_row), width_lbl);
+    gtk_box_append(GTK_BOX(width_row), width_slider);
+    gtk_box_append(GTK_BOX(pop_box), width_row);
 
     const char *sidebar_sides[] = { "Left", "Right", NULL };
     GtkWidget *sb_side_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);

@@ -227,6 +227,8 @@ typedef struct {
      * each tick, not persisted directly. */
     int        desk_gap;
     int        text_column_width;    /* derived cache, recomputed by paper_column_tick */
+    int        centered_text_width;  /* user slider: max column width in centered mode (px) */
+    GtkWidget *width_slider;
     gboolean   resizing_text_column;
     int        resize_drag_start_gap;
     int        resize_drag_edge;     /* -1 = left edge, +1 = right edge, 0 = none */
