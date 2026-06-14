@@ -21,6 +21,44 @@ void gui_push_undo_snapshot(void) {
     zig_undo_push(line, col);
 }
 
+/* Apply a [start_off, end_off) → replacement edit to BOTH the GTK buffer and
+ * Zig with NO full reload: edit GTK directly with the sync signals blocked,
+ * mirror into Zig with one zig_replace_range (atomic = one undo step),
+ * re-decorate only the touched lines, defer conceal/stats. Returns the start
+ * Position. Shared by every formatting / line-op so edits don't jump. */
+Position gui_buffer_replace(GtkTextBuffer *buf, int start_off, int end_off,
+                            const char *replacement) {
+    GtkTextIter s, e;
+    gtk_text_buffer_get_iter_at_offset(buf, &s, start_off);
+    gtk_text_buffer_get_iter_at_offset(buf, &e, end_off);
+    Position sp = iter_to_position(&s);
+    Position ep = iter_to_position(&e);
+
+    gui_push_undo_snapshot();
+
+    g_signal_handlers_block_by_func(buf, on_insert_text_before, global_gui);
+    g_signal_handlers_block_by_func(buf, on_insert_text_after, global_gui);
+    g_signal_handlers_block_by_func(buf, on_delete_range_before, global_gui);
+    g_signal_handlers_block_by_func(buf, on_delete_range_after, global_gui);
+    if (end_off != start_off) gtk_text_buffer_delete(buf, &s, &e);
+    if (replacement && replacement[0]) gtk_text_buffer_insert(buf, &s, replacement, -1);
+    g_signal_handlers_unblock_by_func(buf, on_insert_text_before, global_gui);
+    g_signal_handlers_unblock_by_func(buf, on_insert_text_after, global_gui);
+    g_signal_handlers_unblock_by_func(buf, on_delete_range_before, global_gui);
+    g_signal_handlers_unblock_by_func(buf, on_delete_range_after, global_gui);
+
+    zig_replace_range(sp, ep, replacement ? replacement : "");
+    zig_undo_commit();
+
+    int added_lines = 0;
+    if (replacement) for (const char *p = replacement; *p; p++) if (*p == '\n') added_lines++;
+    update_paragraph_direction_lines(buf, sp.line, sp.line + added_lines);
+    gtk_text_buffer_set_modified(buf, TRUE);
+    gui_set_sync_state(QIRTAS_SYNC_NOT_SYNCED);
+    gui_refresh_buffer_stats();
+    return sp;
+}
+
 void gui_set_buffer_modified(gboolean modified) {
     if (!global_source_view) return;
     GtkTextBuffer *buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(global_source_view));
@@ -276,12 +314,10 @@ void on_insert_text_before(GtkTextBuffer *buf, GtkTextIter *location, gchar *tex
         }
 
         gchar both_chars[3] = { c, closing, 0 };
-        Position pos = iter_to_position(location);
-        zig_insert_text(pos, both_chars);
-        gui_reload_full_buffer();
-        gui_set_cursor_position(pos.line + 1, pos.col + 1);
-        zig_undo_commit();
-        g_signal_stop_emission_by_name(buf, "insert-text");
+        gint off = gtk_text_iter_get_offset(location);
+        g_signal_stop_emission_by_name(buf, "insert-text");  /* cancel the single-char insert */
+        Position sp = gui_buffer_replace(buf, off, off, both_chars);  /* insert pair, no reload */
+        gui_set_cursor_position(sp.line + 1, sp.col + 1);    /* land between the pair */
     } else if (c == '"' || c == ']' || c == ')' || c == '}' || c == '*' || c == '_' || c == '`') {
         GtkTextIter next_iter = *location;
         gunichar next_char = gtk_text_iter_get_char(&next_iter);
@@ -333,14 +369,11 @@ void clear_selection_formatting(GtkTextBuffer *buf) {
             }
         }
 
-        Position start_pos = iter_to_position(&start);
-        Position end_pos = iter_to_position(&end);
-        zig_replace_range(start_pos, end_pos, cleaned->str);
-        gui_reload_full_buffer();
-
+        gint soff = gtk_text_iter_get_offset(&start);
+        gint eoff = gtk_text_iter_get_offset(&end);
+        Position start_pos = gui_buffer_replace(buf, soff, eoff, cleaned->str);
         Position select_end = advance_position(start_pos, cleaned->str);
         select_position_range(global_gui, start_pos, select_end);
-        zig_undo_commit();
 
         g_string_free(cleaned, TRUE);
     }
@@ -354,12 +387,10 @@ void insert_text_pair(GtkTextBuffer *buf, const char *open, const char *close) {
     if (gtk_text_buffer_get_selection_bounds(buf, &start, &end)) {
         gchar *selected = gtk_text_buffer_get_text(buf, &start, &end, TRUE);
         gchar *wrapped = g_strconcat(open, selected, close, NULL);
-        Position start_pos = iter_to_position(&start);
-        Position end_pos = iter_to_position(&end);
-        zig_replace_range(start_pos, end_pos, wrapped);
-        gui_reload_full_buffer();
+        gint soff = gtk_text_iter_get_offset(&start);
+        gint eoff = gtk_text_iter_get_offset(&end);
+        Position start_pos = gui_buffer_replace(buf, soff, eoff, wrapped);
         select_position_range(gui, start_pos, advance_position(start_pos, wrapped));
-        zig_undo_commit();
 
         g_free(selected);
         g_free(wrapped);
@@ -367,12 +398,10 @@ void insert_text_pair(GtkTextBuffer *buf, const char *open, const char *close) {
         GtkTextIter cursor;
         gtk_text_buffer_get_iter_at_mark(buf, &cursor, gtk_text_buffer_get_insert(buf));
         gchar *pair = g_strconcat(open, close, NULL);
-        Position cursor_pos = iter_to_position(&cursor);
-        zig_insert_text(cursor_pos, pair);
-        gui_reload_full_buffer();
+        gint off = gtk_text_iter_get_offset(&cursor);
+        Position cursor_pos = gui_buffer_replace(buf, off, off, pair);
         Position after_open = advance_position(cursor_pos, open);
         gui_set_cursor_position(after_open.line + 1, after_open.col);
-        zig_undo_commit();
         g_free(pair);
     }
 }
@@ -411,12 +440,10 @@ gboolean maybe_delete_empty_pair(GtkTextBuffer *buf) {
         strcmp(around, "``") == 0;
 
     if (is_pair) {
-        Position start_pos = iter_to_position(&prev);
-        Position end_pos = iter_to_position(&next);
-        zig_delete_range(start_pos, end_pos);
-        gui_reload_full_buffer();
+        gint poff = gtk_text_iter_get_offset(&prev);
+        gint noff = gtk_text_iter_get_offset(&next);
+        Position start_pos = gui_buffer_replace(buf, poff, noff, "");
         gui_set_cursor_position(start_pos.line + 1, start_pos.col);
-        zig_undo_commit();
     }
 
     g_free(around);
@@ -472,18 +499,16 @@ void toggle_comment_current_line(GtkTextBuffer *buf) {
         g_free(indent);
     }
 
-    Position start = { abs_line, 0 };
-    Position end = { abs_line + 1, 0 };
-    zig_replace_range(start, end, new_text);
+    GtkTextIter ls, le;
+    gtk_text_buffer_get_iter_at_line(buf, &ls, abs_line);
+    gtk_text_buffer_get_iter_at_line(buf, &le, abs_line + 1);
+    gint soff = gtk_text_iter_get_offset(&ls);
+    gint eoff = gtk_text_iter_get_offset(&le);
+    gui_buffer_replace(buf, soff, eoff, new_text);  /* direct edit, no reload */
     g_free(line_dup);
     g_free(new_text);
 
-    // Reload viewport
-    gui_reload_full_buffer();
-
-    // Place cursor
     gui_set_cursor_position(abs_line + 1, col);
-    zig_undo_commit();
 }
 
 void on_insert_text_after(GtkTextBuffer *buf, GtkTextIter *location, gchar *text, gint len, gpointer user_data) {
