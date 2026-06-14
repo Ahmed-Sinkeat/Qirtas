@@ -1818,6 +1818,32 @@ static void on_wrap_toggled(GtkCheckButton *btn, gpointer user_data) {
     if (global_gui) apply_editor_prefs(global_gui);
 }
 
+/* Toggle markdown conceal (hiding **, #, etc). A persistent escape hatch:
+ * conceal applies scale-tagged ranges that GTK's text layout can choke on with
+ * some pathological documents — turning it off renders raw markers but is
+ * crash-safe. */
+static void on_conceal_toggled(GtkCheckButton *btn, gpointer user_data) {
+    AppGui *gui = (AppGui *)user_data;
+    gboolean on = gtk_check_button_get_active(btn);
+    qirtas_no_conceal = on ? 0 : 1;
+    qirtas_pref_set_int("conceal_enabled", on ? 1 : 0);
+    if (!gui || !gui->source_view) return;
+    GtkTextBuffer *buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(gui->source_view));
+    if (!on) {
+        /* Strip the conceal/heading tags so the raw markers show. */
+        GtkTextTagTable *table = gtk_text_buffer_get_tag_table(buf);
+        GtkTextIter s, e;
+        gtk_text_buffer_get_bounds(buf, &s, &e);
+        const char *names[] = { "conceal", "heading1", "heading2", "heading3", "heading4" };
+        for (int i = 0; i < 5; i++) {
+            GtkTextTag *t = gtk_text_tag_table_lookup(table, names[i]);
+            if (t) gtk_text_buffer_remove_tag(buf, t, &s, &e);
+        }
+    } else {
+        gui_refresh_buffer_stats();
+    }
+}
+
 static char current_en_font[64] = "JetBrains Mono";
 static char current_ar_font[64] = "Amiri";
 static double current_font_size = 16.0;
@@ -3223,7 +3249,8 @@ static void activate(GtkApplication *app, gpointer user_data) {
          *               and any per-keystroke edit cost over 1 ms. */
         qirtas_perf_enabled = perf_env ? atoi(perf_env) : 0;
         const char *nc_env = g_getenv("QIRTAS_NO_CONCEAL");
-        qirtas_no_conceal = (nc_env && nc_env[0] == '1') ? 1 : 0;
+        if (nc_env) qirtas_no_conceal = (nc_env[0] == '1');
+        else qirtas_no_conceal = qirtas_pref_get_int("conceal_enabled", 1) ? 0 : 1;
     }
     qirtas_app_language = qirtas_pref_get_int("app_language", 0);
     qirtas_icon_style   = qirtas_pref_get_int("icon_style", 0);
@@ -4171,8 +4198,13 @@ static void activate(GtkApplication *app, gpointer user_data) {
     GtkWidget *wrap_chk = gtk_check_button_new_with_label(qirtas_tr("Wrap Lines Automatically"));
     gui->wrap_chk = wrap_chk;
     gtk_check_button_set_active(GTK_CHECK_BUTTON(wrap_chk), gui->wrap_lines);
-    g_signal_connect(wrap_chk, "toggled", G_CALLBACK(on_wrap_toggled), gui);
+    g_signal_connect(wrap_chk, "toggled", G_CALLBACK(on_wrap_toggled), gui->source_view);
     gtk_box_append(GTK_BOX(pop_box), wrap_chk);
+
+    GtkWidget *conceal_chk = gtk_check_button_new_with_label(qirtas_tr("Conceal Markdown Markers"));
+    gtk_check_button_set_active(GTK_CHECK_BUTTON(conceal_chk), !qirtas_no_conceal);
+    g_signal_connect(conceal_chk, "toggled", G_CALLBACK(on_conceal_toggled), gui);
+    gtk_box_append(GTK_BOX(pop_box), conceal_chk);
 
     GtkWidget *ln_chk = gtk_check_button_new_with_label(qirtas_tr("Display Line Numbers"));
     gtk_check_button_set_active(GTK_CHECK_BUTTON(ln_chk), gui->show_line_numbers);
