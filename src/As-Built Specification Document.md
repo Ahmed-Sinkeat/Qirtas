@@ -155,6 +155,59 @@ Test: hold Down Arrow ~100 presses over 5 seconds.
 - `gui_get_cursor_position()` reads `gtk_text_iter_get_line_offset()` (char-based), matching `iter_to_position()` used everywhere else.
 - `gui_set_cursor_position()` clamps the incoming `col` to `gtk_text_iter_get_chars_in_line()` (char count) before calling `gtk_text_buffer_get_iter_at_line_offset()` (char-based), instead of clamping to byte length and/or mixing in a byte-based iter call.
 
+### 4.5 Conceal fragility + escape hatch (2026-06-15)
+
+The markdown conceal hides syntax markers (`**`, `#`, `[`…`](…)`, …) by applying
+a `conceal` text tag (`scale 0.01` + transparent foreground) over the marker
+ranges, plus `heading1..4` size tags. This mechanism is **fragile in GTK's text
+layout on some pathological documents** (e.g. the markdown-test-file `TEST.md`:
+inline HTML, a table, many links). The buffer loads fine but, on cursor
+move/scroll, GTK's own layout idle aborts with
+`gtk_text_buffer_apply_tag: gtk_text_iter_get_buffer(end) == buffer` /
+`Byte index N off the end of the line`. The backtrace is stripped of Qirtas
+frames — the failing `apply_tag` is dispatched from a GTK-internal idle, not our
+`g_idle` callbacks — confirming the live conceal code (`gui_conceal.c`,
+`apply_regex_conceal_local`, clamped/fresh iters) is not the direct caller; GTK
+chokes on the scale-tagged ranges. Switching the tag to `invisible` instead of
+`scale 0.01` trades this for a different navigation-time `Byte index off the
+end` abort, so neither tag form is safe on this content.
+
+NOTE: `gui.c` still carries **dead duplicate** `apply_regex_conceal` /
+`apply_regex_conceal_local` (declared + defined, never called) — clutter, not
+the live path.
+
+**Escape hatch (shipped):** conceal is now a persistent setting
+(`conceal_enabled` pref, default on) exposed as the "Conceal Markdown Markers"
+checkbox in editor settings; `QIRTAS_NO_CONCEAL=1` still overrides for
+debugging. Turning it off strips the conceal/heading tags (raw markers render,
+crash-safe). A real fix needs a conceal mechanism that hides markers without
+disrupting GTK's char↔layout mapping; until then, a heuristic skips concealing
+markers on layout-hostile lines (raw HTML `<…>`, tables `|`, or very long
+lines).
+
+### 4.6 Editor/UX fixes batch (2026-06-14/15)
+
+- Zoom shortcuts (Ctrl +/=/-/0) wired in `on_editor_key_pressed` (the
+  window-level handler was pre-empted); `quick_switch` (Ctrl+P) wired.
+- Read mode keeps full-page width when set; line-wrap toggle forces an immediate
+  paper-column recompute (no more dead space on the right).
+- Undo / full reload restores the viewport by **line** (reflow-stable) instead
+  of pixel offset — fixes the Ctrl+Z page jump.
+- Vault switch clears all tabs first (`gui_tabs_close_all`) — old-vault tabs no
+  longer resolve into the new vault as empty files (data loss).
+- Keyboard-shortcuts window is non-modal (no longer blocks editing / settings
+  close) and translatable.
+- Pointer-color setting removed. Added **Column Width** (centered text column,
+  `centered_text_width` pref) and **Card Gap** (`desk_gap`) sliders.
+- Library bar stays open on editor/workspace clicks — only its toggle icon
+  closes it (removed the hide from `on_editor_left_click` + `on_workspace_click`).
+- HR rendering (`parse_and_render_hrs`, `check_and_insert_hr`) reworked to
+  iterate by line number / reacquire iters by offset — the old single-iter loop
+  reused iterators across `delete`+`insert_child_anchor` and corrupted the
+  document (cut-all-then-paste truncation) + spewed the iterator storm. CRLF/CR
+  is normalized to LF on load (`loadDocFromSlice`) — stray `\r` desynced the
+  conceal offset math on CRLF Markdown.
+
 This matters most for Arabic/RTL and any multi-byte UTF-8 content, where `chars_in_line != bytes_in_line`. A previous mismatch here could pass an out-of-range byte index into a char-based iter call (or vice versa). This was a real correctness bug, but **not** the cause of the `"Byte index N is off the end of the line"` crash — see §4.5 for the actual root cause and fix.
 
 ### 4.5 Root Cause and Fix: `Gtk-ERROR: Byte index N is off the end of the line` (2026-06-11)
