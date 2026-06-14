@@ -891,6 +891,10 @@ static void on_vault_dialog_response(GObject *source_object, GAsyncResult *res, 
     if (folder) {
         char *path = g_file_get_path(folder);
         if (path) {
+            /* Drop the previous vault's tabs BEFORE the new vault loads — they
+             * point at files in the old vault and would otherwise resolve
+             * against the new vault's cwd and create empty files there. */
+            gui_tabs_close_all(gui);
             zig_open_vault(path);
             if (gui->vault_path_lbl_val) {
                 gtk_label_set_text(GTK_LABEL(gui->vault_path_lbl_val), path);
