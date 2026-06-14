@@ -223,6 +223,16 @@ static gboolean buffer_stats_timeout_cb(gpointer user_data) {
     return G_SOURCE_REMOVE;
 }
 
+/* Force a stats + conceal + outline refresh after a programmatic buffer load
+ * (gui_set_text / tab switch), which blocks on_buffer_changed and so never
+ * triggers the normal debounce. Deferred so Pango's line layout is settled
+ * before the conceal pass touches iterators. */
+void gui_refresh_buffer_stats(void) {
+    if (!global_gui) return;
+    if (buffer_stats_timeout_id) g_source_remove(buffer_stats_timeout_id);
+    buffer_stats_timeout_id = g_timeout_add(50, buffer_stats_timeout_cb, global_gui);
+}
+
 void on_buffer_changed(GtkTextBuffer *buf, gpointer user_data) {
     AppGui *gui = (AppGui *)user_data;
     if (gui && gui->loading_viewport) return;
