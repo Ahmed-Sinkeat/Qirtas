@@ -56,6 +56,12 @@ int qirtas_app_language = 0;
  * gui_internal.h; set from env in run_gui(). */
 int qirtas_perf_enabled = 0;
 
+/* Diagnostic toggles (env, read in run_gui). QIRTAS_NO_CONCEAL=1 disables the
+ * markdown conceal passes so scroll/typing cost can be measured with the
+ * conceal-tag overhead removed — tells us whether conceal drives scroll CPU
+ * before committing to viewport-scoped conceal. */
+int qirtas_no_conceal = 0;
+
 /* Icon style (0 = Classic, 1 = Modern); drives qirtas_icon() lookup. */
 int qirtas_icon_style = 0;
 
@@ -3166,6 +3172,8 @@ static void activate(GtkApplication *app, gpointer user_data) {
          * QIRTAS_PERF=2: also log a full per-pass breakdown every stats pass
          *               and any per-keystroke edit cost over 1 ms. */
         qirtas_perf_enabled = perf_env ? atoi(perf_env) : 0;
+        const char *nc_env = g_getenv("QIRTAS_NO_CONCEAL");
+        qirtas_no_conceal = (nc_env && nc_env[0] == '1') ? 1 : 0;
     }
     qirtas_app_language = qirtas_pref_get_int("app_language", 0);
     qirtas_icon_style   = qirtas_pref_get_int("icon_style", 0);

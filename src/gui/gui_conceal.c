@@ -392,6 +392,7 @@ void update_conceal_markdown_all_sync(GtkTextBuffer *buf) {
 
 void update_conceal_markdown_all(GtkTextBuffer *buf) {
     (void)buf;
+    if (qirtas_no_conceal) return;
     if (global_conceal_queued) return;
     if (!global_gui) return;
     
@@ -535,6 +536,7 @@ static void update_conceal_markdown_range_impl(GtkTextBuffer *buf, int first_lin
 /* Public ranged reconceal — used by the edit-debounce path to touch only the
  * lines that actually changed instead of the whole document. */
 void update_conceal_markdown_range(GtkTextBuffer *buf, int first_line, int last_line) {
+    if (qirtas_no_conceal) return;
     update_conceal_markdown_range_impl(buf, first_line, last_line);
 }
 
@@ -569,6 +571,7 @@ static gboolean idle_local_conceal_cb(gpointer user_data) {
 
 void update_conceal_markdown(GtkTextBuffer *buf) {
     (void)buf;
+    if (qirtas_no_conceal) return;
     if (local_conceal_queued) return;
     if (!global_gui) return;
     
