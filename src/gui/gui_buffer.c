@@ -538,6 +538,11 @@ void on_delete_range_before(GtkTextBuffer *buf, GtkTextIter *start, GtkTextIter 
 
     zig_delete_range(p_start, p_end);
     gui_push_undo_snapshot();
+    /* A deletion (backspace, Ctrl+Backspace word-delete, Delete, selection
+     * cut) is a discrete action — seal it as its own undo step immediately
+     * instead of waiting for the typing-pause debounce, so Ctrl+Z right after
+     * a word-delete actually reverts it. */
+    zig_undo_commit();
 }
 
 void on_delete_range_after(GtkTextBuffer *buf, GtkTextIter *start, GtkTextIter *end, gpointer user_data) {

@@ -1690,12 +1690,14 @@ static void on_files_clicked(GtkButton *btn, gpointer user_data) {
 
 static void on_wrap_toggled(GtkCheckButton *btn, gpointer user_data) {
     GtkTextView *view = GTK_TEXT_VIEW(user_data);
-
-    /* Virtual scrolling uses fixed logical line heights, so soft wrap must stay off. */
-    g_signal_handlers_block_by_func(btn, G_CALLBACK(on_wrap_toggled), user_data);
-    gtk_check_button_set_active(btn, FALSE);
-    g_signal_handlers_unblock_by_func(btn, G_CALLBACK(on_wrap_toggled), user_data);
-    gtk_text_view_set_wrap_mode(view, GTK_WRAP_NONE);
+    /* Full-buffer model: soft wrap is a real user choice (the old virtual-
+     * paging restriction that forced it off is gone). Honor the checkbox. */
+    gboolean active = gtk_check_button_get_active(btn);
+    if (global_gui) {
+        global_gui->wrap_lines = active;
+        qirtas_pref_set_int("wrap_lines", active ? 1 : 0);
+    }
+    gtk_text_view_set_wrap_mode(view, active ? GTK_WRAP_WORD_CHAR : GTK_WRAP_NONE);
 }
 
 static char current_en_font[64] = "JetBrains Mono";
