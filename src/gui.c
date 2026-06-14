@@ -939,6 +939,10 @@ static void on_folder_dialog_response(AdwAlertDialog *dlg, const char *response,
     }
 }
 
+static void on_exp_new_file_clicked(GtkButton *btn, gpointer user_data);
+static void on_exp_new_folder_clicked(GtkButton *btn, gpointer user_data);
+static void on_exp_open_vault_fm_clicked(GtkButton *btn, gpointer user_data);
+
 void prompt_new_folder(AppGui *gui, const char *parent_dir) {
     if (!gui) return;
     AdwAlertDialog *dlg = ADW_ALERT_DIALOG(
@@ -3385,6 +3389,28 @@ static void activate(GtkApplication *app, gpointer user_data) {
     gtk_widget_set_halign(gui->exp_count_label, GTK_ALIGN_START);
     gtk_box_append(GTK_BOX(exp_title_row), gui->exp_count_label);
 
+    /* Obsidian-style header actions, right-aligned: new file, new folder,
+     * open the vault folder in the system file manager. */
+    {
+        GtkWidget *spacer = gtk_label_new(NULL);
+        gtk_widget_set_hexpand(spacer, TRUE);
+        gtk_box_append(GTK_BOX(exp_title_row), spacer);
+
+        struct { const char *icon; const char *tip; GCallback cb; } acts[] = {
+            { "document-new-symbolic",      qirtas_tr("New File"),                 G_CALLBACK(on_exp_new_file_clicked) },
+            { "folder-new-symbolic",        qirtas_tr("New Folder"),               G_CALLBACK(on_exp_new_folder_clicked) },
+            { "system-file-manager-symbolic", qirtas_tr("Open Vault in File Manager"), G_CALLBACK(on_exp_open_vault_fm_clicked) },
+        };
+        for (size_t i = 0; i < G_N_ELEMENTS(acts); i++) {
+            GtkWidget *b = gtk_button_new_from_icon_name(acts[i].icon);
+            gtk_widget_add_css_class(b, "flat");
+            gtk_widget_add_css_class(b, "explorer-action-btn");
+            gtk_widget_set_tooltip_text(b, acts[i].tip);
+            g_signal_connect(b, "clicked", acts[i].cb, gui);
+            gtk_box_append(GTK_BOX(exp_title_row), b);
+        }
+    }
+
     gtk_box_append(GTK_BOX(sidebar), exp_title_row);
 
     /* 3. Scrolled Window & Tree Container for File Tree */
@@ -4726,6 +4752,28 @@ static void on_tree_open_in_fm_clicked(GtkButton *btn, gpointer user_data) {
     gtk_file_launcher_open_containing_folder(launcher, parent, NULL, NULL, NULL);
     g_object_unref(launcher);
     g_object_unref(file);
+}
+
+/* Explorer header toolbar actions. */
+static void on_exp_new_file_clicked(GtkButton *btn, gpointer user_data) {
+    (void)btn; (void)user_data;
+    extern void zig_open_file(const char *filename);
+    zig_open_file("Untitled");
+}
+static void on_exp_new_folder_clicked(GtkButton *btn, gpointer user_data) {
+    (void)btn;
+    prompt_new_folder((AppGui *)user_data, NULL);
+}
+static void on_exp_open_vault_fm_clicked(GtkButton *btn, gpointer user_data) {
+    (void)btn; (void)user_data;
+    char *cwd = g_get_current_dir();
+    GFile *dir = g_file_new_for_path(cwd);
+    GtkFileLauncher *launcher = gtk_file_launcher_new(dir);
+    GtkWindow *parent = global_gui ? GTK_WINDOW(global_gui->window) : NULL;
+    gtk_file_launcher_launch(launcher, parent, NULL, NULL, NULL);
+    g_object_unref(launcher);
+    g_object_unref(dir);
+    g_free(cwd);
 }
 
 /* New Folder, created as a sibling of the right-clicked file (same directory). */
