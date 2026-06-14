@@ -21,6 +21,16 @@ void gui_push_undo_snapshot(void) {
     zig_undo_push(line, col);
 }
 
+/* Grow the dirty-line range so the next debounced conceal pass only retags
+ * the lines touched since the last pass. */
+static void mark_conceal_dirty(AppGui *gui, int first_line, int last_line) {
+    if (!gui) return;
+    if (gui->conceal_dirty_start < 0 || first_line < gui->conceal_dirty_start)
+        gui->conceal_dirty_start = first_line;
+    if (last_line > gui->conceal_dirty_end)
+        gui->conceal_dirty_end = last_line;
+}
+
 /* Apply a [start_off, end_off) → replacement edit to BOTH the GTK buffer and
  * Zig with NO full reload: edit GTK directly with the sync signals blocked,
  * mirror into Zig with one zig_replace_range (atomic = one undo step),
@@ -249,9 +259,9 @@ static gboolean buffer_stats_timeout_cb(gpointer user_data) {
         if (gui->lbl_lines) gtk_label_set_text(GTK_LABEL(gui->lbl_lines), l_buf);
     }
 
-    /* Full conceal pass runs here (already deferred past the 'changed'
-     * signal, so Pango's line-layout cache is stable — avoids the
-     * "Byte index N is off the end of the line" abort).
+    /* Conceal pass runs here (already deferred past the 'changed' signal, so
+     * Pango's line-layout cache is stable — avoids the "Byte index N is off
+     * the end of the line" abort).
      *
      * Concealing/revealing markers changes line heights, which shifts every
      * line below the change and made the viewport jump on edits mid-document
@@ -265,7 +275,18 @@ static gboolean buffer_stats_timeout_cb(gpointer user_data) {
     gtk_text_view_get_iter_at_location(tv, &top_iter, vrect.x, vrect.y);
     GtkTextMark *view_anchor = gtk_text_buffer_create_mark(buf, NULL, &top_iter, TRUE);
 
-    update_conceal_markdown_all(buf);
+    /* Reconceal only the lines edited since the last pass. The full-buffer
+     * pass (O(document)) is reserved for load / tab-switch / read-mode toggle,
+     * where dirty range is unset (-1). One pad line each side absorbs edits
+     * that open or close a marker spanning into a neighbouring line. */
+    if (gui->conceal_dirty_start < 0) {
+        update_conceal_markdown_all(buf);
+    } else {
+        update_conceal_markdown_range(buf, gui->conceal_dirty_start - 1,
+                                           gui->conceal_dirty_end + 1);
+    }
+    gui->conceal_dirty_start = -1;
+    gui->conceal_dirty_end = -1;
 
     gtk_text_view_scroll_to_mark(tv, view_anchor, 0.0, TRUE, 0.0, 0.0);
     gtk_text_buffer_delete_mark(buf, view_anchor);
@@ -283,6 +304,10 @@ static gboolean buffer_stats_timeout_cb(gpointer user_data) {
  * before the conceal pass touches iterators. */
 void gui_refresh_buffer_stats(void) {
     if (!global_gui) return;
+    /* Programmatic load / tab-switch: the whole buffer is new, so force the
+     * full conceal pass (dirty range unset) rather than an incremental one. */
+    global_gui->conceal_dirty_start = -1;
+    global_gui->conceal_dirty_end = -1;
     if (buffer_stats_timeout_id) g_source_remove(buffer_stats_timeout_id);
     buffer_stats_timeout_id = g_timeout_add(50, buffer_stats_timeout_cb, global_gui);
 }
@@ -559,7 +584,9 @@ void on_insert_text_after(GtkTextBuffer *buf, GtkTextIter *location, gchar *text
     g_free(text_dup);
 
     gui_set_sync_state(QIRTAS_SYNC_NOT_SYNCED);
-    update_paragraph_direction_lines(buf, start_line, gtk_text_iter_get_line(location));
+    int end_line = gtk_text_iter_get_line(location);
+    update_paragraph_direction_lines(buf, start_line, end_line);
+    mark_conceal_dirty(gui, start_line, end_line);
 
     apply_wiki_link_tags_local(buf);
 }
@@ -578,12 +605,13 @@ void on_delete_range_before(GtkTextBuffer *buf, GtkTextIter *start, GtkTextIter 
     Position p_end = { end_line, end_col };
 
     zig_delete_range(p_start, p_end);
+    /* Mark an undo step pending but DON'T capture a full-document snapshot per
+     * delete — captureUndoEntry dupes the whole buffer, so committing on every
+     * backspace was O(document) per keystroke. The pending step is sealed at
+     * the typing-pause debounce (buffer_stats_timeout_cb) and zig_undo() seals
+     * any pending edit before reverting, so Ctrl+Z right after a delete still
+     * works. Result: deletes get the same word-grain coalescing as inserts. */
     gui_push_undo_snapshot();
-    /* A deletion (backspace, Ctrl+Backspace word-delete, Delete, selection
-     * cut) is a discrete action — seal it as its own undo step immediately
-     * instead of waiting for the typing-pause debounce, so Ctrl+Z right after
-     * a word-delete actually reverts it. */
-    zig_undo_commit();
 }
 
 void on_delete_range_after(GtkTextBuffer *buf, GtkTextIter *start, GtkTextIter *end, gpointer user_data) {
@@ -591,6 +619,8 @@ void on_delete_range_after(GtkTextBuffer *buf, GtkTextIter *start, GtkTextIter *
     if (gui && gui->loading_viewport) return;
     (void)end;
     gui_set_sync_state(QIRTAS_SYNC_NOT_SYNCED);
-    update_paragraph_direction_lines(buf, gtk_text_iter_get_line(start), gtk_text_iter_get_line(start));
+    int del_line = gtk_text_iter_get_line(start);
+    update_paragraph_direction_lines(buf, del_line, del_line);
+    mark_conceal_dirty(gui, del_line, del_line);
     apply_wiki_link_tags_local(buf);
 }

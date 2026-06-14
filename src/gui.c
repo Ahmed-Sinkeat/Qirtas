@@ -3118,6 +3118,8 @@ static void activate(GtkApplication *app, gpointer user_data) {
 
     AppGui *gui = g_new0(AppGui, 1);
     gui->last_scroll_requested_line = -1;
+    gui->conceal_dirty_start = -1;
+    gui->conceal_dirty_end = -1;
     gui->window       = window;
     g_strlcpy(gui->current_en_font, "Inter", sizeof(gui->current_en_font));
     g_strlcpy(gui->current_ar_font, "Amiri", sizeof(gui->current_ar_font));
