@@ -66,6 +66,109 @@ static void mark_outline_dirty(AppGui *gui, GtkTextBuffer *buf,
     }
 }
 
+/* Cached word count. -1 = unknown (needs a full recount: the document was
+ * loaded/replaced wholesale, or is over the 500k-char cap). Maintained
+ * incrementally on each keystroke so the stats debounce never re-walks the
+ * whole document. */
+static long g_word_count = -1;
+/* Word count of the line range an edit is about to touch, captured in the
+ * *_before handler so the *_after handler can apply (new - old) to g_word_count. */
+static long g_pending_old_words = 0;
+
+/* Count words on lines [first,last] with the same rule as the stats pass:
+ * a run of non-(space|punct) characters is one word. Word counts are per-line
+ * independent — '\n' is whitespace, so no word spans a line boundary — so the
+ * sum over any line range is exactly the whole-document count for those lines.
+ * Reads only those lines. */
+static long count_words_line_range(GtkTextBuffer *buf, int first, int last) {
+    int lc = gtk_text_buffer_get_line_count(buf);
+    if (first < 0) first = 0;
+    if (last > lc - 1) last = lc - 1;
+    long words = 0;
+    for (int i = first; i <= last; i++) {
+        GtkTextIter ls, le;
+        gtk_text_buffer_get_iter_at_line(buf, &ls, i);
+        le = ls;
+        if (!gtk_text_iter_ends_line(&le)) gtk_text_iter_forward_to_line_end(&le);
+        gchar *t = gtk_text_buffer_get_text(buf, &ls, &le, TRUE);
+        gboolean in_word = FALSE;
+        for (char *p = t; *p; p = g_utf8_next_char(p)) {
+            gunichar c = g_utf8_get_char(p);
+            if (g_unichar_isspace(c) || g_unichar_ispunct(c)) in_word = FALSE;
+            else if (!in_word) { words++; in_word = TRUE; }
+        }
+        g_free(t);
+    }
+    return words;
+}
+
+/* Drop the cached word count so the next stats pass recomputes it from scratch.
+ * Called from buffer paths that replace content wholesale and bypass the
+ * insert/delete handlers (full reload / undo / redo). */
+void gui_word_count_invalidate(void) {
+    g_word_count = -1;
+}
+
+/* Reference whole-document word count (the pre-incremental algorithm), used
+ * by the self-test to validate count_words_line_range. */
+static long bench_full_word_count(GtkTextBuffer *buf) {
+    GtkTextIter s, e;
+    gtk_text_buffer_get_bounds(buf, &s, &e);
+    gchar *t = gtk_text_buffer_get_text(buf, &s, &e, TRUE);
+    long words = 0;
+    gboolean in_word = FALSE;
+    for (char *p = t; *p; p = g_utf8_next_char(p)) {
+        gunichar c = g_utf8_get_char(p);
+        if (g_unichar_isspace(c) || g_unichar_ispunct(c)) in_word = FALSE;
+        else if (!in_word) { words++; in_word = TRUE; }
+    }
+    g_free(t);
+    return words;
+}
+
+/* Headless self-test of incremental word counting: count_words_line_range
+ * summed over the whole document must equal the reference full walk, and a
+ * per-line sum must match too (proves per-line independence). Returns failures.
+ * Also exercises an edit + delta to mirror the handler arithmetic. */
+int qirtas_bench_wordcount(void) {
+    if (!gtk_is_initialized() && !gtk_init_check()) {
+        g_printerr("[bench] gtk_init_check failed — skipping word-count test\n");
+        return 0;
+    }
+    GtkTextBuffer *buf = gtk_text_buffer_new(NULL);
+    const char *doc =
+        "The quick brown fox.\n"        /* punct-terminated     */
+        "\n"                            /* blank line           */
+        "Hello,   world!! again\n"      /* multi-space + punct  */
+        "نص عربي للاختبار\n"             /* arabic words         */
+        "   leading and trailing   \n"  /* edge whitespace      */
+        "no-newline-last-line";         /* hyphens are punct    */
+    gtk_text_buffer_set_text(buf, doc, -1);
+    int lc = gtk_text_buffer_get_line_count(buf);
+
+    int fails = 0;
+    long ref = bench_full_word_count(buf);
+    long whole = count_words_line_range(buf, 0, lc - 1);
+    if (whole != ref) { fails++; g_printerr("[bench] wc FAIL: range(0,last)=%ld != full=%ld\n", whole, ref); }
+
+    long per_line_sum = 0;
+    for (int i = 0; i < lc; i++) per_line_sum += count_words_line_range(buf, i, i);
+    if (per_line_sum != ref) { fails++; g_printerr("[bench] wc FAIL: per-line sum=%ld != full=%ld\n", per_line_sum, ref); }
+
+    /* delta arithmetic: edit line 0, total via (old swap) must match recount */
+    long old_l0 = count_words_line_range(buf, 0, 0);
+    GtkTextIter it;
+    gtk_text_buffer_get_iter_at_line_offset(buf, &it, 0, 3); /* inside "The" */
+    gtk_text_buffer_insert(buf, &it, " EXTRA ", -1);
+    long incremental = ref + (count_words_line_range(buf, 0, 0) - old_l0);
+    long after_ref = bench_full_word_count(buf);
+    if (incremental != after_ref) { fails++; g_printerr("[bench] wc FAIL: delta=%ld != recount=%ld\n", incremental, after_ref); }
+
+    g_printerr("[bench] word-count self-test: %d failure(s) (doc=%ld words)\n", fails, ref);
+    g_object_unref(buf);
+    return fails;
+}
+
 /* Headless self-test of the outline-gate decision (line_is_heading + the
  * mark_outline_dirty predicate). Returns the number of failed expectations;
  * called from the QIRTAS_BENCH harness. */
@@ -294,25 +397,15 @@ static gboolean buffer_stats_timeout_cb(gpointer user_data) {
 
     glong line_count = (glong)gtk_text_buffer_get_line_count(buf);
 
-    glong word_count = -1; /* -1 = skipped (document too large) */
-    if (char_count <= 500000) {
-        GtkTextIter start, end;
-        gtk_text_buffer_get_bounds(buf, &start, &end);
-        gchar *text = gtk_text_buffer_get_text(buf, &start, &end, TRUE);
-        word_count = 0;
-        gboolean in_word = FALSE;
-        char *p = text;
-        while (*p) {
-            gunichar c = g_utf8_get_char(p);
-            if (g_unichar_isspace(c) || g_unichar_ispunct(c)) {
-                in_word = FALSE;
-            } else {
-                if (!in_word) { word_count++; in_word = TRUE; }
-            }
-            p = g_utf8_next_char(p);
-        }
-        g_free(text);
+    /* Word count is maintained incrementally on each keystroke (see the
+     * insert/delete handlers). Only recompute the whole document when the
+     * cache is unknown (fresh load / wholesale replace / dropped below the
+     * cap). Past 500k chars the full recount is skipped and the count shows
+     * "—" until the document shrinks back under the cap. */
+    if (g_word_count < 0 && char_count <= 500000) {
+        g_word_count = count_words_line_range(buf, 0, (int)line_count - 1);
     }
+    glong word_count = g_word_count; /* -1 = too large / unknown → shown as "—" */
 
     if (qirtas_app_language == 1) {
         /* Arabic: grammatical count phrases (كلمة fem, حرف/سطر masc). */
@@ -397,6 +490,7 @@ void gui_refresh_buffer_stats(void) {
     global_gui->conceal_dirty_start = -1;
     global_gui->conceal_dirty_end = -1;
     global_gui->outline_dirty = TRUE;
+    gui_word_count_invalidate();
     if (buffer_stats_timeout_id) g_source_remove(buffer_stats_timeout_id);
     buffer_stats_timeout_id = g_timeout_add(50, buffer_stats_timeout_cb, global_gui);
 }
@@ -421,6 +515,16 @@ void on_buffer_changed(GtkTextBuffer *buf, gpointer user_data) {
 void on_insert_text_before(GtkTextBuffer *buf, GtkTextIter *location, gchar *text, gint len, gpointer user_data) {
     AppGui *gui = (AppGui *)user_data;
     if (gui && gui->loading_viewport) return;
+
+    /* Capture the pre-edit word count of the line the text lands on, for the
+     * incremental total applied in on_insert_text_after. Done before the
+     * auto-pair branches below (some stop emission, so *_after never runs —
+     * then the buffer is unchanged and the unused capture is simply dropped). */
+    if (g_word_count >= 0) {
+        int li = gtk_text_iter_get_line(location);
+        g_pending_old_words = count_words_line_range(buf, li, li);
+    }
+
     if (len != 1) return;
 
     char c = text[0];
@@ -678,6 +782,11 @@ void on_insert_text_after(GtkTextBuffer *buf, GtkTextIter *location, gchar *text
     mark_conceal_dirty(gui, start_line, end_line);
     mark_outline_dirty(gui, buf, start_line, end_line, start_col);
 
+    /* Incremental word count: the inserted text turned the old single line
+     * (start_line) into lines [start_line..end_line]; swap their word counts. */
+    if (g_word_count >= 0)
+        g_word_count += count_words_line_range(buf, start_line, end_line) - g_pending_old_words;
+
     apply_wiki_link_tags_local(buf);
 }
 
@@ -699,6 +808,11 @@ void on_delete_range_before(GtkTextBuffer *buf, GtkTextIter *start, GtkTextIter 
      * away; start_col <= 6 catches a leading '#' being deleted. */
     mark_outline_dirty(gui, buf, start_line, end_line, start_col);
 
+    /* Word count of the lines about to be (partly) deleted/merged, captured
+     * pre-delete; on_delete_range_after applies the post-merge replacement. */
+    if (g_word_count >= 0)
+        g_pending_old_words = count_words_line_range(buf, start_line, end_line);
+
     zig_delete_range(p_start, p_end);
     /* Mark an undo step pending but DON'T capture a full-document snapshot per
      * delete — captureUndoEntry dupes the whole buffer, so committing on every
@@ -717,5 +831,11 @@ void on_delete_range_after(GtkTextBuffer *buf, GtkTextIter *start, GtkTextIter *
     int del_line = gtk_text_iter_get_line(start);
     update_paragraph_direction_lines(buf, del_line, del_line);
     mark_conceal_dirty(gui, del_line, del_line);
+
+    /* The deleted range collapsed to the single line del_line; swap the
+     * pre-delete word count (captured in on_delete_range_before) for it. */
+    if (g_word_count >= 0)
+        g_word_count += count_words_line_range(buf, del_line, del_line) - g_pending_old_words;
+
     apply_wiki_link_tags_local(buf);
 }

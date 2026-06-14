@@ -471,6 +471,9 @@ void gui_reload_full_buffer(void) {
         gtk_text_buffer_set_text(buf, text, -1);
         global_gui->loading_viewport = FALSE;
         zig_free_document_text(text);
+        /* Wholesale replace bypassed the insert/delete handlers — drop the
+         * incremental word-count cache so the next stats pass recomputes it. */
+        gui_word_count_invalidate();
     }
 
     gui_set_cursor_position(line, col);
