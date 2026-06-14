@@ -389,6 +389,11 @@ static gboolean buffer_stats_timeout_cb(gpointer user_data) {
     if (!gui || !gui->source_view) return G_SOURCE_REMOVE;
     QIRTAS_PERF_BEGIN;
 
+    /* Verbose perf (QIRTAS_PERF=2): time each O(document)-suspect section so a
+     * single pass line shows where the time goes. */
+    int _verbose = qirtas_perf_enabled >= 2;
+    gint64 _t_pass = _verbose ? g_get_monotonic_time() : 0;
+
     GtkTextBuffer *buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(gui->source_view));
 
     /* Char count is free (buffer-maintained); only the word count needs a
@@ -402,9 +407,13 @@ static gboolean buffer_stats_timeout_cb(gpointer user_data) {
      * cache is unknown (fresh load / wholesale replace / dropped below the
      * cap). Past 500k chars the full recount is skipped and the count shows
      * "—" until the document shrinks back under the cap. */
+    gint64 _t_w0 = _verbose ? g_get_monotonic_time() : 0;
+    int _word_recount = 0;
     if (g_word_count < 0 && char_count <= 500000) {
         g_word_count = count_words_line_range(buf, 0, (int)line_count - 1);
+        _word_recount = 1;
     }
+    double _word_ms = _verbose ? (g_get_monotonic_time() - _t_w0) / 1000.0 : 0;
     glong word_count = g_word_count; /* -1 = too large / unknown → shown as "—" */
 
     if (qirtas_app_language == 1) {
@@ -447,7 +456,9 @@ static gboolean buffer_stats_timeout_cb(gpointer user_data) {
      * pass (O(document)) is reserved for load / tab-switch / read-mode toggle,
      * where dirty range is unset (-1). One pad line each side absorbs edits
      * that open or close a marker spanning into a neighbouring line. */
-    if (gui->conceal_dirty_start < 0) {
+    gint64 _t_c0 = _verbose ? g_get_monotonic_time() : 0;
+    int _conceal_full = (gui->conceal_dirty_start < 0);
+    if (_conceal_full) {
         update_conceal_markdown_all(buf);
     } else {
         update_conceal_markdown_range(buf, gui->conceal_dirty_start - 1,
@@ -455,6 +466,7 @@ static gboolean buffer_stats_timeout_cb(gpointer user_data) {
     }
     gui->conceal_dirty_start = -1;
     gui->conceal_dirty_end = -1;
+    double _conceal_ms = _verbose ? (g_get_monotonic_time() - _t_c0) / 1000.0 : 0;
 
     gtk_text_view_scroll_to_mark(tv, view_anchor, 0.0, TRUE, 0.0, 0.0);
     gtk_text_buffer_delete_mark(buf, view_anchor);
@@ -462,19 +474,27 @@ static gboolean buffer_stats_timeout_cb(gpointer user_data) {
     /* Rebuild the heading outline only when an edit may have changed it. A
      * plain keystroke inside a paragraph leaves outline_dirty FALSE and skips
      * the O(document) line scan. */
+    gint64 _t_o0 = _verbose ? g_get_monotonic_time() : 0;
+    int _outline_rebuilt = gui->outline_dirty;
     if (gui->outline_dirty) {
-        gint64 _ot0 = qirtas_perf_enabled ? g_get_monotonic_time() : 0;
         gui_outline_refresh(gui);
         gui->outline_dirty = FALSE;
-        if (qirtas_perf_enabled)
-            g_printerr("[perf] outline: rebuilt %.1f ms\n",
-                       (g_get_monotonic_time() - _ot0) / 1000.0);
-    } else if (qirtas_perf_enabled) {
-        g_printerr("[perf] outline: skipped (not dirty)\n");
     }
+    double _outline_ms = _verbose ? (g_get_monotonic_time() - _t_o0) / 1000.0 : 0;
 
     /* Typing pause = word-grain undo boundary. No-op if nothing pending. */
     zig_undo_commit();
+
+    if (_verbose) {
+        double _total_ms = (g_get_monotonic_time() - _t_pass) / 1000.0;
+        g_printerr("[perf] pass total=%.2f ms | word=%.2f(%s) conceal=%.2f(%s) "
+                   "outline=%.2f(%s) | chars=%ld lines=%ld words=%ld\n",
+                   _total_ms,
+                   _word_ms,    _word_recount ? "recount" : "cached",
+                   _conceal_ms, _conceal_full ? "full" : "range",
+                   _outline_ms, _outline_rebuilt ? "rebuilt" : "skipped",
+                   char_count, line_count, word_count);
+    }
     QIRTAS_PERF_END("buffer_stats_timeout_cb");
     return G_SOURCE_REMOVE;
 }
@@ -748,6 +768,7 @@ void toggle_comment_current_line(GtkTextBuffer *buf) {
 void on_insert_text_after(GtkTextBuffer *buf, GtkTextIter *location, gchar *text, gint len, gpointer user_data) {
     AppGui *gui = (AppGui *)user_data;
     if (gui && gui->loading_viewport) return;
+    gint64 _ks0 = qirtas_perf_enabled ? g_get_monotonic_time() : 0;
 
     int end_offset = gtk_text_iter_get_offset(location);
     int char_len = g_utf8_strlen(text, len);
@@ -788,6 +809,11 @@ void on_insert_text_after(GtkTextBuffer *buf, GtkTextIter *location, gchar *text
         g_word_count += count_words_line_range(buf, start_line, end_line) - g_pending_old_words;
 
     apply_wiki_link_tags_local(buf);
+
+    if (qirtas_perf_enabled) {
+        double _ks = (g_get_monotonic_time() - _ks0) / 1000.0;
+        if (_ks > 1.0) g_printerr("[perf] keystroke(insert) %.2f ms\n", _ks);
+    }
 }
 
 void on_delete_range_before(GtkTextBuffer *buf, GtkTextIter *start, GtkTextIter *end, gpointer user_data) {
@@ -826,6 +852,7 @@ void on_delete_range_before(GtkTextBuffer *buf, GtkTextIter *start, GtkTextIter 
 void on_delete_range_after(GtkTextBuffer *buf, GtkTextIter *start, GtkTextIter *end, gpointer user_data) {
     AppGui *gui = (AppGui *)user_data;
     if (gui && gui->loading_viewport) return;
+    gint64 _ks0 = qirtas_perf_enabled ? g_get_monotonic_time() : 0;
     (void)end;
     gui_set_sync_state(QIRTAS_SYNC_NOT_SYNCED);
     int del_line = gtk_text_iter_get_line(start);
@@ -838,4 +865,9 @@ void on_delete_range_after(GtkTextBuffer *buf, GtkTextIter *start, GtkTextIter *
         g_word_count += count_words_line_range(buf, del_line, del_line) - g_pending_old_words;
 
     apply_wiki_link_tags_local(buf);
+
+    if (qirtas_perf_enabled) {
+        double _ks = (g_get_monotonic_time() - _ks0) / 1000.0;
+        if (_ks > 1.0) g_printerr("[perf] keystroke(delete) %.2f ms\n", _ks);
+    }
 }

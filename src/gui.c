@@ -3162,7 +3162,10 @@ static void activate(GtkApplication *app, gpointer user_data) {
      * qirtas_tr()/qirtas_icon() are called during UI construction. */
     {
         const char *perf_env = g_getenv("QIRTAS_PERF");
-        qirtas_perf_enabled = (perf_env && perf_env[0] == '1') ? 1 : 0;
+        /* QIRTAS_PERF=1: log main-loop callbacks over 8 ms.
+         * QIRTAS_PERF=2: also log a full per-pass breakdown every stats pass
+         *               and any per-keystroke edit cost over 1 ms. */
+        qirtas_perf_enabled = perf_env ? atoi(perf_env) : 0;
     }
     qirtas_app_language = qirtas_pref_get_int("app_language", 0);
     qirtas_icon_style   = qirtas_pref_get_int("icon_style", 0);
