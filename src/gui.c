@@ -5132,7 +5132,14 @@ void gui_free_text(char *text) { g_free(text); }
 void gui_set_text(const char *text, int len) {
     if (!global_source_view || !global_gui) return;
     GtkTextBuffer *buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(global_source_view));
-    
+
+    /* Wholesale content swap: invalidate any deferred conceal/wiki/HR passes
+     * queued against the OUTGOING document. Their generation guard cancels them
+     * instead of letting them run apply_tag/insert with now-stale iterators
+     * (the "Invalid text buffer iterator" / cross-buffer assertion storm). The
+     * passes scheduled below capture the new generation and run normally. */
+    global_gui->buffer_generation++;
+
     g_signal_handlers_block_by_func(buf, on_insert_text_before, global_gui);
     g_signal_handlers_block_by_func(buf, on_insert_text_after, global_gui);
     g_signal_handlers_block_by_func(buf, on_delete_range_before, global_gui);

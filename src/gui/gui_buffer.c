@@ -785,6 +785,13 @@ void on_insert_text_after(GtkTextBuffer *buf, GtkTextIter *location, gchar *text
     gchar *text_dup = g_strndup(text, len);
     zig_insert_text(pos, text_dup);
 
+    /* Diagnostic for big inserts (paste): compare bytes GTK delivered to this
+     * signal against the buffer size after, so a truncation shows up. */
+    if (qirtas_perf_enabled && len > 64) {
+        g_printerr("[perf] insert(paste?) len=%d bytes at line=%d → buffer now %d chars\n",
+                   len, start_line, gtk_text_buffer_get_char_count(buf));
+    }
+
     /* Word-grain undo: mark uncommitted edits, seal when a boundary char
      * (space / newline / punct) is typed. Idle seal in the stats debounce
      * covers pauses. */
@@ -828,6 +835,11 @@ void on_delete_range_before(GtkTextBuffer *buf, GtkTextIter *start, GtkTextIter 
 
     Position p_start = { start_line, start_col };
     Position p_end = { end_line, end_col };
+
+    if (qirtas_perf_enabled && (end_line - start_line) > 1) {
+        g_printerr("[perf] delete(cut?) lines %d..%d at buffer %d chars\n",
+                   start_line, end_line, gtk_text_buffer_get_char_count(buf));
+    }
 
     /* Checked BEFORE the delete so line_is_heading sees the pre-edit text
      * ("was a heading"); first_line != end_line catches lines being merged

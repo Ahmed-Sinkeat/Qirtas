@@ -468,6 +468,8 @@ void gui_reload_full_buffer(void) {
     if (text) {
         global_gui->loading_viewport = TRUE;
         GtkTextBuffer *buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(global_gui->source_view));
+        /* Cancel deferred passes queued against the pre-reload content. */
+        global_gui->buffer_generation++;
         gtk_text_buffer_set_text(buf, text, -1);
         global_gui->loading_viewport = FALSE;
         zig_free_document_text(text);
@@ -490,6 +492,8 @@ void gui_prepare_tab_switch(void) {
          * "Loading…" string — a blank buffer is immediately editable even
          * before the first save. */
         GtkTextBuffer *buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(global_gui->source_view));
+        /* Cancel deferred passes queued against the outgoing tab's content. */
+        global_gui->buffer_generation++;
         gtk_text_buffer_set_text(buf, "", -1);
     }
 
