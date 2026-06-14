@@ -201,9 +201,8 @@ void apply_wiki_link_tags(GtkTextBuffer *buf) {
 void on_editor_left_click(GtkGestureClick *gesture, gint n_press, gdouble x, gdouble y, gpointer user_data) {
     AppGui *gui = (AppGui *)user_data;
 
-    if (gui->sidebar && gtk_widget_get_visible(gui->sidebar)) {
-        gtk_widget_set_visible(gui->sidebar, FALSE);
-    }
+    /* Library bar stays open until its toggle icon is pressed — clicking in the
+     * editor no longer auto-closes it. */
 
     GdkModifierType state =
         gtk_event_controller_get_current_event_state(GTK_EVENT_CONTROLLER(gesture));
