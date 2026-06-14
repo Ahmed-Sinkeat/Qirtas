@@ -37,13 +37,10 @@ static char *resolve_resource_path(const char *rel_path) {
 
 static int theme_name_to_index(const char *theme_name) {
     if (!theme_name) return 0;
-    if (strcmp(theme_name, "sepia") == 0) return 0;
-    if (strcmp(theme_name, "typewriter-light") == 0) return 1;
-    if (strcmp(theme_name, "typewriter-dark") == 0) return 2;
-    if (strcmp(theme_name, "qirtas") == 0) return 3;
-    if (strcmp(theme_name, "qirtas-dark") == 0) return 4;
-    if (strcmp(theme_name, "navy") == 0) return 5;
-    if (strcmp(theme_name, "custom") == 0) return 6;
+    if (strcmp(theme_name, "qirtas") == 0) return 0;
+    if (strcmp(theme_name, "qirtas-dark") == 0) return 1;
+    if (strcmp(theme_name, "navy") == 0) return 2;
+    if (strcmp(theme_name, "custom") == 0) return 3;
     return 0;
 }
 
@@ -243,6 +240,13 @@ void gui_update_brand_logo(AppGui *gui) {
 
 void apply_theme(AppGui *gui, const char *theme_name) {
     if (!gui || !theme_name) return;
+    /* Removed themes (sepia, typewriter-*, legacy dark/midnight/things) fall
+     * back to the default light theme so old saved prefs still resolve. */
+    if (strcmp(theme_name, "sepia") == 0 || strcmp(theme_name, "typewriter-light") == 0 ||
+        strcmp(theme_name, "typewriter-dark") == 0 || strcmp(theme_name, "dark") == 0 ||
+        strcmp(theme_name, "midnight") == 0 || strcmp(theme_name, "things") == 0) {
+        theme_name = "qirtas";
+    }
     g_strlcpy(gui->current_theme, theme_name, sizeof(gui->current_theme));
 
     AdwStyleManager *style_manager = adw_style_manager_get_default();
@@ -468,18 +472,12 @@ void on_theme_dropdown_changed(GObject *gobject, GParamSpec *pspec, gpointer use
     AppGui *gui = (AppGui *)user_data;
     
     if (selected == 0) {
-        apply_theme(gui, "sepia");
-    } else if (selected == 1) {
-        apply_theme(gui, "typewriter-light");
-    } else if (selected == 2) {
-        apply_theme(gui, "typewriter-dark");
-    } else if (selected == 3) {
         apply_theme(gui, "qirtas");
-    } else if (selected == 4) {
+    } else if (selected == 1) {
         apply_theme(gui, "qirtas-dark");
-    } else if (selected == 5) {
+    } else if (selected == 2) {
         apply_theme(gui, "navy");
-    } else if (selected == 6) {
+    } else if (selected == 3) {
         GtkFileDialog *dialog = gtk_file_dialog_new();
         gtk_file_dialog_set_title(dialog, qirtas_tr("Select Custom Theme CSS"));
         

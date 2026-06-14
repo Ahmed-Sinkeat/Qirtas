@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="anonymous">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@400;500;600;700&family=Noto+Naskh+Arabic:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>body{margin:0;background:#e1dccd}</style>
+</helmet>
+<div style="min-height:100vh;background:#e1dccd;padding:72px 48px 140px;font-family:'IBM Plex Sans Arabic',sans-serif;display:flex;flex-direction:column;align-items:center;gap:20px">
+
+  <!-- PAGE HEADER -->
+  <div style="width:1440px;max-width:100%;display:flex;flex-direction:column;gap:12px">
+    <div style="display:flex;align-items:center;gap:12px">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#213a63" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M20 4c-6 1-11 5-13 11l-2 5 5-2c6-2 10-7 11-13z"></path><path d="M6 18C9 12 13 8 18 6"></path></svg>
+      <h1 style="margin:0;font:700 24px/1.3 'IBM Plex Sans Arabic',sans-serif;color:#2a2722">قرطاس — light theme</h1>
+    </div>
+    <p style="margin:0;font-size:14px;line-height:1.65;color:#76705f;max-width:780px;text-wrap:pretty">Paper white on a warm desk, navy ink drawn from the app icon. Same layout as the combined window — Diwan sidebar &amp; status bar, Marginalia tabs &amp; closable outline, 680px column.</p>
+  </div>
+
+  <!-- ════════ THE LIGHT WINDOW ════════ -->
+  <div dir="rtl" style="width:1440px;max-width:100%;height:900px;background:#e3ddce;border-radius:14px;overflow:hidden;display:flex;flex-direction:column;border:1px solid #cfc7b4;box-shadow:0 2px 6px rgba(60,52,33,.12), 0 24px 64px rgba(60,52,33,.20);font-family:'IBM Plex Sans Arabic',sans-serif" data-screen-label="فاتح Light">
+
+    <!-- top: flat document tabs, pinned LTR -->
+    <div dir="ltr" style="display:flex;align-items:stretch;gap:2px;height:42px;background:#efebe0;border-bottom:1px solid #d8d0bf;padding:0 10px">
+      <div style="display:flex;align-items:center;align-self:center"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#a59d88" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 6l-6 6 6 6"></path></svg></div>
+      <div style="display:flex;align-items:center;gap:8px;padding:0 14px;font-size:12.5px;color:#243046;border-bottom:2px solid #213a63;margin-bottom:-1px"><span dir="rtl">زاد المستقنع.md</span><span style="width:6px;height:6px;border-radius:50%;background:#213a63"></span></div>
+      <div style="display:flex;align-items:center;padding:0 14px;font-size:12.5px;color:#8c8571;border-bottom:2px solid transparent" style-hover="color:#4a4537"><span dir="ltr">2026-06-13.md</span></div>
+      <div style="display:flex;align-items:center;padding:0 14px;font-size:12.5px;color:#8c8571;border-bottom:2px solid transparent" style-hover="color:#4a4537"><span dir="ltr">untitled.md</span></div>
+      <div style="display:flex;align-items:center;padding:0 14px;font-size:12.5px;color:#8c8571;border-bottom:2px solid transparent" style-hover="color:#4a4537"><span dir="ltr">2026-06-05.md</span></div>
+      <span style="flex:1"></span>
+      <div style="display:flex;align-items:center;align-self:center"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#a59d88" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"></path></svg></div>
+    </div>
+
+    <div style="flex:1;min-height:0;display:flex">
+
+      <!-- sidebar -->
+      <div style="width:276px;flex-shrink:0;background:#efebe0;border-left:1px solid #d8d0bf;display:flex;flex-direction:column">
+        <div style="display:flex;align-items:center;gap:10px;padding:16px 16px 14px;border-bottom:1px solid #ddd5c3">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#213a63" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M20 4c-6 1-11 5-13 11l-2 5 5-2c6-2 10-7 11-13z"></path><path d="M6 18C9 12 13 8 18 6"></path></svg>
+          <span style="font-size:15px;font-weight:700;color:#243046">قِرطاس</span>
+          <span style="font-size:11.5px;color:#a59d88;margin-right:auto">المكتبة</span>
+        </div>
+
+        <div style="padding:12px;display:flex;flex-direction:column;gap:4px;flex:1;min-height:0">
+          <div style="display:flex;align-items:center;gap:8px;background:#e6e1d4;border:1px solid #d3cab7;border-radius:8px;padding:7px 10px;color:#8c8571;font-size:13px">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"></circle><path d="M21 21l-4.3-4.3"></path></svg>
+            <span>بحث…</span>
+            <span style="margin-right:auto;font:500 10px 'IBM Plex Mono',monospace;color:#9b937e;background:#ddd5c3;border-radius:4px;padding:2px 5px" dir="ltr">Ctrl P</span>
+          </div>
+
+          <div style="display:flex;align-items:center;gap:8px;padding:14px 8px 6px">
+            <span style="font-size:11.5px;font-weight:600;color:#a59d88">الملاحظات</span>
+            <span style="font:500 10.5px 'IBM Plex Mono',monospace;color:#9b937e;background:#e6e1d4;border-radius:99px;padding:1px 7px">٧</span>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:1px;overflow:hidden">
+            <div style="display:flex;align-items:center;gap:7px;padding:5px 8px;border-radius:6px;font-size:13.5px;font-weight:500;color:#4a4537" style-hover="background:#e6e1d4"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#a59d88" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"></path></svg>فقه</div>
+            <div style="margin-right:14px;border-right:1px solid #ddd5c3;padding-right:8px;display:flex;flex-direction:column;gap:1px">
+              <div style="display:flex;align-items:center;gap:7px;padding:5px 8px;border-radius:6px;font-size:13.5px;font-weight:500;color:#4a4537" style-hover="background:#e6e1d4"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#a59d88" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"></path></svg>حنبلي</div>
+              <div style="margin-right:14px;border-right:1px solid #ddd5c3;padding-right:8px">
+                <div style="display:flex;align-items:center;gap:7px;padding:5px 8px;border-radius:6px;font-size:13.5px;background:#dfe6f1;color:#213a63;font-weight:500">زاد المستقنع</div>
+              </div>
+            </div>
+            <div style="display:flex;align-items:center;gap:7px;padding:5px 8px;border-radius:6px;font-size:13.5px;color:#76705f" style-hover="background:#e6e1d4;color:#4a4537"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#a59d88" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"></path><path d="M14 3v5h5"></path></svg><span dir="ltr">2026-06-05</span></div>
+            <div style="display:flex;align-items:center;gap:7px;padding:5px 8px;border-radius:6px;font-size:13.5px;color:#76705f" style-hover="background:#e6e1d4;color:#4a4537"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#a59d88" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"></path><path d="M14 3v5h5"></path></svg><span dir="ltr">2026-06-13</span></div>
+            <div style="display:flex;align-items:center;gap:7px;padding:5px 8px;border-radius:6px;font-size:13.5px;color:#76705f" style-hover="background:#e6e1d4;color:#4a4537"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#a59d88" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"></path><path d="M14 3v5h5"></path></svg><span dir="ltr">test_large</span></div>
+            <div style="display:flex;align-items:center;gap:7px;padding:5px 8px;border-radius:6px;font-size:13.5px;color:#76705f" style-hover="background:#e6e1d4;color:#4a4537"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#a59d88" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"></path><path d="M14 3v5h5"></path></svg><span dir="ltr">untitled</span></div>
+            <div style="display:flex;align-items:center;gap:7px;padding:5px 8px;border-radius:6px;font-size:13.5px;color:#76705f" style-hover="background:#e6e1d4;color:#4a4537"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#a59d88" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"></path><path d="M14 3v5h5"></path></svg><span dir="ltr">Welcome</span></div>
+            <div style="display:flex;align-items:center;gap:7px;padding:5px 8px;border-radius:6px;font-size:13.5px;color:#76705f;white-space:nowrap" style-hover="background:#e6e1d4;color:#4a4537"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#a59d88" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"></path><path d="M14 3v5h5"></path></svg><span style="overflow:hidden;text-overflow:ellipsis">شرح كتاب التوحيد — المجلس الرابع</span></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- desk: paper + closable marginalia outline -->
+      <div style="flex:1;min-width:0;display:flex;background:#e3ddce">
+        <div style="flex:1;min-width:0;margin:28px 28px 24px 0;background:#ffffff;border:1px solid #e7e0d0;border-radius:12px;box-shadow:0 1px 2px rgba(60,52,33,.08), 0 12px 36px rgba(60,52,33,.12);overflow:hidden;display:flex;flex-direction:column">
+          <div style="height:2px;background:linear-gradient(to left, transparent, #213a63 30%, #213a63 70%, transparent)"></div>
+          <div style="display:flex;align-items:center;height:46px;padding:0 18px;border-bottom:1px solid #ece6d8;gap:16px">
+            <div style="display:flex;gap:7px;font-size:12.5px;color:#9b937e">فقه<span style="color:#c4bba6">/</span>حنبلي<span style="color:#c4bba6">/</span><span style="color:#5a5444">زاد المستقنع</span></div>
+            <span style="flex:1"></span>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#9b937e" stroke-width="2" stroke-linecap="round" style-hover="stroke:#213a63"><circle cx="11" cy="11" r="7"></circle><path d="M21 21l-4.3-4.3"></path></svg>
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#9b937e" stroke-width="1.8" stroke-linecap="round" style-hover="stroke:#213a63"><path d="M8 6h12M8 12h12M8 18h12M4 6h.01M4 12h.01M4 18h.01"></path></svg>
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="#9b937e" stroke="none" style-hover="fill:#213a63"><circle cx="12" cy="5" r="1.7"></circle><circle cx="12" cy="12" r="1.7"></circle><circle cx="12" cy="19" r="1.7"></circle></svg>
+          </div>
+          <div style="flex:1;min-height:0;display:flex;justify-content:center;overflow:hidden">
+            <div style="width:680px;max-width:92%;padding:56px 0 80px;display:flex;flex-direction:column">
+              <h1 style="margin:0 0 26px;font:700 36px/1.5 'Noto Naskh Arabic',serif;color:#1f2b40">زاد المستقنع</h1>
+              <div style="display:flex;flex-direction:column;gap:20px">
+                <p style="margin:0;font:400 19px/2.05 'Noto Naskh Arabic',serif;color:#33302a;text-align:right;text-wrap:pretty">قال رحمه الله تعالى: <span style="color:#213a63;font-weight:700">«فصل: يصح اقتداء المأموم بالإمام في المسجد وإن لم يره ولا من وراءه إذا سمع التكبير، وكذا خارجه إن رأى الإمام أو المأمومين إذا اتصلت الصفوف.»</span></p>
+                <p style="margin:0;font:700 19px/2.05 'Noto Naskh Arabic',serif;color:#213a63;text-align:right;text-wrap:pretty">ذكر المؤلف أن للمأموم والإمام حالتين من خلالهما يتبين حكم أو شرط صحة الاقتداء:</p>
+                <p style="margin:0;font:700 19px/2.05 'Noto Naskh Arabic',serif;color:#213a63;text-align:right">ناخذ الحالة الأولى:</p>
+                <p style="margin:0;font:400 19px/2.05 'Noto Naskh Arabic',serif;color:#33302a;text-align:right;text-wrap:pretty">قال: <span style="color:#213a63;font-weight:700">«ويصح اقتداء المأموم بالإمام في المسجد»</span>؛ يعني إذا كانا في المسجد وإن لم يَرَ الإمامَ ولا مَن وراءه إذا سمع التكبير.</p>
+                <p style="margin:0;font:400 19px/2.05 'Noto Naskh Arabic',serif;color:#33302a;text-align:right;text-wrap:pretty">في هذه الحالة يصح اقتداء المأموم بالإمام ما دام المأموم والإمام كلاهما في المسجد، فالاقتداء صحيح وإن لم يَرَ؛ يعني حتى لو كان المأموم لا يرى الإمام ولا مَن وراءه، كأن يكون المأموم مثلاً في خلوة أو في الدور الثاني أو خلف شباك يطل عليه بحيث لا يرى الإمام ولا مَن وراء الإمام، لكن كلاهما في المسجد؛ فالاقتداء صحيح.</p>
+                <p style="margin:0;font:400 19px/2.05 'Noto Naskh Arabic',serif;color:#33302a;text-align:right;text-wrap:pretty">إذن ما هو الشرط؟ <span style="color:#213a63;font-weight:700">سماع التكبير</span>؛ لأنه لا يمكن الاقتداء إلا بسماع التكبير، فكيف يركع ويسجد؟ لا يمكن الاقتداء إلا بسماع التكبير، فسماع التكبير هذا لا بد منه من أجل إمكان الاقتداء.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- marginalia outline, closable -->
+        <div style="width:200px;flex-shrink:0;padding:118px 22px 0 18px;display:flex;flex-direction:column;gap:2px">
+          <div style="display:flex;align-items:center;padding:0 8px 8px">
+            <span style="font-size:11.5px;font-weight:600;color:#a59d88">المخطط</span>
+            <span style="margin-right:auto;display:flex;align-items:center;justify-content:center;width:18px;height:18px;border-radius:5px;color:#a59d88;font-size:13px;line-height:1;cursor:default" style-hover="background:#dcd5c4;color:#4a4537">×</span>
+          </div>
+          <div style="display:flex;align-items:center;gap:8px;padding:5px 8px;border-radius:6px;font-size:13px;color:#213a63;font-weight:500"><span style="width:5px;height:5px;border-radius:50%;background:#213a63;flex-shrink:0"></span>باب المواقيت</div>
+          <div style="display:flex;align-items:center;padding:5px 8px;padding-right:21px;border-radius:6px;font-size:13px;color:#8c8571" style-hover="color:#4a4537">باب صفة الصلاة</div>
+          <div style="display:flex;align-items:center;padding:5px 8px;padding-right:21px;border-radius:6px;font-size:13px;color:#8c8571" style-hover="color:#4a4537">باب محظورات الإحرام</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- slim status bar, pinned LTR -->
+    <div dir="ltr" style="display:flex;align-items:center;gap:16px;height:32px;padding:0 12px;font-size:12px;color:#8c8571;background:#efebe0;border-top:1px solid #d8d0bf">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" style-hover="stroke:#213a63"><rect x="3" y="4" width="18" height="16" rx="3"></rect><path d="M9 4v16"></path></svg>
+      <span style="width:8px;height:8px;border-radius:50%;background:#4e9d5b;box-shadow:0 0 6px rgba(78,157,91,.4)"></span>
+      <span>٢٬٧٢٦ كلمة</span>
+      <span>١٤٬٧٢٩ حرف</span>
+      <span dir="rtl" style="color:#b3ab95">فقه / حنبلي / زاد المستقنع.md</span>
+      <span style="flex:1"></span>
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style-hover="stroke:#213a63"><circle cx="11" cy="11" r="7"></circle><path d="M21 21l-4.3-4.3"></path></svg>
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" style-hover="stroke:#213a63"><path d="M4 7h16M4 12h16M4 17h16"></path></svg>
+    </div>
+  </div>
+
+  <!-- recipe chips -->
+  <div style="width:1440px;max-width:100%;display:flex;flex-wrap:wrap;gap:8px">
+    <span style="background:#d8d1c0;color:#5a5444;font-size:12.5px;padding:6px 12px;border-radius:99px">Navy #213A63 from the icon → active tab, outline marker, highlighted matn, thread, hover icons</span>
+    <span style="background:#d8d1c0;color:#5a5444;font-size:12.5px;padding:6px 12px;border-radius:99px">Pure-white paper on a warm #E3DDCE desk; cream sidebar &amp; chrome</span>
+    <span style="background:#d8d1c0;color:#5a5444;font-size:12.5px;padding:6px 12px;border-radius:99px">Active note gets a soft navy tint #DFE6F1 instead of gold</span>
+  </div>
+</div>
+</x-dc>
+</body>
+</html>
