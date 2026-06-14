@@ -432,6 +432,14 @@ static void gui_reset_preferred_x(AppGui *gui) {
     gtk_text_buffer_place_cursor(buf, &iter);
 }
 
+typedef struct { GtkAdjustment *adj; double pos; } ScrollRestore;
+static gboolean restore_scroll_idle(gpointer data) {
+    ScrollRestore *sr = data;
+    if (sr->adj) gtk_adjustment_set_value(sr->adj, sr->pos);
+    g_free(sr);
+    return G_SOURCE_REMOVE;
+}
+
 void gui_reload_full_buffer(void) {
     if (!global_gui || !global_gui->source_view) return;
 
@@ -464,8 +472,15 @@ void gui_reload_full_buffer(void) {
     }
 
     gui_set_cursor_position(line, col);
-    if (global_gui->vadjustment)
-        gtk_adjustment_set_value(global_gui->vadjustment, scroll_pos);
+    /* Restore scroll AFTER GTK re-lays-out the new text. Synchronous restore
+     * clamps against the stale (pre-relayout) adjustment range, snapping the
+     * view to the top — the "jump up on every format" shiver. Defer to idle. */
+    if (global_gui->vadjustment) {
+        ScrollRestore *sr = g_new(ScrollRestore, 1);
+        sr->adj = global_gui->vadjustment;
+        sr->pos = scroll_pos;
+        g_idle_add_full(G_PRIORITY_HIGH_IDLE, restore_scroll_idle, sr, NULL);
+    }
     gui_outline_refresh(global_gui);
 }
 
