@@ -192,53 +192,13 @@ static gboolean editor_get_iter_at_widget_point(AppGui *gui, gdouble x, gdouble 
     return TRUE;
 }
 
-/* Apply a [start_off, end_off) → replacement edit to BOTH the GTK buffer and
- * Zig without a full reload. The GTK edit is done with the buffer-sync signals
- * blocked (so it doesn't double-apply), then mirrored into Zig with a single
- * zig_replace_range (atomic → one undo step). Only the touched lines are
- * re-decorated; conceal/stats catch up via the deferred refresh. Returns the
- * Position where the replacement starts. */
-static Position format_replace(GtkTextBuffer *buf, gint start_off, gint end_off,
-                               const char *replacement) {
-    AppGui *gui = global_gui;
-    GtkTextIter s, e;
-    gtk_text_buffer_get_iter_at_offset(buf, &s, start_off);
-    gtk_text_buffer_get_iter_at_offset(buf, &e, end_off);
-    Position sp = iter_to_position(&s);
-    Position ep = iter_to_position(&e);
-
-    gui_push_undo_snapshot();
-
-    g_signal_handlers_block_by_func(buf, on_insert_text_before, gui);
-    g_signal_handlers_block_by_func(buf, on_insert_text_after, gui);
-    g_signal_handlers_block_by_func(buf, on_delete_range_before, gui);
-    g_signal_handlers_block_by_func(buf, on_delete_range_after, gui);
-    if (end_off != start_off) gtk_text_buffer_delete(buf, &s, &e);
-    gtk_text_buffer_insert(buf, &s, replacement, -1);
-    g_signal_handlers_unblock_by_func(buf, on_insert_text_before, gui);
-    g_signal_handlers_unblock_by_func(buf, on_insert_text_after, gui);
-    g_signal_handlers_unblock_by_func(buf, on_delete_range_before, gui);
-    g_signal_handlers_unblock_by_func(buf, on_delete_range_after, gui);
-
-    zig_replace_range(sp, ep, replacement);
-    zig_undo_commit();
-
-    int added_lines = 0;
-    for (const char *p = replacement; *p; p++) if (*p == '\n') added_lines++;
-    update_paragraph_direction_lines(buf, sp.line, sp.line + added_lines);
-    gtk_text_buffer_set_modified(buf, TRUE);
-    gui_set_sync_state(QIRTAS_SYNC_NOT_SYNCED);
-    gui_refresh_buffer_stats();   /* deferred conceal + word/char/line counts */
-    return sp;
-}
-
 static void apply_format_with_saved(GtkTextBuffer *buf, const char *prefix, const char *suffix,
                                     gint saved_start, gint saved_end) {
     gboolean has_selection = (saved_start != saved_end);
     AppGui *gui = global_gui;
     if (!has_selection) {
         char *wrapped = g_strconcat(prefix, suffix, NULL);
-        Position sp = format_replace(buf, saved_start, saved_start, wrapped);
+        Position sp = gui_buffer_replace(buf, saved_start, saved_start, wrapped);
         /* drop the cursor between the prefix and suffix */
         Position cursor_pos = advance_position(sp, prefix);
         gui_set_cursor_position(cursor_pos.line + 1, cursor_pos.col);
@@ -260,7 +220,7 @@ static void apply_format_with_saved(GtkTextBuffer *buf, const char *prefix, cons
             strncmp(text, prefix, plen) == 0 &&
             strcmp(text + tlen - slen, suffix) == 0) {
             gchar *inner = g_strndup(text + plen, tlen - plen - slen);
-            Position sp = format_replace(buf, saved_start, saved_end, inner);
+            Position sp = gui_buffer_replace(buf, saved_start, saved_end, inner);
             select_position_range(gui, sp, advance_position(sp, inner));
             g_free(inner);
             g_free(text);
@@ -278,7 +238,7 @@ static void apply_format_with_saved(GtkTextBuffer *buf, const char *prefix, cons
             if (strcmp(before, prefix) == 0 && strcmp(after, suffix) == 0) {
                 gint boff = gtk_text_iter_get_offset(&bstart);
                 gint aoff = gtk_text_iter_get_offset(&aend);
-                Position sp = format_replace(buf, boff, aoff, text);
+                Position sp = gui_buffer_replace(buf, boff, aoff, text);
                 select_position_range(gui, sp, advance_position(sp, text));
                 g_free(before);
                 g_free(after);
@@ -291,7 +251,7 @@ static void apply_format_with_saved(GtkTextBuffer *buf, const char *prefix, cons
 
         /* (c) default: wrap. */
         gchar *new_text = g_strconcat(prefix, text, suffix, NULL);
-        Position sp = format_replace(buf, saved_start, saved_end, new_text);
+        Position sp = gui_buffer_replace(buf, saved_start, saved_end, new_text);
         select_position_range(gui, sp, advance_position(sp, new_text));
         g_free(text);
         g_free(new_text);
@@ -330,7 +290,7 @@ static void apply_paragraph_format_core(GtkTextBuffer *buf, const char *prefix,
     gtk_text_buffer_get_iter_at_line(b, &le, end_line + 1);
     gint soff = gtk_text_iter_get_offset(&ls);
     gint eoff = gtk_text_iter_get_offset(&le);
-    format_replace(b, soff, eoff, new_block);   /* direct edit, no full reload */
+    gui_buffer_replace(b, soff, eoff, new_block);   /* direct edit, no full reload */
     gui_set_cursor_position(end_line + 1, G_MAXINT);
 
     g_free(block_dup);

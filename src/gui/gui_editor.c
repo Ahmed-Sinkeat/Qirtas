@@ -24,13 +24,13 @@ void duplicate_current_line(GtkTextBuffer *buf) {
 
     char *line_text_dup = g_strndup(line_text, len);
 
-    Position insert_pos = { abs_line + 1, 0 };
-    zig_insert_text(insert_pos, line_text_dup);
+    GtkTextIter ins;
+    gtk_text_buffer_get_iter_at_line(buf, &ins, abs_line + 1);
+    gint off = gtk_text_iter_get_offset(&ins);
+    gui_buffer_replace(buf, off, off, line_text_dup);   /* direct edit, no reload */
     g_free(line_text_dup);
 
-    gui_reload_full_buffer();
     gui_set_cursor_position(abs_line + 1, col);
-    zig_undo_commit();
 }
 
 void delete_current_line(GtkTextBuffer *buf) {
@@ -40,14 +40,13 @@ void delete_current_line(GtkTextBuffer *buf) {
     int abs_line = gtk_text_iter_get_line(&cursor_iter);
     int col = gtk_text_iter_get_line_offset(&cursor_iter);
 
-    Position start = { abs_line, 0 };
-    Position end = { abs_line + 1, 0 };
-
-    zig_delete_range(start, end);
-
-    gui_reload_full_buffer();
+    GtkTextIter ls, le;
+    gtk_text_buffer_get_iter_at_line(buf, &ls, abs_line);
+    gtk_text_buffer_get_iter_at_line(buf, &le, abs_line + 1);
+    gint soff = gtk_text_iter_get_offset(&ls);
+    gint eoff = gtk_text_iter_get_offset(&le);
+    gui_buffer_replace(buf, soff, eoff, "");   /* direct edit, no reload */
     gui_set_cursor_position(abs_line + 1, col);
-    zig_undo_commit();
 }
 
 void move_current_line(GtkTextBuffer *buf, gboolean up) {
@@ -73,20 +72,23 @@ void move_current_line(GtkTextBuffer *buf, gboolean up) {
     char *curr_dup = g_strndup(curr_text, len_curr);
     char *other_dup = g_strndup(other_text, len_other);
 
-    Position start = { up ? target_line : abs_line, 0 };
-    Position end = { up ? abs_line + 1 : target_line + 1, 0 };
+    int blk_start = up ? target_line : abs_line;
+    int blk_end   = up ? abs_line + 1 : target_line + 1;
 
     char *combined = up ? g_strconcat(curr_dup, other_dup, NULL) : g_strconcat(other_dup, curr_dup, NULL);
 
-    zig_replace_range(start, end, combined);
+    GtkTextIter ls, le;
+    gtk_text_buffer_get_iter_at_line(buf, &ls, blk_start);
+    gtk_text_buffer_get_iter_at_line(buf, &le, blk_end);
+    gint soff = gtk_text_iter_get_offset(&ls);
+    gint eoff = gtk_text_iter_get_offset(&le);
+    gui_buffer_replace(buf, soff, eoff, combined);   /* direct edit, no reload */
 
     g_free(curr_dup);
     g_free(other_dup);
     g_free(combined);
 
-    gui_reload_full_buffer();
     gui_set_cursor_position(target_line + 1, col);
-    zig_undo_commit();
 }
 
 void insert_horizontal_rule(GtkTextBuffer *buf) {
@@ -454,21 +456,23 @@ gboolean on_editor_key_pressed(GtkEventControllerKey *ctrl,
 
         if (is_list) {
             if (!outdent) {
-                Position p = { line_num, 0 };
-                zig_insert_text(p, "  ");
-                gui_reload_full_buffer();
+                GtkTextIter li;
+                gtk_text_buffer_get_iter_at_line(buf, &li, line_num);
+                gint off = gtk_text_iter_get_offset(&li);
+                gui_buffer_replace(buf, off, off, "  ");
                 gui_set_cursor_position(line_num + 1, col + 2);
-                zig_undo_commit();
             } else if (lt_ws > 0) {
                 int remove = lt_ws >= 2 ? 2 : 1;
-                Position p0 = { line_num, 0 };
-                Position p1 = { line_num, remove };
-                zig_delete_range(p0, p1);
-                gui_reload_full_buffer();
+                GtkTextIter ls, le;
+                gtk_text_buffer_get_iter_at_line(buf, &ls, line_num);
+                le = ls;
+                gtk_text_iter_forward_chars(&le, remove);
+                gint soff = gtk_text_iter_get_offset(&ls);
+                gint eoff = gtk_text_iter_get_offset(&le);
+                gui_buffer_replace(buf, soff, eoff, "");
                 int new_col = col - remove;
                 if (new_col < 0) new_col = 0;
                 gui_set_cursor_position(line_num + 1, new_col);
-                zig_undo_commit();
             }
             g_free(line_text);
             return TRUE;

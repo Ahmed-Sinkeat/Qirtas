@@ -380,5 +380,6 @@ Position advance_position(Position pos, const char *text);
 void update_paragraph_direction_lines(GtkTextBuffer *buf, gint first_line, gint last_line);
 void update_all_paragraphs_direction(GtkTextBuffer *buf);
 void gui_refresh_buffer_stats(void);
+Position gui_buffer_replace(GtkTextBuffer *buf, int start_off, int end_off, const char *replacement);
 void on_tree_file_right_click(GtkGestureClick *gesture, gint n_press, gdouble x, gdouble y, gpointer user_data);
 
