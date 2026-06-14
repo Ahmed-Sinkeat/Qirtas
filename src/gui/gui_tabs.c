@@ -457,7 +457,7 @@ static void gui_reset_preferred_x(AppGui *gui) {
  * next idle, once GTK has re-laid-out. This is what stops undo / formatting
  * from feeling like a full file reload. */
 static gboolean reload_finalize_idle(gpointer data) {
-    double scroll_pos = *(double *)data;
+    int top_line = *(int *)data;
     g_free(data);
     if (!global_gui || !global_gui->source_view) return G_SOURCE_REMOVE;
     GtkTextBuffer *buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(global_gui->source_view));
@@ -465,8 +465,19 @@ static gboolean reload_finalize_idle(gpointer data) {
     update_all_paragraphs_direction(buf);
     apply_wiki_link_tags(buf);
     gui_outline_refresh(global_gui);
-    if (global_gui->vadjustment)
-        gtk_adjustment_set_value(global_gui->vadjustment, scroll_pos);
+    /* Restore the viewport by LINE, not pixel offset: conceal/heading reflow
+     * changes line heights, so the old pixel scroll value lands on the wrong
+     * line and the page appears to jump (e.g. on Ctrl+Z). Scrolling the saved
+     * top line back to the top is reflow-stable. */
+    GtkTextView *tv = GTK_TEXT_VIEW(global_gui->source_view);
+    int total = gtk_text_buffer_get_line_count(buf);
+    if (top_line < 0) top_line = 0;
+    if (top_line > total - 1) top_line = total - 1;
+    GtkTextIter it;
+    gtk_text_buffer_get_iter_at_line(buf, &it, top_line);
+    GtkTextMark *m = gtk_text_buffer_create_mark(buf, NULL, &it, TRUE);
+    gtk_text_view_scroll_to_mark(tv, m, 0.0, TRUE, 0.0, 0.0);
+    gtk_text_buffer_delete_mark(buf, m);
     return G_SOURCE_REMOVE;
 }
 
@@ -476,9 +487,17 @@ void gui_reload_full_buffer(void) {
     int line = 1, col = 0;
     gui_get_cursor_position(&line, &col);
 
-    double scroll_pos = 0.0;
-    if (global_gui->vadjustment)
-        scroll_pos = gtk_adjustment_get_value(global_gui->vadjustment);
+    /* Capture the buffer line currently at the top of the viewport, so we can
+     * restore the view by line (reflow-stable) rather than by pixel offset. */
+    int top_line = 0;
+    {
+        GtkTextView *tv = GTK_TEXT_VIEW(global_gui->source_view);
+        GdkRectangle vr;
+        gtk_text_view_get_visible_rect(tv, &vr);
+        GtkTextIter top_it;
+        gtk_text_view_get_iter_at_location(tv, &top_it, vr.x, vr.y);
+        top_line = gtk_text_iter_get_line(&top_it);
+    }
 
     extern const char *zig_get_document_text(void);
     extern void zig_free_document_text(const char *ptr);
@@ -499,9 +518,9 @@ void gui_reload_full_buffer(void) {
 
     gui_set_cursor_position(line, col);
 
-    double *sp = g_new(double, 1);
-    *sp = scroll_pos;
-    g_idle_add_full(G_PRIORITY_HIGH_IDLE, reload_finalize_idle, sp, NULL);
+    int *tl = g_new(int, 1);
+    *tl = top_line;
+    g_idle_add_full(G_PRIORITY_HIGH_IDLE, reload_finalize_idle, tl, NULL);
 }
 
 void gui_prepare_tab_switch(void) {

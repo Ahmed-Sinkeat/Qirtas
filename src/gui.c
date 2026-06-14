@@ -1803,6 +1803,8 @@ static void on_files_clicked(GtkButton *btn, gpointer user_data) {
 
 /* stats click handler removed */
 
+static void apply_editor_prefs(AppGui *gui);
+
 static void on_wrap_toggled(GtkCheckButton *btn, gpointer user_data) {
     GtkTextView *view = GTK_TEXT_VIEW(user_data);
     /* Full-buffer model: soft wrap is a real user choice (the old virtual-
@@ -1813,6 +1815,8 @@ static void on_wrap_toggled(GtkCheckButton *btn, gpointer user_data) {
         qirtas_pref_set_int("wrap_lines", active ? 1 : 0);
     }
     gtk_text_view_set_wrap_mode(view, active ? GTK_WRAP_WORD_CHAR : GTK_WRAP_NONE);
+    /* Re-layout so disabling wrap doesn't leave dead space on the right. */
+    if (global_gui) apply_editor_prefs(global_gui);
 }
 
 static char current_en_font[64] = "JetBrains Mono";
@@ -3023,6 +3027,13 @@ static void apply_editor_prefs(AppGui *gui) {
     if (gui->right_margin_pos > 200) gui->right_margin_pos = 200;
     gtk_source_view_set_right_margin_position(sv, (guint)gui->right_margin_pos);
     if (gui->source_map) gtk_widget_set_visible(gui->source_map, gui->show_overview_map);
+
+    /* Force an immediate paper-column recompute. Toggling wrap changes the
+     * usable text width but does NOT change the gutter, so the column tick's
+     * width signature wouldn't change and stale margins would leave dead space
+     * on the right until something else (e.g. line numbers) forced a relayout. */
+    s_last_paper_width = -1;
+    if (gui->editor_card) paper_column_tick(gui->editor_card, NULL, gui);
 }
 
 /* forward decls */
