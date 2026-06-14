@@ -65,11 +65,27 @@ second struct.)
 
 **Full-buffer editing model.** The Zig side (`main.zig`) is the source of truth
 for document text. The whole document lives in the GTK buffer (no virtual
-paging — that system was removed). Edits flow GTK signal → Zig
-(`zig_insert_text` / `zig_delete_range` / `zig_replace_range`) → and formatting
-/ undo re-sync the buffer via `gui_reload_full_buffer()` (pulls the full doc
-from Zig and re-renders). Word-grain undo seals on a typing-pause boundary or
+paging — that system was removed). Plain typing flows GTK signal → Zig
+(`on_insert_text_after` / `on_delete_range_before` call `zig_insert_text` /
+`zig_delete_range`). Word-grain undo seals on a typing-pause boundary or
 immediately on a discrete delete.
+
+**Programmatic edits go through `gui_buffer_replace()` (gui_buffer.c), NOT a
+reload.** Formatting, list continuation, bracket/quote auto-pair, comment
+toggle, line duplicate/delete/move, Tab indent, word-delete (Ctrl+Backspace/
+Delete) and paste all edit the GTK buffer directly with the sync signals
+blocked, mirror the change into Zig with one `zig_replace_range` (atomic = one
+undo step), re-decorate only the touched lines, and defer conceal/stats. No
+full-document reload, so no scroll jump. Add new edit commands this way.
+
+**`gui_reload_full_buffer()` (gui_tabs.c) is reserved** for whole-document
+state changes that GTK can't derive from signals: **undo** (restores a full
+snapshot) and **file load**, plus insert-horizontal-rule (needs the separator
+child-widget render). It set_texts the buffer, then defers the O(document)
+decoration passes (HR widgets, RTL paragraph direction, wiki links, outline)
+and the scroll restore to idle so the reload feels instant, not like a file
+load. The 220ms conceal pass anchors the top-of-viewport line and scrolls it
+back after the reflow so concealing markers doesn't shift the view.
 
 **UI shell.** `gui.c`'s `activate()` builds the redesign: a floating paper
 card (`editor_card`) on a desk, top tab strip, card-header breadcrumb, desk
