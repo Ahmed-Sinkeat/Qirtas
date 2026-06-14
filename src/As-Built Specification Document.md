@@ -244,8 +244,15 @@ The §4.5 fix patched our own call sites, but the same buggy GTK path (`gtk_text
   per-keystroke cost (the in-place splice memmove is free), strictly
   O(document) — 0.52 ms @ 29 k bytes / 3 k lines → 10.2 ms @ 581 k / 60 k lines
   (linear). Scrolling triggers none of this path (edit code only runs on buffer
-  change), so scroll CPU is pure GTK relayout. Next no-viewport win:
-  incrementalize `populate_line_offsets` instead of full rescan per edit.
+  change), so scroll CPU is pure GTK relayout. **Fixed 2026-06-14:**
+  `zig_insert_text`/`zig_delete_range`/`zig_replace_range` now patch
+  `line_offsets` incrementally (`lineOffsetsInsert`/`lineOffsetsDelete` — shift
+  entries after the edit, add/remove only the touched newline entries) instead
+  of a full rescan; `populate_line_offsets` is now load-time + fallback only.
+  Per-keystroke cost dropped 10.5 ms → 0.25 ms @ 581 k (~42×), bench-verified
+  byte-identical to a full rescan across 6 k insert/delete/replace/newline
+  edits. Scroll CPU still pure GTK relayout — only viewport virtualization
+  touches that.
 - **CI** — `.github/workflows/ci.yml` builds + tests on every push
   (ubuntu-24.04, GTK stack via apt, Zig 0.16.0). First run may need version
   pin adjustments.
