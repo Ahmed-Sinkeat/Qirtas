@@ -1316,7 +1316,22 @@ fn syncActiveView() void {
 fn loadDocFromSlice(slice: []const u8) !void {
     const gpa = std.heap.page_allocator;
     doc_buf.clearRetainingCapacity();
-    try doc_buf.appendSlice(gpa, slice);
+    // Normalize line endings to LF. GtkTextView keeps a lone '\r' as a content
+    // character, so CRLF/CR files leave a stray '\r' on every line — that
+    // desyncs the conceal/tag passes' offset math and produces an
+    // "Invalid text buffer iterator" / apply_tag assertion storm (and garbled
+    // rendering) on files like CRLF-exported Markdown. Strip it once at load so
+    // every downstream pass sees clean LF text.
+    try doc_buf.ensureTotalCapacity(gpa, slice.len);
+    var i: usize = 0;
+    while (i < slice.len) : (i += 1) {
+        if (slice[i] == '\r') {
+            try doc_buf.append(gpa, '\n');
+            if (i + 1 < slice.len and slice[i + 1] == '\n') i += 1; // CRLF → one LF
+        } else {
+            try doc_buf.append(gpa, slice[i]);
+        }
+    }
     syncActiveView();
     try populate_line_offsets(doc_buf.items);
 }
