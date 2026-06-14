@@ -150,10 +150,9 @@ static void on_paste_plain_text_received(GObject *source_object, GAsyncResult *r
             end = start;
         }
 
-        Position start_pos = iter_to_position(&start);
-        Position end_pos = iter_to_position(&end);
-        zig_replace_range(start_pos, end_pos, text);
-        gui_reload_full_buffer();
+        gint soff = gtk_text_iter_get_offset(&start);
+        gint eoff = gtk_text_iter_get_offset(&end);
+        Position start_pos = gui_buffer_replace(buf, soff, eoff, text);  /* no reload */
 
         Position cursor_pos = advance_position(start_pos, text);
         gui_set_cursor_position(cursor_pos.line + 1, cursor_pos.col);
@@ -352,13 +351,10 @@ gboolean on_editor_key_pressed(GtkEventControllerKey *ctrl,
         int end_line = gtk_text_iter_get_line(&end);
         int end_col = gtk_text_iter_get_line_offset(&end);
 
-        Position p_start = { start_line, start_col };
-        Position p_end = { end_line, end_col };
-        zig_delete_range(p_start, p_end);
-
-        gui_reload_full_buffer();
+        gint soff = gtk_text_iter_get_offset(&start);
+        gint eoff = gtk_text_iter_get_offset(&end);
+        gui_buffer_replace(buf, soff, eoff, "");   /* no reload — was the Ctrl+Backspace jump */
         gui_set_cursor_position(start_line + 1, start_col);
-        zig_undo_commit();
         return TRUE;
     }
     if (match_app_shortcut("delete_next_word", keyval, keycode, state)) {
@@ -372,13 +368,10 @@ gboolean on_editor_key_pressed(GtkEventControllerKey *ctrl,
         int end_line = gtk_text_iter_get_line(&end);
         int end_col = gtk_text_iter_get_line_offset(&end);
 
-        Position p_start = { start_line, start_col };
-        Position p_end = { end_line, end_col };
-        zig_delete_range(p_start, p_end);
-
-        gui_reload_full_buffer();
+        gint soff = gtk_text_iter_get_offset(&start);
+        gint eoff = gtk_text_iter_get_offset(&end);
+        gui_buffer_replace(buf, soff, eoff, "");   /* no reload — was the Ctrl+Delete jump */
         gui_set_cursor_position(start_line + 1, start_col);
-        zig_undo_commit();
         return TRUE;
     }
     /* ── Cursor Movements ── */
