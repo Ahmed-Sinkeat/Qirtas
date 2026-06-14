@@ -583,28 +583,26 @@ gboolean on_editor_key_pressed(GtkEventControllerKey *ctrl,
                 is_empty_bullet = (p[num_len+2] == '\0' || p[num_len+2] == '\n' || p[num_len+2] == '\r');
             }
             
+            /* Edit the GTK buffer directly: the on_insert/on_delete signals
+             * sync the change to Zig, so we avoid the full gui_reload_full_buffer
+             * (which made every list Enter jump/shiver the whole document). */
             if (is_empty_bullet) {
-                Position start_pos = iter_to_position(&line_start);
-                Position end_pos = iter_to_position(&insert_iter);
-                zig_replace_range(start_pos, end_pos, "\n");
-                gui_reload_full_buffer();
-                gui_set_cursor_position(start_pos.line + 1, start_pos.col);
+                /* Empty item + Enter = leave the list: strip the marker, land
+                 * the cursor on the now-blank line. */
+                gtk_text_buffer_delete(buf, &line_start, &insert_iter);
+                gtk_text_buffer_place_cursor(buf, &line_start);
                 zig_undo_commit();
                 g_free(line_text);
                 return TRUE;
             }
-            
+
             gchar *indent = g_strndup(line_text, ws_len);
             gchar *newline_and_bullet = g_strconcat("\n", indent, bullet_prefix, NULL);
-            
-            Position insert_pos = iter_to_position(&insert_iter);
-            zig_insert_text(insert_pos, newline_and_bullet);
-            gui_reload_full_buffer();
-
-            Position cursor_pos = advance_position(insert_pos, newline_and_bullet);
-            gui_set_cursor_position(cursor_pos.line + 1, cursor_pos.col);
+            gtk_text_buffer_insert(buf, &insert_iter, newline_and_bullet, -1);
+            /* gtk_text_buffer_insert advances the insert mark past the new text,
+             * so the cursor already sits after the bullet. */
             zig_undo_commit();
-            
+
             g_free(indent);
             g_free(newline_and_bullet);
             g_free(line_text);
