@@ -4,13 +4,13 @@
   <description>Qirtas Ink style scheme (Paper &amp; Ink contrast)</description>
 
   <!-- ── Palette ── -->
-  <color name="ink"        value="#141b30"/>
-  <color name="ink-muted"  value="#3c455f"/>
-  <color name="ink-faint"  value="#79809a"/>
-  <color name="bg"         value="#fbfaf7"/>
-  <color name="bg-line"    value="#f3f1ea"/>
-  <color name="selection"  value="#dbe3f3"/>
-  <color name="indigo"     value="#14275e"/>
+  <color name="ink"        value="#2a2722"/>
+  <color name="ink-muted"  value="#4a4537"/>
+  <color name="ink-faint"  value="#76705f"/>
+  <color name="bg"         value="#faf7f0"/>
+  <color name="bg-line"    value="#f1ece0"/>
+  <color name="selection"  value="#dfe6f1"/>
+  <color name="indigo"     value="#213a63"/>
 
   <!-- ── Heading / formatting accents (illuminated-manuscript rubrication) ── -->
   <color name="rubric"     value="#8a3324"/>
