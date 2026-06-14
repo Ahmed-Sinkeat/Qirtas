@@ -95,6 +95,15 @@ static GtkWidget *tree_build_file_row(const char *full_path, const char *name) {
     /* Store filepath for search */
     g_object_set_data_full(G_OBJECT(btn), "tree_filepath", g_strdup(full_path), g_free);
 
+    /* Secondary (right) click → context menu: Open / Open with File Manager.
+     * The path copy's lifetime is tied to the gesture controller. */
+    GtkGesture *rc = gtk_gesture_click_new();
+    gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(rc), GDK_BUTTON_SECONDARY);
+    char *rc_path = g_strdup(full_path);
+    g_object_set_data_full(G_OBJECT(rc), "rc_path", rc_path, g_free);
+    g_signal_connect(rc, "pressed", G_CALLBACK(on_tree_file_right_click), rc_path);
+    gtk_widget_add_controller(btn, GTK_EVENT_CONTROLLER(rc));
+
     return btn;
 }
 
