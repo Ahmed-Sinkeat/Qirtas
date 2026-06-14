@@ -251,8 +251,24 @@ static gboolean buffer_stats_timeout_cb(gpointer user_data) {
 
     /* Full conceal pass runs here (already deferred past the 'changed'
      * signal, so Pango's line-layout cache is stable — avoids the
-     * "Byte index N is off the end of the line" abort). */
+     * "Byte index N is off the end of the line" abort).
+     *
+     * Concealing/revealing markers changes line heights, which shifts every
+     * line below the change and made the viewport jump on edits mid-document
+     * (e.g. after Ctrl+Backspace). Anchor the buffer position currently at the
+     * top of the viewport and scroll it back there after the reflow so the
+     * visible text stays put. */
+    GtkTextView *tv = GTK_TEXT_VIEW(gui->source_view);
+    GdkRectangle vrect;
+    gtk_text_view_get_visible_rect(tv, &vrect);
+    GtkTextIter top_iter;
+    gtk_text_view_get_iter_at_location(tv, &top_iter, vrect.x, vrect.y);
+    GtkTextMark *view_anchor = gtk_text_buffer_create_mark(buf, NULL, &top_iter, TRUE);
+
     update_conceal_markdown_all(buf);
+
+    gtk_text_view_scroll_to_mark(tv, view_anchor, 0.0, TRUE, 0.0, 0.0);
+    gtk_text_buffer_delete_mark(buf, view_anchor);
     gui_outline_refresh(gui);
 
     /* Typing pause = word-grain undo boundary. No-op if nothing pending. */
