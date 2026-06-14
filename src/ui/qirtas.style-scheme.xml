@@ -17,8 +17,9 @@
   <color name="pine"       value="#2f5d46"/>
   <color name="plum"       value="#5b3a6e"/>
   <color name="amber"      value="#8a5a1e"/>
-  <color name="quote-fg"   value="#3a4f7a"/>
-  <color name="quote-bg"   value="#eef1f8"/>
+  <color name="quote-fg"   value="#0c8f7a"/>   <!-- neon teal — vivid against warm paper -->
+  <color name="quote-bg"   value="#e2f4ef"/>
+  <color name="italic-fg"  value="#7c3aed"/>   <!-- vivid violet for emphasis -->
 
   <!-- ── Editor base ── -->
   <style name="text"               foreground="ink"     background="bg"/>
@@ -55,7 +56,7 @@
 
   <!-- ── Inline formatting ── -->
   <style name="qirtas_markdown:bold"        foreground="ink"  bold="true" weight="bold"/>
-  <style name="qirtas_markdown:italic"      foreground="quote-fg"   italic="true"/>
+  <style name="qirtas_markdown:italic"      foreground="italic-fg"   italic="true"/>
   <style name="qirtas_markdown:bold-italic" foreground="rubric"   bold="true" weight="bold" italic="true"/>
   <style name="qirtas_markdown:strikethrough" strikethrough="true" foreground="ink-faint"/>
   <style name="qirtas_markdown:inline-code" foreground="pine"   background="selection"/>
@@ -63,7 +64,7 @@
   <!-- ── Block elements ──
        Quote gets a tinted slate background, distinct from the rubric
        headings and ink body text, like a marginal annotation. -->
-  <style name="qirtas_markdown:blockquote"  foreground="quote-fg" background="quote-bg" italic="true"/>
+  <style name="qirtas_markdown:blockquote"  foreground="quote-fg" background="quote-bg" italic="true" bold="true"/>
   <style name="qirtas_markdown:list-marker" foreground="amber"/>
 
   <!-- ── Links ── -->
@@ -85,12 +86,12 @@
   <style name="markdown:h5"              foreground="ink-muted" bold="true"/>
   <style name="markdown:h6"              foreground="ink-faint" bold="true"/>
   <style name="markdown:bold"            foreground="ink"  bold="true"/>
-  <style name="markdown:italic"          foreground="quote-fg" italic="true"/>
+  <style name="markdown:italic"          foreground="italic-fg" italic="true"/>
   <style name="markdown:strikethrough"   strikethrough="true" foreground="ink-faint"/>
   <style name="markdown:inline-code"     foreground="pine"/>
   <style name="markdown:code"            foreground="pine"   background="selection"/>
   <style name="markdown:link-text"       foreground="ink"/>
   <style name="markdown:url"             foreground="indigo"   underline="true"/>
-  <style name="markdown:blockquote-line" foreground="quote-fg"   background="quote-bg" italic="true"/>
+  <style name="markdown:blockquote-line" foreground="quote-fg"   background="quote-bg" italic="true" bold="true"/>
   <style name="markdown:list-marker"     foreground="amber"/>
 </style-scheme>

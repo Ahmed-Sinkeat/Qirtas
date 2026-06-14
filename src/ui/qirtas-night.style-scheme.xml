@@ -18,8 +18,8 @@
   <color name="sapphire"   value="#9bc4e6"/>
   <color name="coral"      value="#d98a73"/>
   <color name="sage"       value="#9bc49a"/>
-  <color name="quote-fg"   value="#9db8d6"/>
-  <color name="quote-bg"   value="#222c40"/>
+  <color name="quote-fg"   value="#45e6db"/>   <!-- neon cyan — glows on dark -->
+  <color name="quote-bg"   value="#0e2a2c"/>
 
   <!-- ── Editor base ── -->
   <style name="text"               foreground="ink"     background="bg"/>
@@ -64,9 +64,9 @@
   <!-- ── Block elements ──
        Quote gets its own slate-blue ink + faint tinted background so it reads
        like a quoted block, distinct from the gold accent of the theme. -->
-  <style name="qirtas_markdown:blockquote"  foreground="quote-fg" background="quote-bg" italic="true"/>
-  <style name="def:blockquote"              foreground="quote-fg" background="quote-bg" italic="true"/>
-  <style name="markdown:blockquote-line"    foreground="quote-fg" background="quote-bg" italic="true"/>
+  <style name="qirtas_markdown:blockquote"  foreground="quote-fg" background="quote-bg" italic="true" bold="true"/>
+  <style name="def:blockquote"              foreground="quote-fg" background="quote-bg" italic="true" bold="true"/>
+  <style name="markdown:blockquote-line"    foreground="quote-fg" background="quote-bg" italic="true" bold="true"/>
   <style name="qirtas_markdown:list-marker" foreground="gold"/>
 
   <!-- ── Links ── -->

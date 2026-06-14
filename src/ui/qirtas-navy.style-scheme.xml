@@ -11,6 +11,11 @@
   <color name="bg-line"    value="#f5f2ea"/>
   <color name="selection"  value="#dfe6f1"/>
   <color name="navy"       value="#213a63"/>
+  <!-- distinct, navy-harmonious accents per markdown element -->
+  <color name="teal"       value="#0d8a78"/>
+  <color name="burgundy"   value="#9d2c4a"/>
+  <color name="amber"      value="#a8631a"/>
+  <color name="violet"     value="#6b3fa0"/>
 
   <!-- ── Editor base ── -->
   <style name="text"               foreground="ink"     background="bg"/>
@@ -39,25 +44,25 @@
 
   <!-- ── Headings by level ── -->
   <style name="qirtas_markdown:h1"         foreground="navy"   bold="true" weight="bold" scale="1.5"/>
-  <style name="qirtas_markdown:h2"         foreground="navy"   bold="true" weight="bold" scale="1.3"/>
-  <style name="qirtas_markdown:h3"         foreground="navy"   bold="true" weight="bold" scale="1.15"/>
-  <style name="qirtas_markdown:h4"         foreground="navy"   bold="true" weight="bold" scale="1.0"/>
-  <style name="qirtas_markdown:h5"         foreground="navy"   bold="true" weight="bold" scale="1.0"/>
-  <style name="qirtas_markdown:h6"         foreground="navy"   bold="true" weight="bold" scale="1.0"/>
+  <style name="qirtas_markdown:h2"         foreground="teal"     bold="true" weight="bold" scale="1.3"/>
+  <style name="qirtas_markdown:h3"         foreground="burgundy" bold="true" weight="bold" scale="1.15"/>
+  <style name="qirtas_markdown:h4"         foreground="amber"    bold="true" weight="bold" scale="1.0"/>
+  <style name="qirtas_markdown:h5"         foreground="violet"   bold="true" weight="bold" scale="1.0"/>
+  <style name="qirtas_markdown:h6"         foreground="ink-muted" bold="true" weight="bold" scale="1.0"/>
 
   <!-- ── Inline formatting ── -->
   <style name="qirtas_markdown:bold"        foreground="navy" bold="true" weight="bold"/>
-  <style name="qirtas_markdown:italic"      foreground="ink"   italic="true"/>
-  <style name="qirtas_markdown:bold-italic" foreground="navy"  bold="true" weight="bold" italic="true"/>
+  <style name="qirtas_markdown:italic"      foreground="violet"   italic="true"/>
+  <style name="qirtas_markdown:bold-italic" foreground="burgundy" bold="true" weight="bold" italic="true"/>
   <style name="qirtas_markdown:strikethrough" strikethrough="true" foreground="ink-faint"/>
-  <style name="qirtas_markdown:inline-code" foreground="ink-muted"   background="selection"/>
+  <style name="qirtas_markdown:inline-code" foreground="teal"        background="selection"/>
 
   <!-- ── Block elements ── quote = muted teal ink + faint tint, distinct
        from the navy accent. -->
-  <style name="qirtas_markdown:blockquote"  foreground="#3f6b5a" background="#eaf2ee" italic="true"/>
-  <style name="def:blockquote"              foreground="#3f6b5a" background="#eaf2ee" italic="true"/>
-  <style name="markdown:blockquote-line"    foreground="#3f6b5a" background="#eaf2ee" italic="true"/>
-  <style name="qirtas_markdown:list-marker" foreground="ink-muted"/>
+  <style name="qirtas_markdown:blockquote"  foreground="#06a88f" background="#e0f5f0" italic="true" bold="true"/>
+  <style name="def:blockquote"              foreground="#06a88f" background="#e0f5f0" italic="true" bold="true"/>
+  <style name="markdown:blockquote-line"    foreground="#06a88f" background="#e0f5f0" italic="true" bold="true"/>
+  <style name="qirtas_markdown:list-marker" foreground="amber"/>
 
   <!-- ── Links ── -->
   <style name="qirtas_markdown:link-text"   foreground="ink"/>
