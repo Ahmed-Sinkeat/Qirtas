@@ -253,6 +253,7 @@ void gui_outline_refresh(AppGui *gui);
 
 /* Perf observability: QIRTAS_PERF=1 logs main-loop callbacks > 8 ms. */
 extern int qirtas_perf_enabled;
+extern int qirtas_no_conceal;
 #define QIRTAS_PERF_BEGIN gint64 _qp_t0 = qirtas_perf_enabled ? g_get_monotonic_time() : 0
 #define QIRTAS_PERF_END(name) do { \
     if (qirtas_perf_enabled) { \
