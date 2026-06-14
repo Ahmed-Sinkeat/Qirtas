@@ -31,6 +31,81 @@ static void mark_conceal_dirty(AppGui *gui, int first_line, int last_line) {
         gui->conceal_dirty_end = last_line;
 }
 
+/* TRUE if `line` matches the Markdown ATX heading pattern (^#{1,6} ). Reads
+ * only that one line, so it is cheap to call per edit. */
+static gboolean line_is_heading(GtkTextBuffer *buf, int line) {
+    if (line < 0 || line >= gtk_text_buffer_get_line_count(buf)) return FALSE;
+    GtkTextIter ls, le;
+    gtk_text_buffer_get_iter_at_line(buf, &ls, line);
+    le = ls;
+    if (!gtk_text_iter_ends_line(&le)) gtk_text_iter_forward_to_line_end(&le);
+    gchar *t = gtk_text_buffer_get_text(buf, &ls, &le, TRUE);
+    int level = 0;
+    while (t[level] == '#') level++;
+    gboolean h = (level >= 1 && level <= 6 && t[level] == ' ' && t[level + 1] != '\0');
+    g_free(t);
+    return h;
+}
+
+/* Flag the outline for rebuild if an edit on lines [first,last] (cols touched
+ * starting at first_col) could have changed the heading structure:
+ *   - lines added/removed (first != last) shifts every heading's stored line
+ *     number, so the click-to-navigate targets go stale → must rebuild;
+ *   - an edit in the marker zone (col <= 6) may have added or removed the
+ *     leading '#'s, toggling a line's heading status;
+ *   - an affected line that is currently a heading means its title text (the
+ *     outline label) may have changed.
+ * Generous on purpose: a false positive only costs one skippable rebuild; a
+ * false negative would leave a stale outline. */
+static void mark_outline_dirty(AppGui *gui, GtkTextBuffer *buf,
+                               int first_line, int last_line, int first_col) {
+    if (!gui || gui->outline_dirty) return;
+    if (first_line != last_line || first_col <= 6 ||
+        line_is_heading(buf, first_line) || line_is_heading(buf, last_line)) {
+        gui->outline_dirty = TRUE;
+    }
+}
+
+/* Headless self-test of the outline-gate decision (line_is_heading + the
+ * mark_outline_dirty predicate). Returns the number of failed expectations;
+ * called from the QIRTAS_BENCH harness. */
+int qirtas_bench_outline_gate(void) {
+    if (!gtk_is_initialized() && !gtk_init_check()) {
+        g_printerr("[bench] gtk_init_check failed — skipping outline-gate test\n");
+        return 0;
+    }
+    GtkTextBuffer *buf = gtk_text_buffer_new(NULL);
+    const char *doc =
+        "# Heading\n"              /* 0: heading            */
+        "plain paragraph line\n"   /* 1: not                */
+        "## Sub heading\n"         /* 2: heading            */
+        "#NoSpace\n"               /* 3: not (no space)     */
+        "####### too many\n"       /* 4: not (7 hashes)     */
+        "#\n";                     /* 5: not (no title)     */
+    gtk_text_buffer_set_text(buf, doc, -1);
+
+    int fails = 0;
+    /* line_is_heading classification */
+    if (!line_is_heading(buf, 0)) { fails++; g_printerr("[bench] gate FAIL: L0 should be heading\n"); }
+    if ( line_is_heading(buf, 1)) { fails++; g_printerr("[bench] gate FAIL: L1 should NOT be heading\n"); }
+    if (!line_is_heading(buf, 2)) { fails++; g_printerr("[bench] gate FAIL: L2 should be heading\n"); }
+    if ( line_is_heading(buf, 3)) { fails++; g_printerr("[bench] gate FAIL: L3 (#NoSpace) should NOT\n"); }
+    if ( line_is_heading(buf, 4)) { fails++; g_printerr("[bench] gate FAIL: L4 (7 #) should NOT\n"); }
+    if ( line_is_heading(buf, 5)) { fails++; g_printerr("[bench] gate FAIL: L5 (# only) should NOT\n"); }
+
+    /* dirty predicate (mirror of mark_outline_dirty) */
+    #define GATE(fl, ll, fc) ((fl) != (ll) || (fc) <= 6 || line_is_heading(buf, fl) || line_is_heading(buf, ll))
+    if ( GATE(1, 1, 20)) { fails++; g_printerr("[bench] gate FAIL: plain mid-line edit should be SKIPPED\n"); }
+    if (!GATE(1, 2, 20)) { fails++; g_printerr("[bench] gate FAIL: newline (line added) should be dirty\n"); }
+    if (!GATE(0, 0, 20)) { fails++; g_printerr("[bench] gate FAIL: editing heading text should be dirty\n"); }
+    if (!GATE(1, 1, 2))  { fails++; g_printerr("[bench] gate FAIL: col<=6 edit should be dirty (conservative)\n"); }
+    #undef GATE
+
+    g_printerr("[bench] outline-gate self-test: %d failure(s)\n", fails);
+    g_object_unref(buf);
+    return fails;
+}
+
 /* Apply a [start_off, end_off) → replacement edit to BOTH the GTK buffer and
  * Zig with NO full reload: edit GTK directly with the sync signals blocked,
  * mirror into Zig with one zig_replace_range (atomic = one undo step),
@@ -290,7 +365,20 @@ static gboolean buffer_stats_timeout_cb(gpointer user_data) {
 
     gtk_text_view_scroll_to_mark(tv, view_anchor, 0.0, TRUE, 0.0, 0.0);
     gtk_text_buffer_delete_mark(buf, view_anchor);
-    gui_outline_refresh(gui);
+
+    /* Rebuild the heading outline only when an edit may have changed it. A
+     * plain keystroke inside a paragraph leaves outline_dirty FALSE and skips
+     * the O(document) line scan. */
+    if (gui->outline_dirty) {
+        gint64 _ot0 = qirtas_perf_enabled ? g_get_monotonic_time() : 0;
+        gui_outline_refresh(gui);
+        gui->outline_dirty = FALSE;
+        if (qirtas_perf_enabled)
+            g_printerr("[perf] outline: rebuilt %.1f ms\n",
+                       (g_get_monotonic_time() - _ot0) / 1000.0);
+    } else if (qirtas_perf_enabled) {
+        g_printerr("[perf] outline: skipped (not dirty)\n");
+    }
 
     /* Typing pause = word-grain undo boundary. No-op if nothing pending. */
     zig_undo_commit();
@@ -308,6 +396,7 @@ void gui_refresh_buffer_stats(void) {
      * full conceal pass (dirty range unset) rather than an incremental one. */
     global_gui->conceal_dirty_start = -1;
     global_gui->conceal_dirty_end = -1;
+    global_gui->outline_dirty = TRUE;
     if (buffer_stats_timeout_id) g_source_remove(buffer_stats_timeout_id);
     buffer_stats_timeout_id = g_timeout_add(50, buffer_stats_timeout_cb, global_gui);
 }
@@ -587,6 +676,7 @@ void on_insert_text_after(GtkTextBuffer *buf, GtkTextIter *location, gchar *text
     int end_line = gtk_text_iter_get_line(location);
     update_paragraph_direction_lines(buf, start_line, end_line);
     mark_conceal_dirty(gui, start_line, end_line);
+    mark_outline_dirty(gui, buf, start_line, end_line, start_col);
 
     apply_wiki_link_tags_local(buf);
 }
@@ -603,6 +693,11 @@ void on_delete_range_before(GtkTextBuffer *buf, GtkTextIter *start, GtkTextIter 
 
     Position p_start = { start_line, start_col };
     Position p_end = { end_line, end_col };
+
+    /* Checked BEFORE the delete so line_is_heading sees the pre-edit text
+     * ("was a heading"); first_line != end_line catches lines being merged
+     * away; start_col <= 6 catches a leading '#' being deleted. */
+    mark_outline_dirty(gui, buf, start_line, end_line, start_col);
 
     zig_delete_range(p_start, p_end);
     /* Mark an undo step pending but DON'T capture a full-document snapshot per

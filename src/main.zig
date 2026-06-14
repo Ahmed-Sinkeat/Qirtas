@@ -101,6 +101,7 @@ pub fn atomicWriteFile(path: []const u8, content: []const u8) !void {
 
 extern fn run_gui(argc: c_int, argv: ?[*]? [*]const u8) c_int;
 extern fn qirtas_bench_stats(text: [*]const u8, len: c_int) void;
+extern fn qirtas_bench_outline_gate() c_int;
 extern fn gui_set_text(text: [*]const u8, len: c_int) void;
 extern fn gui_set_title(title: [*:0]const u8) void;
 extern fn gui_set_sync_state(state: c_int) void;
@@ -452,6 +453,9 @@ fn runEditBench(path: []const u8) void {
     // the freshly loaded document via a headless GtkTextBuffer.
     if (doc_buf.items.len > 0)
         qirtas_bench_stats(doc_buf.items.ptr, @intCast(doc_buf.items.len));
+
+    // Outline-gate decision self-test (line_is_heading + dirty predicate).
+    _ = qirtas_bench_outline_gate();
 
     const N: usize = 2000;
     var plo_min: i128 = std.math.maxInt(i128);
