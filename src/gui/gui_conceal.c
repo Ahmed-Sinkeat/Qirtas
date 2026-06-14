@@ -160,6 +160,26 @@ static GRegex *get_cached_regex(const gchar *pattern) {
     return re;
 }
 
+/* Some lines make GTK's text layout abort when conceal (scale) tags are applied
+ * over them — inline HTML, tables, and very long lines (seen with the
+ * markdown-test-file). Concealing markdown markers inside those isn't meaningful
+ * anyway, so skip them: the markers render raw but the editor stays crash-safe.
+ * Keyed off the buffer line containing `char_off`. */
+static gboolean conceal_line_hostile(GtkTextBuffer *buf, gint char_off) {
+    GtkTextIter it;
+    gtk_text_buffer_get_iter_at_offset(buf, &it, char_off);
+    gint line = gtk_text_iter_get_line(&it);
+    GtkTextIter ls, le;
+    gtk_text_buffer_get_iter_at_line(buf, &ls, line);
+    le = ls;
+    if (!gtk_text_iter_ends_line(&le)) gtk_text_iter_forward_to_line_end(&le);
+    if (gtk_text_iter_get_offset(&le) - gtk_text_iter_get_offset(&ls) > 2000) return TRUE;
+    gchar *t = gtk_text_buffer_get_text(buf, &ls, &le, TRUE);
+    gboolean hostile = t && (strchr(t, '<') != NULL || strchr(t, '|') != NULL);
+    g_free(t);
+    return hostile;
+}
+
 static void apply_regex_conceal(GtkTextBuffer *buf, const gchar *text, const gchar *pattern, gint cursor_char, gint delim_len, GtkTextTag *conceal_tag) {
     GRegex *regex = get_cached_regex(pattern);
     if (!regex) return;
@@ -174,7 +194,7 @@ static void apply_regex_conceal(GtkTextBuffer *buf, const gchar *text, const gch
             gint start_char = g_utf8_pointer_to_offset(text, text + start_byte);
             gint end_char = g_utf8_pointer_to_offset(text, text + end_byte);
             gboolean cursor_inside = (cursor_char >= start_char && cursor_char <= end_char);
-            if (!cursor_inside) {
+            if (!cursor_inside && !conceal_line_hostile(buf, start_char)) {
                 GtkTextIter start_iter, end_iter;
                 gtk_text_buffer_get_iter_at_offset(buf, &start_iter, start_char);
                 gtk_text_buffer_get_iter_at_offset(buf, &end_iter, start_char + delim_len);
@@ -207,7 +227,7 @@ static void apply_regex_conceal_local(GtkTextBuffer *buf, const gchar *text, gin
             gint start_char = range_start_offset + start_char_local;
             gint end_char = range_start_offset + end_char_local;
             gboolean cursor_inside = (cursor_char >= start_char && cursor_char <= end_char);
-            if (!cursor_inside) {
+            if (!cursor_inside && !conceal_line_hostile(buf, start_char)) {
                 gint total_chars = gtk_text_buffer_get_char_count(buf);
 
                 gint c_start1 = start_char;
@@ -341,7 +361,8 @@ static void update_conceal_markdown_all_impl(GtkTextBuffer *buf) {
             while (line_text[h_level] == '#') {
                 h_level++;
             }
-            if (h_level > 0 && (line_text[h_level] == ' ' || line_text[h_level] == '\0')) {
+            if (h_level > 0 && (line_text[h_level] == ' ' || line_text[h_level] == '\0') &&
+                !strchr(line_text, '<') && !strchr(line_text, '|')) {
                 if (h_level == 1) {
                     gtk_text_buffer_apply_tag(buf, h1_tag_lookup, &line_start, &line_end);
                 } else if (h_level == 2) {
@@ -515,7 +536,8 @@ static void update_conceal_markdown_range_impl(GtkTextBuffer *buf, int first_lin
             while (line_text[h_level] == '#') {
                 h_level++;
             }
-            if (h_level > 0 && (line_text[h_level] == ' ' || line_text[h_level] == '\0')) {
+            if (h_level > 0 && (line_text[h_level] == ' ' || line_text[h_level] == '\0') &&
+                !strchr(line_text, '<') && !strchr(line_text, '|')) {
                 if (h_level == 1) {
                     gtk_text_buffer_apply_tag(buf, h1_tag, &line_start, &line_end);
                 } else if (h_level == 2) {
