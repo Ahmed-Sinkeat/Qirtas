@@ -60,6 +60,7 @@ const c = @cImport({
     @cInclude("dirent.h");
     @cInclude("stdlib.h");
     @cInclude("stdio.h");
+    @cInclude("time.h");
 });
 
 /// Atomic file write: write to `<path>.qirtas-tmp` in the same directory,
@@ -141,6 +142,13 @@ fn setActiveFilePath(path: []const u8) bool {
 }
 
 // Active file mapping variables
+// The live document buffer. Owns the bytes and keeps spare capacity across
+// edits, so per-keystroke insert/delete reuse the allocation (one in-place
+// memmove) instead of allocating a fresh page_allocator buffer — i.e. an
+// mmap/munmap syscall pair — on every keystroke. `active_mmap_ptr` /
+// `active_mmap_size` are a read-only VIEW into doc_buf, resynced after each
+// mutation so existing readers keep working unchanged.
+var doc_buf: std.ArrayList(u8) = .empty;
 var active_mmap_ptr: ?[*]const u8 = null;
 var active_mmap_size: usize = 0;
 var active_file_is_encrypted: bool = true;
@@ -416,6 +424,70 @@ fn initMasterKey() void {
     }
 }
 
+fn nowNs() i128 {
+    var ts: c.timespec = undefined;
+    _ = c.clock_gettime(c.CLOCK_MONOTONIC, &ts);
+    return @as(i128, ts.tv_sec) * 1_000_000_000 + @as(i128, ts.tv_nsec);
+}
+
+// QIRTAS_BENCH=<file> : drive the real per-keystroke edit path N times,
+// print min/avg/max ms for populate_line_offsets and full zig_insert_text.
+// Isolates "my-code per keystroke" cost from GTK. Exits before GUI.
+fn runEditBench(path: []const u8) void {
+    const gpa = std.heap.page_allocator;
+    const path_z = gpa.dupeZ(u8, path) catch return;
+    defer gpa.free(path_z);
+    var size: usize = 0;
+    const ptr = load_file_mmap(path_z.ptr, &size) catch {
+        _ = c.printf("[bench] cannot read %.*s\n", @as(c_int, @intCast(path.len)), path.ptr);
+        return;
+    };
+    loadDocFromSlice(if (size > 0) ptr[0..size] else "") catch {};
+    if (size > 0) unload_file_mmap(ptr, size);
+    const bytes = doc_buf.items.len;
+    const lines = line_offsets.items.len;
+
+    const N: usize = 2000;
+    var plo_min: i128 = std.math.maxInt(i128);
+    var plo_max: i128 = 0;
+    var plo_sum: i128 = 0;
+    var ins_min: i128 = std.math.maxInt(i128);
+    var ins_max: i128 = 0;
+    var ins_sum: i128 = 0;
+
+    var k: usize = 0;
+    while (k < N) : (k += 1) {
+        // insert one char mid-document (worst-ish: half the tail shifts)
+        const mid: Position = .{ .line = @intCast(line_offsets.items.len / 2), .col = 0 };
+
+        const t0 = nowNs();
+        zig_insert_text(mid, "x");
+        const t1 = nowNs();
+        const ins_d = t1 - t0;
+        ins_sum += ins_d;
+        if (ins_d < ins_min) ins_min = ins_d;
+        if (ins_d > ins_max) ins_max = ins_d;
+
+        // isolated populate_line_offsets timing
+        const t2 = nowNs();
+        populate_line_offsets(doc_buf.items) catch {};
+        const t3 = nowNs();
+        const plo_d = t3 - t2;
+        plo_sum += plo_d;
+        if (plo_d < plo_min) plo_min = plo_d;
+        if (plo_d > plo_max) plo_max = plo_d;
+    }
+
+    const f = struct {
+        fn ms(ns: i128) f64 {
+            return @as(f64, @floatFromInt(@as(i64, @intCast(ns)))) / 1_000_000.0;
+        }
+    };
+    _ = c.printf("[bench] file=%.*s bytes=%zu lines=%zu iters=%zu\n", @as(c_int, @intCast(path.len)), path.ptr, bytes, lines, N);
+    _ = c.printf("[bench] zig_insert_text         min=%.4f avg=%.4f max=%.4f ms\n", f.ms(ins_min), f.ms(@divTrunc(ins_sum, @as(i128, N))), f.ms(ins_max));
+    _ = c.printf("[bench] populate_line_offsets   min=%.4f avg=%.4f max=%.4f ms\n", f.ms(plo_min), f.ms(@divTrunc(plo_sum, @as(i128, N))), f.ms(plo_max));
+}
+
 pub fn main(init: std.process.Init) !void {
     // Ensure the XDG config directory exists.
     {
@@ -437,6 +509,11 @@ pub fn main(init: std.process.Init) !void {
 
     global_io = init.io;
     line_offsets = .empty;
+
+    if (c.getenv("QIRTAS_BENCH")) |bench_path| {
+        runEditBench(std.mem.span(bench_path));
+        return;
+    }
 
     const gpa = std.heap.page_allocator;
 
@@ -648,17 +725,8 @@ pub export fn zig_open_file(filename_ptr: [*:0]const u8) callconv(.c) void {
     if (std.mem.eql(u8, filename, "Untitled")) {
         zig_undo_clear();
 
-        // Unload existing mapping
-        if (active_mmap_ptr) |ptr| {
-            unload_file_mmap(ptr, active_mmap_size);
-            active_mmap_ptr = null;
-            active_mmap_size = 0;
-        }
-
-        // Clear line offsets
-        line_offsets.clearRetainingCapacity();
-        const gpa = std.heap.page_allocator;
-        line_offsets.append(gpa, 0) catch {};
+        // Empty the live document (resets the view + line offsets to [0]).
+        loadDocFromSlice("") catch {};
 
         if (!setActiveFilePath(filename)) return;
 
@@ -1089,11 +1157,9 @@ pub export fn zig_on_shutdown() callconv(.c) void {
     if (active_file_path_len > 0 and !std.mem.eql(u8, active_file_path[0..active_file_path_len], "Untitled")) {
         save_session(active_file_path[0..active_file_path_len], line, col) catch {};
     }
-    if (active_mmap_ptr) |ptr| {
-        unload_file_mmap(ptr, active_mmap_size);
-        active_mmap_ptr = null;
-        active_mmap_size = 0;
-    }
+    doc_buf.deinit(std.heap.page_allocator);
+    active_mmap_ptr = null;
+    active_mmap_size = 0;
     line_offsets.deinit(std.heap.page_allocator);
 }
 
@@ -1160,6 +1226,24 @@ fn unload_file_mmap(ptr: [*]const u8, size: usize) void {
     std.heap.page_allocator.free(ptr[0..size]);
 }
 
+// Point the legacy view at doc_buf's current bytes. Call after every mutation;
+// ArrayList growth may move the backing allocation.
+fn syncActiveView() void {
+    active_mmap_ptr = if (doc_buf.items.len > 0) doc_buf.items.ptr else null;
+    active_mmap_size = doc_buf.items.len;
+}
+
+// Replace the whole document with `slice` (load / tab-switch / undo restore).
+// Reuses doc_buf's capacity; only grows when the new content is larger than
+// any document held so far.
+fn loadDocFromSlice(slice: []const u8) !void {
+    const gpa = std.heap.page_allocator;
+    doc_buf.clearRetainingCapacity();
+    try doc_buf.appendSlice(gpa, slice);
+    syncActiveView();
+    try populate_line_offsets(doc_buf.items);
+}
+
 fn populate_line_offsets(content: []const u8) !void {
     const gpa = std.heap.page_allocator;
     line_offsets.clearRetainingCapacity();
@@ -1184,20 +1268,13 @@ fn remap_active_file() !void {
     const path_z = try gpa.dupeZ(u8, path);
     defer gpa.free(path_z);
 
-    // Unload existing mapping
-    if (active_mmap_ptr) |ptr| {
-        unload_file_mmap(ptr, active_mmap_size);
-        active_mmap_ptr = null;
-        active_mmap_size = 0;
-    }
-
     var size: usize = 0;
     const ptr = try load_file_mmap(path_z.ptr, &size);
-    active_mmap_ptr = ptr;
-    active_mmap_size = size;
-
+    // load_file_mmap hands back an owned page_allocator buffer (decrypt result
+    // or plaintext dupe). Copy it into doc_buf, then release the temp.
     const content = if (size > 0) ptr[0..size] else "";
-    try populate_line_offsets(content);
+    try loadDocFromSlice(content);
+    if (size > 0) unload_file_mmap(ptr, size);
 }
 
 fn load_file_and_update_gui(filename: []const u8) !void {
@@ -1673,14 +1750,7 @@ fn write_document_content_and_remap(new_content: []const u8) !void {
     const gpa = std.heap.page_allocator;
 
     if (std.mem.eql(u8, path, "Untitled")) {
-        const plain_buf = try gpa.dupe(u8, new_content);
-        if (active_mmap_ptr) |ptr| {
-            gpa.free(ptr[0..active_mmap_size]);
-        }
-        active_mmap_ptr = plain_buf.ptr;
-        active_mmap_size = plain_buf.len;
-        try populate_line_offsets(new_content);
-
+        try loadDocFromSlice(new_content);
         return;
     }
 
@@ -1704,14 +1774,7 @@ fn write_document_content_and_remap(new_content: []const u8) !void {
 /// save / autosave / close (zig_save_document). The old path wrote, encrypted
 /// and remapped the whole file on every keystroke — the typing-lag bug.
 fn update_document_content_in_memory(new_content: []const u8) !void {
-    const gpa = std.heap.page_allocator;
-    const buf = try gpa.dupe(u8, new_content);
-    if (active_mmap_ptr) |ptr| {
-        unload_file_mmap(ptr, active_mmap_size);
-    }
-    active_mmap_ptr = buf.ptr;
-    active_mmap_size = buf.len;
-    try populate_line_offsets(buf);
+    try loadDocFromSlice(new_content);
 }
 
 fn restoreSnapshot(entry: UndoEntry) void {
@@ -1780,58 +1843,37 @@ pub export fn zig_insert_text(pos: Position, text: [*:0]const u8) callconv(.c) v
     if (text_slice.len == 0) return;
 
     const gpa = std.heap.page_allocator;
-    const content = if (active_mmap_ptr) |ptr| ptr[0..active_mmap_size] else "";
-
     const offset = positionToOffset(pos);
-    const new_size = content.len + text_slice.len;
-    const new_content = gpa.alloc(u8, new_size) catch return;
-    defer gpa.free(new_content);
+    if (offset > doc_buf.items.len) return;
 
-    @memcpy(new_content[0..offset], content[0..offset]);
-    @memcpy(new_content[offset .. offset + text_slice.len], text_slice);
-    @memcpy(new_content[offset + text_slice.len ..], content[offset..]);
-
-    update_document_content_in_memory(new_content) catch {};
+    // In-place splice: reuses doc_buf's capacity, shifts only the tail. No
+    // per-keystroke allocation unless the buffer must grow.
+    doc_buf.insertSlice(gpa, offset, text_slice) catch return;
+    syncActiveView();
+    populate_line_offsets(doc_buf.items) catch {};
 }
 
 pub export fn zig_delete_range(start: Position, end: Position) callconv(.c) void {
-    const content = if (active_mmap_ptr) |ptr| ptr[0..active_mmap_size] else "";
     const start_offset = positionToOffset(start);
     const end_offset = positionToOffset(end);
-
-    if (start_offset >= end_offset) return;
+    if (start_offset >= end_offset or end_offset > doc_buf.items.len) return;
 
     const gpa = std.heap.page_allocator;
-    const deleted_len = end_offset - start_offset;
-    const new_size = content.len - deleted_len;
-    const new_content = gpa.alloc(u8, new_size) catch return;
-    defer gpa.free(new_content);
-
-    @memcpy(new_content[0..start_offset], content[0..start_offset]);
-    @memcpy(new_content[start_offset..], content[end_offset..]);
-
-    update_document_content_in_memory(new_content) catch {};
+    doc_buf.replaceRange(gpa, start_offset, end_offset - start_offset, "") catch return;
+    syncActiveView();
+    populate_line_offsets(doc_buf.items) catch {};
 }
 
 pub export fn zig_replace_range(start: Position, end: Position, text: [*:0]const u8) callconv(.c) void {
     const text_slice = std.mem.span(text);
-    const content = if (active_mmap_ptr) |ptr| ptr[0..active_mmap_size] else "";
     const start_offset = positionToOffset(start);
     const end_offset = positionToOffset(end);
-
-    if (start_offset > end_offset) return;
+    if (start_offset > end_offset or end_offset > doc_buf.items.len) return;
 
     const gpa = std.heap.page_allocator;
-    const deleted_len = end_offset - start_offset;
-    const new_size = content.len - deleted_len + text_slice.len;
-    const new_content = gpa.alloc(u8, new_size) catch return;
-    defer gpa.free(new_content);
-
-    @memcpy(new_content[0..start_offset], content[0..start_offset]);
-    @memcpy(new_content[start_offset .. start_offset + text_slice.len], text_slice);
-    @memcpy(new_content[start_offset + text_slice.len ..], content[end_offset..]);
-
-    update_document_content_in_memory(new_content) catch {};
+    doc_buf.replaceRange(gpa, start_offset, end_offset - start_offset, text_slice) catch return;
+    syncActiveView();
+    populate_line_offsets(doc_buf.items) catch {};
 }
 
 pub export fn zig_save_document() callconv(.c) c_int {
@@ -2030,6 +2072,29 @@ fn setTestDocument(path: []const u8, content: []const u8) !void {
 
 fn testDocText() []const u8 {
     return if (active_mmap_ptr) |ptr| ptr[0..active_mmap_size] else "";
+}
+
+test "large-doc edit stress: many in-place inserts/deletes stay consistent" {
+    // Build a 700KB document, then hammer the per-keystroke path. This is the
+    // size class where the old "rebuild whole buffer per keystroke" model
+    // allocated a fresh page_allocator buffer (mmap/munmap) on every edit;
+    // doc_buf now splices in place. Assert the buffer stays correct after a
+    // long edit run.
+    const big = try std.heap.page_allocator.alloc(u8, 700_000);
+    defer std.heap.page_allocator.free(big);
+    var i: usize = 0;
+    while (i < big.len) : (i += 1) big[i] = if (i % 80 == 79) '\n' else 'a';
+    try setTestDocument("Untitled", big);
+
+    const before = active_mmap_size;
+    var k: usize = 0;
+    while (k < 4000) : (k += 1) {
+        zig_insert_text(.{ .line = 100, .col = 10 }, "x");
+        zig_delete_range(.{ .line = 100, .col = 10 }, .{ .line = 100, .col = 11 });
+    }
+    // Net zero change in size, content unchanged, offsets still valid.
+    try std.testing.expectEqual(before, active_mmap_size);
+    try std.testing.expectEqualStrings(big, testDocText());
 }
 
 test "insert/delete/replace round-trip in memory" {

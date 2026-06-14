@@ -187,6 +187,12 @@ typedef struct {
     gboolean in_conceal_update;
     gboolean show_layout_dividers;
 
+    /* Dirty-line range accumulated across edits within one stats-debounce
+     * window. buffer_stats_timeout_cb reconceals only this range instead of
+     * the whole document. -1 = nothing dirty. */
+    int conceal_dirty_start;
+    int conceal_dirty_end;
+
     /* Editor preferences */
     gboolean  wrap_lines;
     gboolean  show_line_numbers;
@@ -337,6 +343,7 @@ void apply_paragraph_alignment(GtkTextBuffer *buf, GtkJustification justificatio
 void on_editor_left_click(GtkGestureClick *gesture, gint n_press, gdouble x, gdouble y, gpointer user_data);
 void on_editor_motion(GtkEventControllerMotion *controller, gdouble x, gdouble y, gpointer user_data);
 void update_conceal_markdown(GtkTextBuffer *buf);
+void update_conceal_markdown_range(GtkTextBuffer *buf, int first_line, int last_line);
 void update_conceal_markdown_all(GtkTextBuffer *buf);
 void update_conceal_markdown_all_sync(GtkTextBuffer *buf);
 void on_buffer_changed(GtkTextBuffer *buf, gpointer user_data);
