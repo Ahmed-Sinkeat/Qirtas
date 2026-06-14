@@ -307,6 +307,11 @@ gboolean on_editor_key_pressed(GtkEventControllerKey *ctrl,
         gui_manual_save(gui);
         return TRUE;
     }
+    /* ── Quick file switcher (Ctrl+P) — was defined but never wired ── */
+    if (match_app_shortcut("quick_switch", keyval, keycode, state)) {
+        show_quick_switcher(gui);
+        return TRUE;
+    }
     /* ── Zoom (font size) — handled here because the editor controller reliably
      * receives these; the window-level handler was pre-empted. ── */
     if (match_app_shortcut("zoom_in", keyval, keycode, state) ||
