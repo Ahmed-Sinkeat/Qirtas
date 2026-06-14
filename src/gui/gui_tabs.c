@@ -358,6 +358,25 @@ void gui_tabs_refresh(AppGui *gui) {
     gui_tabs_queue_scroll_active(gui);
 }
 
+/* Drop every open tab. Called when switching vaults: the old tabs reference
+ * files in the previous vault, and clicking one after the chdir resolved its
+ * (now-relative) path inside the NEW vault, creating an empty file there —
+ * data loss. Clear before the new vault loads so only the new vault's file
+ * opens. */
+void gui_tabs_close_all(AppGui *gui) {
+    if (!gui) return;
+    for (int i = 0; i < gui->num_tabs; i++) {
+        g_free(gui->open_tabs[i]);
+        gui->open_tabs[i] = NULL;
+        g_free(gui->tab_contents[i]);
+        gui->tab_contents[i] = NULL;
+        gui->tab_modified[i] = FALSE;
+    }
+    gui->num_tabs = 0;
+    gui->active_tab_index = -1;
+    gui_tabs_refresh(gui);
+}
+
 void gui_tabs_add_or_select(AppGui *gui, const char *filepath) {
     if (!gui || !filepath || filepath[0] == '\0') return;
     if (strcmp(filepath, "Qirtas") == 0 || strcmp(filepath, "(No open file)") == 0) return;
