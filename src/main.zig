@@ -1012,6 +1012,20 @@ pub export fn zig_create_new_file(name_ptr: [*:0]const u8) callconv(.c) void {
     zig_open_file(final_name_z.ptr);
 }
 
+// Exported FFI: Create a new folder (real directory) in the vault, relative to
+// the vault root. `name` may contain slashes (e.g. "fiqh/hanbali").
+pub export fn zig_create_folder(name_ptr: [*:0]const u8) callconv(.c) void {
+    const raw_name = std.mem.span(name_ptr);
+    if (raw_name.len == 0) return;
+    const gpa = std.heap.page_allocator;
+    const name_z = gpa.dupeZ(u8, raw_name) catch return;
+    defer gpa.free(name_z);
+    if (c.mkdir(name_z.ptr, 0o755) != 0) {
+        std.debug.print("Failed to create folder {s}\n", .{name_z});
+    }
+    gui_refresh_explorer();
+}
+
 // Exported FFI: Resolve and open wiki-link
 pub export fn zig_open_wiki_link(note_name_ptr: [*:0]const u8) callconv(.c) void {
     const note_name = std.mem.span(note_name_ptr);
