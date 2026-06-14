@@ -432,11 +432,22 @@ static void gui_reset_preferred_x(AppGui *gui) {
     gtk_text_buffer_place_cursor(buf, &iter);
 }
 
-typedef struct { GtkAdjustment *adj; double pos; } ScrollRestore;
-static gboolean restore_scroll_idle(gpointer data) {
-    ScrollRestore *sr = data;
-    if (sr->adj) gtk_adjustment_set_value(sr->adj, sr->pos);
-    g_free(sr);
+/* Re-decoration + scroll restore deferred off gui_reload_full_buffer so the new
+ * text + cursor paint instantly; the O(document) passes (HR widgets, RTL
+ * paragraph direction, wiki links, outline) and the scroll restore run on the
+ * next idle, once GTK has re-laid-out. This is what stops undo / formatting
+ * from feeling like a full file reload. */
+static gboolean reload_finalize_idle(gpointer data) {
+    double scroll_pos = *(double *)data;
+    g_free(data);
+    if (!global_gui || !global_gui->source_view) return G_SOURCE_REMOVE;
+    GtkTextBuffer *buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(global_gui->source_view));
+    parse_and_render_hrs(buf, global_gui);
+    update_all_paragraphs_direction(buf);
+    apply_wiki_link_tags(buf);
+    gui_outline_refresh(global_gui);
+    if (global_gui->vadjustment)
+        gtk_adjustment_set_value(global_gui->vadjustment, scroll_pos);
     return G_SOURCE_REMOVE;
 }
 
@@ -446,9 +457,6 @@ void gui_reload_full_buffer(void) {
     int line = 1, col = 0;
     gui_get_cursor_position(&line, &col);
 
-    /* set_text invalidates the whole layout, momentarily resetting scroll
-     * position (visible as a screen jump on every formatting edit). Save and
-     * restore it across the reload. */
     double scroll_pos = 0.0;
     if (global_gui->vadjustment)
         scroll_pos = gtk_adjustment_get_value(global_gui->vadjustment);
@@ -463,25 +471,13 @@ void gui_reload_full_buffer(void) {
         gtk_text_buffer_set_text(buf, text, -1);
         global_gui->loading_viewport = FALSE;
         zig_free_document_text(text);
-
-        /* set_text wipes all tags (RTL/LTR direction, wiki links) and HR
-         * widgets — reapply, same as gui_set_text on full file load. */
-        parse_and_render_hrs(buf, global_gui);
-        update_all_paragraphs_direction(buf);
-        apply_wiki_link_tags(buf);
     }
 
     gui_set_cursor_position(line, col);
-    /* Restore scroll AFTER GTK re-lays-out the new text. Synchronous restore
-     * clamps against the stale (pre-relayout) adjustment range, snapping the
-     * view to the top — the "jump up on every format" shiver. Defer to idle. */
-    if (global_gui->vadjustment) {
-        ScrollRestore *sr = g_new(ScrollRestore, 1);
-        sr->adj = global_gui->vadjustment;
-        sr->pos = scroll_pos;
-        g_idle_add_full(G_PRIORITY_HIGH_IDLE, restore_scroll_idle, sr, NULL);
-    }
-    gui_outline_refresh(global_gui);
+
+    double *sp = g_new(double, 1);
+    *sp = scroll_pos;
+    g_idle_add_full(G_PRIORITY_HIGH_IDLE, reload_finalize_idle, sp, NULL);
 }
 
 void gui_prepare_tab_switch(void) {
