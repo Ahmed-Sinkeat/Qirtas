@@ -5068,10 +5068,16 @@ int gui_get_absolute_cursor_line(void) {
 
 void gui_trigger_autosave(void) {
     if (!global_gui || !global_source_view) return;
-    
+
     GtkTextBuffer *buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(global_source_view));
+
+    /* Nothing changed since the last save → don't re-serialize, re-encrypt and
+     * hit disk. The 30s background autosave thread fires regardless of edits,
+     * so without this guard an idle editor saved every 30s for no reason. */
+    if (!gtk_text_buffer_get_modified(buf)) return;
+
     gui_set_sync_status("Saving...");
-    
+
     GtkTextIter start_iter, end_iter;
     gtk_text_buffer_get_bounds(buf, &start_iter, &end_iter);
     char *page_text = gtk_text_buffer_get_text(buf, &start_iter, &end_iter, FALSE);
@@ -5081,9 +5087,11 @@ void gui_trigger_autosave(void) {
     extern int zig_save_active_page(int start_line, int end_line, const char *text);
     int status = zig_save_active_page(0, gtk_text_buffer_get_line_count(buf), page_text);
     g_free(page_text);
-    
+
     if (status == 0) {
         gui_set_sync_status("Saved");
+        gtk_text_buffer_set_modified(buf, FALSE);  /* clears the unsaved dot + skips next idle save */
+        gui_tabs_refresh(global_gui);
     } else {
         gui_set_sync_status("Save Failed");
     }
