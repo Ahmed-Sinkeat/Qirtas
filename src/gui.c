@@ -2135,6 +2135,13 @@ static gboolean do_debounced_explorer_search(gpointer user_data) {
  * BUILD UI
  * ============================================================ */
 
+/* Zoom helpers — exported so the editor key handler (which reliably receives
+ * editor shortcuts) can drive font size too; the window-level handler was being
+ * pre-empted before Ctrl+=/-/0 reached it. */
+void gui_zoom_in(AppGui *gui)    { current_font_size += 1.0; update_editor_font(gui); }
+void gui_zoom_out(AppGui *gui)   { if (current_font_size > 6.0) { current_font_size -= 1.0; update_editor_font(gui); } }
+void gui_zoom_reset(AppGui *gui) { current_font_size = 16.0; update_editor_font(gui); }
+
 static gboolean on_window_key_pressed(GtkEventControllerKey *ctrl,
                                       guint keyval, guint keycode,
                                       GdkModifierType state, gpointer user_data) {
@@ -2477,7 +2484,7 @@ static gboolean paper_column_tick(GtkWidget *widget, GdkFrameClock *clock, gpoin
     if (text_w < QIRTAS_TEXT_COLUMN_MIN) text_w = QIRTAS_TEXT_COLUMN_MIN;
     if (!gui->text_width_full_page && text_w > QIRTAS_TEXT_COLUMN_MAX)
         text_w = QIRTAS_TEXT_COLUMN_MAX;
-    if (gui->read_mode && text_w > QIRTAS_READ_MODE_MAX_WIDTH)
+    if (gui->read_mode && !gui->text_width_full_page && text_w > QIRTAS_READ_MODE_MAX_WIDTH)
         text_w = QIRTAS_READ_MODE_MAX_WIDTH;
     gui->text_column_width = text_w;
 
@@ -4105,29 +4112,7 @@ static void activate(GtkApplication *app, gpointer user_data) {
     /* Trail-color customization removed — the cursor trail uses the default
      * (theme caret) color. gui->use_custom_trail_color stays 0. */
 
-    GtkWidget *pointer_color_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
-    GtkWidget *pointer_color_lbl = gtk_label_new(qirtas_tr("Pointer Color"));
-    gtk_widget_set_hexpand(pointer_color_lbl, TRUE);
-    gtk_widget_set_halign(pointer_color_lbl, GTK_ALIGN_START);
-    gtk_box_append(GTK_BOX(pointer_color_row), pointer_color_lbl);
-
-    GtkColorDialog *color_dialog = gtk_color_dialog_new();
-    gtk_color_dialog_set_modal(color_dialog, TRUE);
-    GtkWidget *pointer_color_btn = gtk_color_dialog_button_new(color_dialog);
-    gtk_color_dialog_button_set_rgba(GTK_COLOR_DIALOG_BUTTON(pointer_color_btn), &gui->custom_pointer_color);
-    gtk_widget_set_sensitive(pointer_color_btn, gui->use_custom_pointer_color);
-    g_signal_connect(pointer_color_btn, "notify::rgba", G_CALLBACK(on_pointer_color_changed), gui);
-    gtk_box_append(GTK_BOX(pointer_color_row), pointer_color_btn);
-    gui->pointer_color_btn = pointer_color_btn;
-
-    GtkWidget *pointer_color_custom_chk = gtk_check_button_new_with_label(qirtas_tr("Custom"));
-    gtk_check_button_set_active(GTK_CHECK_BUTTON(pointer_color_custom_chk), gui->use_custom_pointer_color);
-    g_signal_connect(pointer_color_custom_chk, "toggled", G_CALLBACK(on_pointer_color_custom_toggled), gui);
-    gtk_box_append(GTK_BOX(pointer_color_row), pointer_color_custom_chk);
-    gui->pointer_color_chk = pointer_color_custom_chk;
-
-    gtk_box_append(GTK_BOX(pop_box), pointer_color_row);
-
+    /* Pointer-color customization removed (the caret uses the theme color). */
 
     gtk_box_append(GTK_BOX(pop_box), gtk_separator_new(GTK_ORIENTATION_HORIZONTAL));
 
