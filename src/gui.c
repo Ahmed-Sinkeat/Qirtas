@@ -1192,9 +1192,8 @@ static void on_workspace_click(GtkGestureClick *gesture, gint n_press, gdouble x
         if (gui->active_popover) {
             gtk_widget_unparent(gui->active_popover);
         }
-        if (gui->sidebar && gtk_widget_get_visible(gui->sidebar)) {
-            gtk_widget_set_visible(gui->sidebar, FALSE);
-        }
+        /* Library bar stays open until its toggle icon is pressed — clicking in
+         * the workspace no longer auto-closes it. */
     }
 }
 
@@ -2957,6 +2956,22 @@ static void on_width_slider_changed(GtkRange *range, gpointer user_data) {
     }
 }
 
+/* Card gap to the screen edge (how narrow the paper card sits from the desk
+ * edge when the layout border is on). Larger gap = narrower card. */
+static void on_card_gap_slider_changed(GtkRange *range, gpointer user_data) {
+    AppGui *gui = (AppGui *)user_data;
+    int g = (int)gtk_range_get_value(range);
+    if (g < QIRTAS_DESK_GAP_MIN) g = QIRTAS_DESK_GAP_MIN;
+    if (g > QIRTAS_DESK_GAP_MAX) g = QIRTAS_DESK_GAP_MAX;
+    gui->desk_gap = g;
+    qirtas_pref_set_int("desk_gap", g);
+    apply_editor_border(gui);
+    if (gui->editor_card) {
+        s_last_paper_width = -1;
+        paper_column_tick(gui->editor_card, NULL, gui);
+    }
+}
+
 static void on_focus_mode_toggled(GtkCheckButton *chk, gpointer user_data) {
     AppGui *gui = (AppGui *)user_data;
     gboolean active = gtk_check_button_get_active(chk);
@@ -4201,6 +4216,22 @@ static void activate(GtkApplication *app, gpointer user_data) {
     gtk_box_append(GTK_BOX(width_row), width_lbl);
     gtk_box_append(GTK_BOX(width_row), width_slider);
     gtk_box_append(GTK_BOX(pop_box), width_row);
+
+    /* Card gap slider — how narrow the paper card sits from the screen edge
+     * (only visible effect when the editor layout border / card is on). */
+    GtkWidget *gap_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
+    GtkWidget *gap_lbl = gtk_label_new(qirtas_tr("Card Gap"));
+    gtk_widget_set_halign(gap_lbl, GTK_ALIGN_START);
+    GtkWidget *gap_slider = gtk_scale_new_with_range(GTK_ORIENTATION_HORIZONTAL,
+                                                     QIRTAS_DESK_GAP_MIN, QIRTAS_DESK_GAP_MAX, 4);
+    gtk_range_set_value(GTK_RANGE(gap_slider), gui->desk_gap);
+    gtk_widget_set_hexpand(gap_slider, TRUE);
+    gtk_scale_set_draw_value(GTK_SCALE(gap_slider), TRUE);
+    gtk_scale_set_value_pos(GTK_SCALE(gap_slider), GTK_POS_RIGHT);
+    g_signal_connect(gap_slider, "value-changed", G_CALLBACK(on_card_gap_slider_changed), gui);
+    gtk_box_append(GTK_BOX(gap_row), gap_lbl);
+    gtk_box_append(GTK_BOX(gap_row), gap_slider);
+    gtk_box_append(GTK_BOX(pop_box), gap_row);
 
     const char *sidebar_sides[] = { "Left", "Right", NULL };
     GtkWidget *sb_side_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
