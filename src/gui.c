@@ -919,6 +919,45 @@ static void on_close_confirm_response(AdwAlertDialog *dlg, const char *response,
     /* "cancel": keep the window open, do nothing. */
 }
 
+/* New-folder prompt (Ctrl+Shift+N, or the explorer right-click menu). Creates
+ * a real directory in the vault, optionally under `parent_dir`. */
+static void on_folder_dialog_response(AdwAlertDialog *dlg, const char *response, gpointer user_data) {
+    GtkEntry *entry = GTK_ENTRY(user_data);
+    if (strcmp(response, "create") == 0) {
+        const char *name = gtk_editable_get_text(GTK_EDITABLE(entry));
+        if (name && name[0]) {
+            extern void zig_create_folder(const char *name);
+            const char *parent = g_object_get_data(G_OBJECT(dlg), "parent_dir");
+            if (parent && parent[0]) {
+                char *full = g_strdup_printf("%s/%s", parent, name);
+                zig_create_folder(full);
+                g_free(full);
+            } else {
+                zig_create_folder(name);
+            }
+        }
+    }
+}
+
+void prompt_new_folder(AppGui *gui, const char *parent_dir) {
+    if (!gui) return;
+    AdwAlertDialog *dlg = ADW_ALERT_DIALOG(
+        adw_alert_dialog_new(qirtas_tr("New Folder"), NULL));
+    GtkWidget *entry = gtk_entry_new();
+    gtk_entry_set_placeholder_text(GTK_ENTRY(entry), qirtas_tr("Folder name"));
+    adw_alert_dialog_set_extra_child(dlg, entry);
+    adw_alert_dialog_add_responses(dlg,
+        "cancel", qirtas_tr("Cancel"),
+        "create", qirtas_tr("Create"), NULL);
+    adw_alert_dialog_set_response_appearance(dlg, "create", ADW_RESPONSE_SUGGESTED);
+    adw_alert_dialog_set_default_response(dlg, "create");
+    adw_alert_dialog_set_close_response(dlg, "cancel");
+    if (parent_dir)
+        g_object_set_data_full(G_OBJECT(dlg), "parent_dir", g_strdup(parent_dir), g_free);
+    g_signal_connect(dlg, "response", G_CALLBACK(on_folder_dialog_response), entry);
+    adw_dialog_present(ADW_DIALOG(dlg), gui->window);
+}
+
 static gboolean on_window_close_request(GtkWindow *window, gpointer user_data) {
     AppGui *gui = (AppGui *)user_data;
     /* Unsaved changes → prompt Save / Discard / Cancel and block the close
@@ -1335,6 +1374,7 @@ static AppShortcut app_shortcuts[] = {
     { "move_doc_start", "Move to start of document", "<Control>Home", 0, 0 },
     { "move_doc_end", "Move to end of document", "<Control>End", 0, 0 },
     { "new_file", "Create new file", "<Control>n", 0, 0 },
+    { "new_folder", "Create new folder", "<Control><Shift>n", 0, 0 },
     { "open_file", "Open existing file", "<Control>o", 0, 0 },
     { "save_file", "Save file", "<Control>s", 0, 0 },
     { "save_file_as", "Save file as...", "<Control><Shift>s", 0, 0 },
@@ -2070,14 +2110,17 @@ static gboolean on_window_key_pressed(GtkEventControllerKey *ctrl,
         return TRUE;
     }
 
-    /* Create New File */
+    /* Create New File — open a blank Untitled buffer (redesign new-file flow;
+     * the file is written to the vault on first save). */
     if (match_app_shortcut("new_file", keyval, keycode, state)) {
-        if (global_add_popover_widgets) {
-            AddPopoverWidgets *w = (AddPopoverWidgets *)global_add_popover_widgets;
-            gtk_widget_set_visible(gui->sidebar, TRUE);
-            gtk_popover_popup(GTK_POPOVER(w->popover));
-            on_create_new_clicked(NULL, w);
-        }
+        extern void zig_open_file(const char *filename);
+        zig_open_file("Untitled");
+        return TRUE;
+    }
+
+    /* Create New Folder (Ctrl+Shift+N) */
+    if (match_app_shortcut("new_folder", keyval, keycode, state)) {
+        prompt_new_folder(gui, NULL);
         return TRUE;
     }
 
@@ -4685,6 +4728,16 @@ static void on_tree_open_in_fm_clicked(GtkButton *btn, gpointer user_data) {
     g_object_unref(file);
 }
 
+/* New Folder, created as a sibling of the right-clicked file (same directory). */
+static void on_tree_new_folder_clicked(GtkButton *btn, gpointer user_data) {
+    popdown_ancestor_popover(GTK_WIDGET(btn));
+    const char *path = (const char *)user_data;
+    char *parent = g_path_get_dirname(path);
+    /* g_path_get_dirname returns "." for a bare filename → vault root. */
+    prompt_new_folder(global_gui, (parent && strcmp(parent, ".") != 0) ? parent : NULL);
+    g_free(parent);
+}
+
 /* Secondary-click handler attached to each explorer file row (gui_explorer.c).
  * user_data is the row's file path (lifetime tied to the gesture controller). */
 void on_tree_file_right_click(GtkGestureClick *gesture, gint n_press,
@@ -4711,6 +4764,9 @@ void on_tree_file_right_click(GtkGestureClick *gesture, gint n_press,
     gtk_box_append(GTK_BOX(box),
         status_menu_item(qirtas_icon("filemanager"), qirtas_tr("Open with File Manager"), NULL,
                          G_CALLBACK(on_tree_open_in_fm_clicked), (gpointer)path));
+    gtk_box_append(GTK_BOX(box),
+        status_menu_item(qirtas_icon("folder"), qirtas_tr("New Folder"), NULL,
+                         G_CALLBACK(on_tree_new_folder_clicked), (gpointer)path));
 
     gtk_popover_set_child(GTK_POPOVER(popover), box);
     gtk_popover_popup(GTK_POPOVER(popover));
