@@ -7,6 +7,38 @@
 /* Global tracker for the currently active tree row button */
 static GtkWidget *g_active_tree_row = NULL;
 
+/* ── Drag & drop: drag a file/folder row onto a folder row to move it in ── */
+static GdkContentProvider *on_tree_drag_prepare(GtkDragSource *src, double x, double y, gpointer user_data) {
+    (void)src; (void)x; (void)y;
+    return gdk_content_provider_new_typed(G_TYPE_STRING, (const char *)user_data);
+}
+static gboolean on_tree_dir_drop(GtkDropTarget *dt, const GValue *value, double x, double y, gpointer user_data) {
+    (void)dt; (void)x; (void)y;
+    if (!G_VALUE_HOLDS_STRING(value)) return FALSE;
+    const char *src_path = g_value_get_string(value);
+    if (!src_path || !src_path[0]) return FALSE;
+    extern void zig_move_path(const char *src, const char *dest_dir);
+    zig_move_path(src_path, (const char *)user_data);
+    return TRUE;
+}
+/* Make `w` draggable, carrying `path` as the drag payload. */
+static void tree_attach_drag_source(GtkWidget *w, const char *path) {
+    GtkDragSource *src = gtk_drag_source_new();
+    gtk_drag_source_set_actions(src, GDK_ACTION_MOVE);
+    char *p = g_strdup(path);
+    g_object_set_data_full(G_OBJECT(src), "src_path", p, g_free);  /* lifetime */
+    g_signal_connect(src, "prepare", G_CALLBACK(on_tree_drag_prepare), p);
+    gtk_widget_add_controller(w, GTK_EVENT_CONTROLLER(src));
+}
+/* Make `w` a drop target that moves a dropped path into `dir_path`. */
+static void tree_attach_drop_target(GtkWidget *w, const char *dir_path) {
+    GtkDropTarget *dt = gtk_drop_target_new(G_TYPE_STRING, GDK_ACTION_MOVE);
+    char *p = g_strdup(dir_path);
+    g_object_set_data_full(G_OBJECT(dt), "dir_path", p, g_free);
+    g_signal_connect(dt, "drop", G_CALLBACK(on_tree_dir_drop), p);
+    gtk_widget_add_controller(w, GTK_EVENT_CONTROLLER(dt));
+}
+
 /* Data passed to toggle callback for directory rows */
 typedef struct {
     GtkWidget *children_box; /* The collapsible children container */
@@ -104,6 +136,9 @@ static GtkWidget *tree_build_file_row(const char *full_path, const char *name) {
     g_signal_connect(rc, "pressed", G_CALLBACK(on_tree_file_right_click), rc_path);
     gtk_widget_add_controller(btn, GTK_EVENT_CONTROLLER(rc));
 
+    /* Draggable → drop onto a folder row to move it in. */
+    tree_attach_drag_source(btn, full_path);
+
     return btn;
 }
 
@@ -143,6 +178,11 @@ static GtkWidget *tree_build_dir_row(const char *dir_path, const char *name) {
 
     gtk_button_set_child(GTK_BUTTON(btn), hbox);
     gtk_box_append(GTK_BOX(wrapper), btn);
+
+    /* A folder row is both draggable (move the folder itself) and a drop
+     * target (drop a file/folder onto it to move it inside). */
+    tree_attach_drag_source(btn, dir_path);
+    tree_attach_drop_target(btn, dir_path);
 
     /* Children container (hidden by default) */
     GtkWidget *children_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
