@@ -10,45 +10,82 @@ Qirtas/
 │   ├── bip39.zig                        ← BIP-39 recovery phrase helpers
 │   ├── sync.zig                         ← Cloud sync logic (Google Drive, Dropbox, GitHub, local)
 │   ├── root.zig                         ← Zig module root
-│   ├── gui.c                            ← GTK layout, window setup, key handling, scroll
-│   ├── gui_internal.h                   ← UI-only shared state, AppGui struct, module hooks
-│   ├── gui_shared.h                     ← Zig-facing FFI declarations
+│   ├── gui.c                            ← Entry/FFI layer + redesign UI shell: run_gui,
+│   │                                       activate() builds the paper-card window (tab strip,
+│   │                                       editor card, outline panel, sidebar logo, status bar,
+│   │                                       settings), paper-card column subsystem (paper_column_tick,
+│   │                                       focus/read mode), explorer header toolbar + folder prompt,
+│   │                                       app shutdown + unsaved-changes dialog, EN→AR tr_table
+│   ├── gui_internal.h                   ← Canonical AppGui struct + UI-only shared state, module hooks
+│   ├── gui_shared.h                     ← Zig-facing FFI declarations, Position, QirtasSyncState
 │   ├── STRUCTURE.md                     ← This file
 │   ├── As-Built Specification Document.md  ← Engineering spec with profiling results
 │   └── gui/
-│       ├── gui_theme.c                  ← CSS loading, theme switching, font selection
+│       ├── gui_theme.c                  ← CSS loading, theme switching, font selection, brand logo
+│       ├── gui_buffer.c                 ← Buffer/undo core: insert/delete/replace signal wiring,
+│       │                                   word-grain undo, stats+conceal debounce, autosave, Arabic counts
 │       ├── gui_cursor.c                 ← Cursor trail animations
-│       ├── gui_editor.c                 ← Editing, buffer events, gestures, paragraph alignment, paste handling
-│       ├── gui_popover.c                ← Markdown formatting popup, undo sealing, paragraph alignment helper
+│       ├── gui_editor.c                 ← Editing, buffer events, gestures, paragraph alignment, paste
+│       ├── gui_popover.c                ← Markdown formatting popup, undo sealing, paragraph alignment
 │       ├── gui_conceal.c                ← Markdown concealment passes, heading tags, idle guard
 │       ├── gui_wiki.c                   ← Wiki-link parsing and navigation, idle guard
 │       ├── gui_hr.c                     ← Horizontal rule renderer
 │       ├── gui_search.c                 ← Inline search bar overlay
-│       ├── gui_explorer.c               ← Directory tree and active files drawer
-│       ├── gui_tabs.c                   ← Document tab controls in status bar
+│       ├── gui_explorer.c               ← File tree (rows, right-click menu, search filter)
+│       ├── gui_outline.c                ← Document outline / table-of-contents panel
+│       ├── gui_switcher.c               ← Quick-open file switcher
+│       ├── gui_tabs.c                   ← Tab strip + tab cache + gui_reload_full_buffer (full-buffer model)
+│       ├── gui_history.c               ← Per-file edit-history snapshots
 │       ├── gui_shortcuts.c              ← Keyboard shortcuts table, keybindings window
 │       └── gui_sync.c                   ← Cloud credentials and sync event UI
 │   └── ui/
 │       ├── themes/
-│       │   ├── base.css                 ← Shared layout, spacing, widget styles (incl. tab strip, paper card, desk outline, status pill)
-│       │   ├── theme-qirtas-light.css   ← Paper & Ink light (matches light logo)
-│       │   ├── theme-qirtas-dark.css    ← Paper & Ink dark (matches dark logo, gold thread)
-│       │   ├── theme-qirtas-navy.css    ← Paper & Ink Navy (redesign light: white paper, #213A63 navy)
-│       │   ├── theme-sepia.css          ← Classic / Deep Sepia
-│       │   ├── theme-typewriter-dark.css
-│       │   ├── theme-typewriter-light.css
-│       │   └── README.md
-│       ├── icons/
+│       │   ├── base.css                 ← Shared layout (tab strip, paper card, desk outline, status pill)
+│       │   ├── theme-qirtas-light.css   ← Qirtas Light (warm paper, navy accent — matches light logo)
+│       │   ├── theme-qirtas-dark.css    ← Qirtas Dark (matches dark logo, gold thread)
+│       │   └── theme-qirtas-navy.css    ← Paper & Ink Navy (white paper, #213A63 navy)
+│       ├── icons/                       ← App icons + qirtas-logo.png (light/navy) + qirtas-logo-dark.png
 │       ├── qirtas_markdown.lang         ← GtkSourceView language definition
-│       └── qirtas*.style-scheme.xml     ← Editor colour schemes (qirtas = ink light, qirtas-night = ink dark, qirtas-navy = navy light)
-│                                            qirtas/qirtas-night give each markdown h1-h6 + bold/italic/blockquote/
-│                                            inline-code/list-marker its own rubricated color (see As-Built §4d)
+│       └── qirtas*.style-scheme.xml     ← Editor colour schemes: qirtas (light), qirtas-night (dark),
+│                                            qirtas-navy (navy). Each gives markdown h1-h6 + bold/italic/
+│                                            blockquote/inline-code/list-marker its own color (As-Built §4d)
 ├── scratch/                             ← Developer profiling and test scripts
 │   └── profile_cursor_movement.py      ← Cursor movement profiling harness (SIGUSR1-based)
 ├── assets/
 │   └── style.css
 └── .agents/
 ```
+## Architecture (current)
+
+**Single canonical `AppGui` struct.** Defined once in `gui_internal.h`. `gui.c`
+and every `gui/*.c` module `#include "gui_internal.h"` and share it via
+`extern AppGui *global_gui`. (A clobbered build had re-injected a private,
+smaller `AppGui` into `gui.c`; that has been removed — never reintroduce a
+second struct.)
+
+**Full-buffer editing model.** The Zig side (`main.zig`) is the source of truth
+for document text. The whole document lives in the GTK buffer (no virtual
+paging — that system was removed). Edits flow GTK signal → Zig
+(`zig_insert_text` / `zig_delete_range` / `zig_replace_range`) → and formatting
+/ undo re-sync the buffer via `gui_reload_full_buffer()` (pulls the full doc
+from Zig and re-renders). Word-grain undo seals on a typing-pause boundary or
+immediately on a discrete delete.
+
+**UI shell.** `gui.c`'s `activate()` builds the redesign: a floating paper
+card (`editor_card`) on a desk, top tab strip, card-header breadcrumb, desk
+outline panel, sidebar with brand logo + explorer header toolbar (new file /
+new folder / open vault in FM) + file tree, and a status bar. `paper_column_tick`
+keeps the text column centered as the card resizes. Focus mode and read mode
+toggle on the same card.
+
+**Localization.** `qirtas_tr()` (gui.c) looks up an EN→AR `tr_table` when the
+app language is Arabic (persisted pref, RTL default direction). Labels are
+built at startup, so a language switch needs a restart to fully apply.
+
+**Themes (3).** `qirtas` (Qirtas Light), `qirtas-dark` (Qirtas Dark), `navy`
+(Paper & Ink Navy), plus user `custom`. `apply_theme` remaps any removed/legacy
+name (sepia, typewriter-*, old `dark`) to `qirtas`.
+
 ## Build Graph
 
 `build.zig` currently builds:

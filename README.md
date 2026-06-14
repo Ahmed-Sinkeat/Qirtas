@@ -30,11 +30,16 @@ logos — dark ink on bright paper, bone-white ink on black.
   selection, normalized search (alef forms, ة/ه, ى/ي, tashkeel-insensitive —
   searching مدرسه finds المدرسة), Eastern Arabic numerals, shortcuts that
   work under the Arabic keyboard layout
-- **Eight themes** including Paper & Ink light/dark, typewriter pair, sepia,
-  midnight — plus custom CSS themes and a custom caret/trail color
-- **Animated ink-smear cursor trail** (toggleable, themable)
+- **Three Paper & Ink themes** — Qirtas Light (warm paper, navy ink),
+  Qirtas Dark, and Paper & Ink Navy — plus custom CSS themes. Each theme's
+  editor scheme colors every markdown element distinctly.
+- **Animated ink-smear cursor trail** (toggleable; uses the theme color)
+- **File management** — file-tree sidebar with a header toolbar (new file,
+  new folder, open vault in file manager), right-click row menu (open, open in
+  file manager, new folder), `Ctrl+N` new file / `Ctrl+Shift+N` new folder
+- **Tabs** with per-file unsaved-changes dot, plus a save-before-close prompt
 - **Quick switcher (Ctrl+P, Arabic-normalized fuzzy match), outline panel,
-  tabs, file-tree sidebar, find & replace, overview minimap**
+  find & replace, overview minimap**
 - **Themed PDF export** — متن (classical Arabic matn typesetting: Amiri naskh,
   rubrication, framed pages, Eastern folios), Paper & Ink, Academic,
   Typewriter — with PDF outline bookmarks from your headings
