@@ -307,6 +307,22 @@ gboolean on_editor_key_pressed(GtkEventControllerKey *ctrl,
         gui_manual_save(gui);
         return TRUE;
     }
+    /* ── Zoom (font size) — handled here because the editor controller reliably
+     * receives these; the window-level handler was pre-empted. ── */
+    if (match_app_shortcut("zoom_in", keyval, keycode, state) ||
+        (ctrl_held && (keyval == GDK_KEY_plus || keyval == GDK_KEY_KP_Add))) {
+        gui_zoom_in(gui);
+        return TRUE;
+    }
+    if (match_app_shortcut("zoom_out", keyval, keycode, state) ||
+        (ctrl_held && keyval == GDK_KEY_KP_Subtract)) {
+        gui_zoom_out(gui);
+        return TRUE;
+    }
+    if (match_app_shortcut("reset_zoom", keyval, keycode, state)) {
+        gui_zoom_reset(gui);
+        return TRUE;
+    }
     /* ── Undo & Redo ── */
     if (match_app_shortcut("undo", keyval, keycode, state)) {
         zig_undo();
