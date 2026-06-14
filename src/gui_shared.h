@@ -26,7 +26,15 @@ extern void zig_free_document_text(const char *ptr);
 /* Zig -> C FFI */
 void gui_set_text(const char *text, int len);
 void gui_set_title(const char *title);
-void gui_set_sync_status(const char *status);
+/* Sync dot state. Enum, not strings — status text passed through
+ * qirtas_tr would silently fail strcmp classification for Arabic users.
+ * Translation happens at labels only; state travels as this enum. */
+typedef enum {
+    QIRTAS_SYNC_SYNCED = 0,
+    QIRTAS_SYNC_SAVING = 1,
+    QIRTAS_SYNC_NOT_SYNCED = 2,
+} QirtasSyncState;
+void gui_set_sync_state(QirtasSyncState state);
 void gui_show_editor(void);
 void gui_show_recovery_dialog(void);
 void gui_get_cursor_position(int *line, int *col);
@@ -67,7 +75,6 @@ extern void zig_dropbox_disconnect(void);
 extern void zig_save_github_credentials(const char *token, const char *repo);
 extern int zig_get_github_credentials_decrypted(char *token_buf, int token_buf_max, char *repo_buf, int repo_buf_max);
 extern int zig_get_dropbox_credentials_decrypted(char *client_id_buf, int client_id_max, char *client_secret_buf, int client_secret_max);
-extern void zig_github_connect(void);
 extern void zig_github_now(void);
 extern int zig_github_check_status(void);
 extern void zig_github_disconnect(void);

@@ -2113,7 +2113,7 @@ pub export fn zig_dropbox_now() callconv(.c) void {
 // remote wins the original name.
 // ─────────────────────────────────────────────────────────────
 
-const DBX_FOLDER = "/lawh"; // keep legacy folder so existing users' data is found
+const DBX_FOLDER = "/qirtas";
 
 const DbxListResp = struct {
     entries: []struct {
@@ -2427,19 +2427,6 @@ pub export fn zig_save_github_credentials(token_ptr: [*:0]const u8, repo_ptr: [*
     }
 }
 
-pub export fn zig_github_connect() callconv(.c) void {
-    var db: ?*c.sqlite3 = null;
-    if (c.sqlite3_open(dbp(), &db) == c.SQLITE_OK) {
-        defer _ = c.sqlite3_close(db);
-        _ = c.sqlite3_busy_timeout(db, 5000);
-        _ = c.sqlite3_exec(db, "UPDATE github_sync_tokens SET access_token = 'mock-github-token' WHERE id = 1;", null, null, null);
-    }
-    gui_update_github_status(1, "Connected");
-    
-    // Automatically trigger sync now to create the repo and push initial files
-    // zig_github_now();
-}
-
 pub export fn zig_github_check_status() callconv(.c) c_int {
     var db: ?*c.sqlite3 = null;
     if (c.sqlite3_open(dbp(), &db) != c.SQLITE_OK) {
@@ -2617,7 +2604,7 @@ fn github_sync_impl(allocator: std.mem.Allocator, token: []const u8, repo_in: []
         repo = repo_in[slash + 1 ..];
     } else {
         owner = try github_owner_login(allocator, auth);
-        repo = if (repo_in.len == 0 or std.mem.eql(u8, repo_in, owner)) "lawh-notes" else repo_in;
+        repo = if (repo_in.len == 0 or std.mem.eql(u8, repo_in, owner)) "qirtas-notes" else repo_in;
     }
     defer allocator.free(owner);
 

@@ -31,6 +31,7 @@ typedef struct {
     GtkWidget *status_pill;
     GtkWidget *lbl_words;
     GtkWidget *lbl_chars;
+    GtkWidget *lbl_lines;
     GtkWidget *sync_dot;
 
     /* Search */
@@ -140,6 +141,7 @@ typedef struct {
     } trail[GHOST_COUNT];
     int      trail_len;
     gboolean trail_needs_clear;
+    guint    cursor_tick_id;
 
     /* Layout preferences */
     GtkWidget *main_vertical_box;
@@ -147,6 +149,7 @@ typedef struct {
     GtkWidget *bottom_bar_widget;
     GtkWidget *sb_pos_dropdown;
     GtkWidget *sb_side_dropdown;
+    GtkWidget *text_width_dropdown;
     GtkWidget *divider_chk;
     GtkWidget *focus_chk;
     gboolean   enable_focus_mode;
@@ -190,11 +193,41 @@ typedef struct {
     gboolean  highlight_current_line;
     gboolean  show_right_margin;
     int       right_margin_pos;
+    gboolean  text_width_full_page;
     gboolean  show_overview_map;
     gboolean  restore_session;
     gboolean  compact_mode;
     GtkWidget *source_map;
     GtkWidget *outline_box;
+
+    /* Redesign: top tab strip, card header band, desk outline panel */
+    GtkWidget *tab_strip;            /* moved to top of main_vertical_box */
+    GtkWidget *editor_card;          /* paper card wrapper: thread+header+text */
+    GtkWidget *editor_header;        /* 46px card header band */
+    GtkWidget *editor_thread;        /* 2px gradient thread on card top */
+    GtkWidget *breadcrumb_label;     /* folder/sub/file path in header */
+    GtkWidget *outline_panel;        /* GtkRevealer on the desk */
+    GtkWidget *outline_panel_inner;  /* content box, auto-hidden when empty */
+    gboolean   outline_panel_visible;
+
+    /* User-resizable gap between the paper card and the desk edge (drag the
+     * card's outer edge); text_column_width is derived from the card width
+     * each tick, not persisted directly. */
+    int        desk_gap;
+    int        text_column_width;    /* derived cache, recomputed by paper_column_tick */
+    gboolean   resizing_text_column;
+    int        resize_drag_start_gap;
+    int        resize_drag_edge;     /* -1 = left edge, +1 = right edge, 0 = none */
+    guint      resize_column_tick_id; /* 60fps tick, active only mid-drag */
+
+    /* Read mode: view-only rendering state. Non-editable, caret hidden,
+     * markdown syntax markers always concealed, narrower reading column.
+     * Reusable by future renderers (tables, LaTeX) that hook the same flag. */
+    gboolean   read_mode;
+    GtkWidget *btn_read_mode;
+
+    /* Sidebar brand logo image, swapped between light/dark PNGs on theme change. */
+    GtkWidget *logo_image;
 } AppGui;
 
 /* Language / icon style (loaded from app_prefs at startup) */
@@ -258,12 +291,14 @@ extern GtkWidget *global_time_label;
 
 void init_css(AppGui *gui);
 void init_cursor_trail(AppGui *gui);
+void cursor_trail_wake(AppGui *gui);
+void gui_trigger_autosave(void);
+void gui_history_record(const char *path);
 void draw_cursor_trail(GtkDrawingArea *area, cairo_t *cr, int width, int height, gpointer user_data);
 gboolean on_cursor_tick(GtkWidget *widget, GdkFrameClock *frame_clock, gpointer user_data);
 void gui_tabs_refresh(AppGui *gui);
 void gui_tabs_setup_viewport(AppGui *gui);
 void qirtas_export_to_pdf(AppGui *gui);          /* themed chooser (gui_export.c) */
-void qirtas_export_editor_look(AppGui *gui);     /* legacy compositor (gui_pdf.c) */
 void arabize_digits(const char *in, char *out, size_t out_size);
 int gui_get_absolute_cursor_line(void);
 void on_font_size_changed(GtkSpinButton *spin, gpointer user_data);
@@ -273,12 +308,16 @@ void on_theme_dropdown_changed(GObject *gobject, GParamSpec *pspec, gpointer use
 void check_and_insert_hr(GtkTextBuffer *buf, AppGui *gui);
 void parse_and_render_hrs(GtkTextBuffer *buf, AppGui *gui);
 void apply_theme(AppGui *gui, const char *theme_name);
+gboolean qirtas_theme_is_dark(const char *theme_name);
+void gui_update_brand_logo(AppGui *gui);
+void toggle_read_mode(AppGui *gui);
 void update_editor_font(AppGui *gui);
 void reset_cursor_trail(AppGui *gui);
 void gui_push_undo_snapshot(void);
 void gui_reload_full_buffer(void);
 void gui_set_buffer_modified(gboolean modified);
 void on_search_text_changed(GtkSearchEntry *entry, gpointer user_data);
+void on_search_occurrences_changed(GObject *obj, GParamSpec *pspec, gpointer user_data);
 void on_search_next_clicked(GtkButton *btn, gpointer user_data);
 void on_search_prev_clicked(GtkButton *btn, gpointer user_data);
 void on_replace_clicked(GtkButton *btn, gpointer user_data);
@@ -298,6 +337,7 @@ void on_editor_left_click(GtkGestureClick *gesture, gint n_press, gdouble x, gdo
 void on_editor_motion(GtkEventControllerMotion *controller, gdouble x, gdouble y, gpointer user_data);
 void update_conceal_markdown(GtkTextBuffer *buf);
 void update_conceal_markdown_all(GtkTextBuffer *buf);
+void update_conceal_markdown_all_sync(GtkTextBuffer *buf);
 void on_buffer_changed(GtkTextBuffer *buf, gpointer user_data);
 void on_insert_text_before(GtkTextBuffer *buf, GtkTextIter *location, gchar *text, gint len, gpointer user_data);
 void on_insert_text_after(GtkTextBuffer *buf, GtkTextIter *location, gchar *text, gint len, gpointer user_data);
@@ -331,4 +371,11 @@ void trigger_save_as(AppGui *gui);
 void gui_manual_save(AppGui *gui);
 void toggle_comment_current_line(GtkTextBuffer *buf);
 void clear_selection_formatting(GtkTextBuffer *buf);
+int gui_get_buffer_modified(void);
+void on_buffer_modified_changed(GtkTextBuffer *buf, gpointer user_data);
+void select_position_range(AppGui *gui, Position start, Position end);
+Position iter_to_position(GtkTextIter *iter);
+Position advance_position(Position pos, const char *text);
+void update_paragraph_direction_lines(GtkTextBuffer *buf, gint first_line, gint last_line);
+void update_all_paragraphs_direction(GtkTextBuffer *buf);
 

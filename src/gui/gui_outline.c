@@ -54,10 +54,8 @@ void gui_outline_refresh(AppGui *gui) {
         g_free(text);
     }
 
-    /* Hide the whole section when the note has no headings */
-    GtkWidget *section = gtk_widget_get_parent(gui->outline_box); /* scrolled */
-    if (section) {
-        GtkWidget *outer = gtk_widget_get_parent(section);
-        if (outer) gtk_widget_set_visible(outer, shown > 0);
-    }
+    /* The outline panel is now user-toggled (header ≡ / × button) and lives
+     * in a resizable paned, so we no longer auto-hide it on empty headings —
+     * doing so fought the user's toggle and the paned's saved size. */
+    (void)shown;
 }

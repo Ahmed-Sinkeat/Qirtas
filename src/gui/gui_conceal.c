@@ -311,6 +311,11 @@ static void update_conceal_markdown_all_impl(GtkTextBuffer *buf) {
     gtk_text_buffer_get_iter_at_mark(buf, &cursor_iter, insert_mark);
     gint cursor_char = gtk_text_iter_get_offset(&cursor_iter);
 
+    /* Read mode: no caret to reveal syntax markers near, so conceal
+     * everything unconditionally — pass a cursor position outside the
+     * buffer so apply_regex_conceal's cursor_inside check never fires. */
+    if (global_gui && global_gui->read_mode) cursor_char = -1;
+
     apply_regex_conceal(buf, text, "\\*\\*([^\\n]*?[^\\n\\*][^\\n]*?)\\*\\*", cursor_char, 2, conceal_tag);
     apply_regex_conceal(buf, text, "==([^\\n]*?[^\\n=][^\\n]*?)==", cursor_char, 2, conceal_tag);
     apply_regex_conceal(buf, text, "(?<!\\*)\\*([^\\n\\*]+?)\\*(?!\\*)", cursor_char, 1, conceal_tag);
@@ -385,6 +390,13 @@ static gboolean idle_global_conceal_cb(gpointer user_data) {
     g_free(d);
 
     return G_SOURCE_REMOVE;
+}
+
+/* Synchronous full conceal pass — used by toggle_read_mode where the
+ * caller needs the new conceal state to land immediately (before the
+ * scroll-position restore runs), not on the next idle cycle. */
+void update_conceal_markdown_all_sync(GtkTextBuffer *buf) {
+    update_conceal_markdown_all_impl(buf);
 }
 
 void update_conceal_markdown_all(GtkTextBuffer *buf) {
@@ -470,6 +482,8 @@ static void update_conceal_markdown_impl(GtkTextBuffer *buf) {
     GtkTextIter current_cursor;
     gtk_text_buffer_get_iter_at_mark(buf, &current_cursor, insert_mark);
     gint cursor_char = gtk_text_iter_get_offset(&current_cursor);
+
+    if (global_gui && global_gui->read_mode) cursor_char = -1;
 
     apply_regex_conceal_local(buf, text, range_start_offset, "\\*\\*([^\\n]*?[^\\n\\*][^\\n]*?)\\*\\*", cursor_char, 2, conceal_tag);
     apply_regex_conceal_local(buf, text, range_start_offset, "==([^\\n]*?[^\\n=][^\\n]*?)==", cursor_char, 2, conceal_tag);
@@ -566,6 +580,7 @@ void on_mark_set(GtkTextBuffer *buf, GtkTextIter *location, GtkTextMark *mark, g
     GtkTextMark *insert_mark = gtk_text_buffer_get_insert(buf);
 
     if (mark == insert_mark) {
+        cursor_trail_wake(gui);
         /* Defer tag updates to idle so Pango layout is stable and doesn't get stale byte-index cache. */
         update_conceal_markdown(buf);
 

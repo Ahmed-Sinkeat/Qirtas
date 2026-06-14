@@ -15,6 +15,53 @@ static void on_tab_button_clicked(GtkButton *btn, gpointer user_data) {
 
 static void on_tab_close_clicked(GtkButton *btn, gpointer user_data);
 
+static void on_tab_open_in_fm_clicked(GtkButton *btn, gpointer user_data) {
+    const char *path = (const char *)user_data;
+
+    GtkWidget *popover = gtk_widget_get_ancestor(GTK_WIDGET(btn), GTK_TYPE_POPOVER);
+    if (popover) gtk_popover_popdown(GTK_POPOVER(popover));
+
+    GFile *file = g_file_new_for_path(path);
+    GtkFileLauncher *launcher = gtk_file_launcher_new(file);
+    GtkWindow *parent = global_gui ? GTK_WINDOW(global_gui->window) : NULL;
+    gtk_file_launcher_open_containing_folder(launcher, parent, NULL, NULL, NULL);
+    g_object_unref(launcher);
+    g_object_unref(file);
+}
+
+/* Right-click context menu on a tab. CAPTURE phase: the tab button's own
+ * click gesture would otherwise claim the sequence first. Currently just
+ * "Open in File Manager" — more entries to follow. */
+static void on_tab_right_click(GtkGestureClick *gesture, gint n_press,
+                                gdouble x, gdouble y, gpointer user_data) {
+    (void)n_press;
+    GtkWidget *tab_btn = gtk_event_controller_get_widget(GTK_EVENT_CONTROLLER(gesture));
+    const char *path = (const char *)user_data;
+
+    GtkWidget *popover = gtk_popover_new();
+    gtk_widget_set_parent(popover, tab_btn);
+    GdkRectangle rect = { (int)x, (int)y, 1, 1 };
+    gtk_popover_set_pointing_to(GTK_POPOVER(popover), &rect);
+    g_signal_connect(popover, "closed", G_CALLBACK(gtk_widget_unparent), NULL);
+
+    GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 4);
+    gtk_widget_set_margin_start(box, 6);
+    gtk_widget_set_margin_end(box, 6);
+    gtk_widget_set_margin_top(box, 6);
+    gtk_widget_set_margin_bottom(box, 6);
+
+    GtkWidget *item = gtk_button_new_with_label(qirtas_tr("Open in File Manager"));
+    gtk_widget_add_css_class(item, "pop-btn");
+    gtk_widget_add_css_class(item, "menu-item-btn");
+    gtk_widget_set_halign(item, GTK_ALIGN_FILL);
+    g_signal_connect(item, "clicked", G_CALLBACK(on_tab_open_in_fm_clicked), (gpointer)path);
+    gtk_box_append(GTK_BOX(box), item);
+
+    gtk_popover_set_child(GTK_POPOVER(popover), box);
+    gtk_popover_popup(GTK_POPOVER(popover));
+    gtk_gesture_set_state(GTK_GESTURE(gesture), GTK_EVENT_SEQUENCE_CLAIMED);
+}
+
 static GtkWidget *tab_item_at_index(AppGui *gui, int index) {
     if (!gui || !gui->tab_bar_box || index < 0) return NULL;
 
@@ -288,6 +335,13 @@ void gui_tabs_refresh(AppGui *gui) {
 
         gtk_button_set_child(GTK_BUTTON(tab_btn), btn_box);
         g_signal_connect(tab_btn, "clicked", G_CALLBACK(on_tab_button_clicked), gui->open_tabs[i]);
+
+        GtkGesture *tab_rc = gtk_gesture_click_new();
+        gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(tab_rc), GDK_BUTTON_SECONDARY);
+        gtk_event_controller_set_propagation_phase(GTK_EVENT_CONTROLLER(tab_rc), GTK_PHASE_CAPTURE);
+        g_signal_connect(tab_rc, "pressed", G_CALLBACK(on_tab_right_click), gui->open_tabs[i]);
+        gtk_widget_add_controller(tab_btn, GTK_EVENT_CONTROLLER(tab_rc));
+
         gtk_box_append(GTK_BOX(tab_item), tab_btn);
 
         GtkWidget *close_btn = gtk_button_new_with_label("×");
@@ -329,4 +383,108 @@ void gui_tabs_add_or_select(AppGui *gui, const char *filepath) {
     }
 
     gui_tabs_refresh(gui);
+}
+
+/* ── Tab content cache + full-buffer reload (full-buffer-editor-v2) ── */
+
+void gui_tabs_save_active_to_cache(void) {
+    AppGui *gui = global_gui;
+    if (!gui) return;
+    int idx = gui->active_tab_index;
+    if (idx != -1 && idx < gui->num_tabs) {
+        if (strcmp(gui->open_tabs[idx], "Untitled") == 0) {
+            extern const char *zig_get_document_text(void);
+            extern void zig_free_document_text(const char *ptr);
+            const char *text = zig_get_document_text();
+            g_free(gui->tab_contents[idx]);
+            gui->tab_contents[idx] = text ? g_strdup(text) : NULL;
+            zig_free_document_text(text);
+        } else {
+            extern int zig_save_document(void);
+            zig_save_document();
+        }
+        GtkTextBuffer *buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(gui->source_view));
+        gui->tab_modified[idx] = gtk_text_buffer_get_modified(buf);
+    }
+}
+
+void gui_tabs_restore_active_from_cache(void) {
+    AppGui *gui = global_gui;
+    if (!gui) return;
+    int idx = gui->active_tab_index;
+    if (idx != -1 && idx < gui->num_tabs) {
+        if (strcmp(gui->open_tabs[idx], "Untitled") == 0 && gui->tab_contents[idx] != NULL) {
+            gui_set_text(gui->tab_contents[idx], -1);
+            GtkTextBuffer *buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(gui->source_view));
+            gtk_text_buffer_set_modified(buf, gui->tab_modified[idx]);
+        }
+    }
+}
+
+/* Reset GTK's internal preferred-x (column memory for vertical caret moves)
+ * by re-placing the cursor at its current position. */
+static void gui_reset_preferred_x(AppGui *gui) {
+    if (!gui || !gui->source_view) return;
+    GtkTextBuffer *buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(gui->source_view));
+    GtkTextIter iter;
+    GtkTextMark *insert = gtk_text_buffer_get_insert(buf);
+    gtk_text_buffer_get_iter_at_mark(buf, &iter, insert);
+    gtk_text_buffer_place_cursor(buf, &iter);
+}
+
+void gui_reload_full_buffer(void) {
+    if (!global_gui || !global_gui->source_view) return;
+
+    int line = 1, col = 0;
+    gui_get_cursor_position(&line, &col);
+
+    /* set_text invalidates the whole layout, momentarily resetting scroll
+     * position (visible as a screen jump on every formatting edit). Save and
+     * restore it across the reload. */
+    double scroll_pos = 0.0;
+    if (global_gui->vadjustment)
+        scroll_pos = gtk_adjustment_get_value(global_gui->vadjustment);
+
+    extern const char *zig_get_document_text(void);
+    extern void zig_free_document_text(const char *ptr);
+
+    const char *text = zig_get_document_text();
+    if (text) {
+        global_gui->loading_viewport = TRUE;
+        GtkTextBuffer *buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(global_gui->source_view));
+        gtk_text_buffer_set_text(buf, text, -1);
+        global_gui->loading_viewport = FALSE;
+        zig_free_document_text(text);
+
+        /* set_text wipes all tags (RTL/LTR direction, wiki links) and HR
+         * widgets — reapply, same as gui_set_text on full file load. */
+        parse_and_render_hrs(buf, global_gui);
+        update_all_paragraphs_direction(buf);
+        apply_wiki_link_tags(buf);
+    }
+
+    gui_set_cursor_position(line, col);
+    if (global_gui->vadjustment)
+        gtk_adjustment_set_value(global_gui->vadjustment, scroll_pos);
+    gui_outline_refresh(global_gui);
+}
+
+void gui_prepare_tab_switch(void) {
+    if (!global_gui) return;
+    if (global_gui->source_view) {
+        /* Blank the view during the switch rather than parking a literal
+         * "Loading…" string — a blank buffer is immediately editable even
+         * before the first save. */
+        GtkTextBuffer *buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(global_gui->source_view));
+        gtk_text_buffer_set_text(buf, "", -1);
+    }
+
+    while (g_main_context_pending(NULL)) {
+        g_main_context_iteration(NULL, FALSE);
+    }
+
+    if (global_gui->vadjustment) {
+        gtk_adjustment_set_value(global_gui->vadjustment, 0.0);
+    }
+    gui_reset_preferred_x(global_gui);
 }

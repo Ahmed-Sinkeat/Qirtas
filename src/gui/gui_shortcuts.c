@@ -49,6 +49,7 @@ static AppShortcut app_shortcuts[] = {
     { "open_settings", "Open settings", "<Control>comma", 0, 0 },
     { "shortcuts_ref", "Shortcuts reference", "<Control>question", 0, 0 },
     { "toggle_sidebar", "Toggle Sidebar", "<Control><Shift>backslash", 0, 0 },
+    { "toggle_read_mode", "Toggle read mode", "<Control>e", 0, 0 },
     { "inline_code", "Inline code", "<Control>k", 0, 0 },
     { "highlight", "Highlight", "<Control><Shift>h", 0, 0 },
     { "blockquote", "Blockquote", "<Control>q", 0, 0 },

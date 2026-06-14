@@ -5,8 +5,8 @@ Four sync providers, all **on-demand** (fire on Save, app close, or the ● Sync
 | Provider | Mechanism | Where files go |
 |---|---|---|
 | Google Drive | OAuth loopback (port 12345) + Drive `appDataFolder` API, native Zig HTTP | Hidden app-data folder in your Drive |
-| Dropbox | OAuth loopback (port 5173), native Zig HTTP (Dropbox API v2) | `/lawh` folder in your Dropbox app scope |
-| GitHub | Device flow (code shown in dialog), native Zig HTTP (Contents API) | Repo `lawh-notes` (hardcoded), one commit per changed file |
+| Dropbox | OAuth loopback (port 5173), native Zig HTTP (Dropbox API v2) | `/qirtas` folder in your Dropbox app scope |
+| GitHub | Device flow (code shown in dialog), native Zig HTTP (Contents API) | Repo set via the repo-name field (default `qirtas-notes`, created private+auto-init if missing), one commit per changed file |
 | Local folder | 3-way compared file copy | `~/QirtasSync` (override: `QIRTAS_LOCAL_SYNC_DIR`) |
 
 Synced file types: `.md .txt .zig .zon .c .h` in the **current working directory** of the app.
@@ -46,7 +46,15 @@ QIRTAS_DROPBOX_APP_KEY="abcd1234" qirtas
 
 ### GitHub
 
-Nothing to register. Connect → a code dialog appears → enter it at github.com/login/device. The sync target repo is currently hardcoded to `lawh-notes`.
+Device flow needs only a client ID (no client secret). Qirtas ships with a usable default client ID; override with:
+
+```sh
+QIRTAS_GITHUB_CLIENT_ID="Iv1.xxxxxxxxxxxxxxxx" qirtas
+```
+
+To register your own OAuth App: GitHub → Settings → Developer settings → OAuth Apps → New OAuth App. Enable **Device Flow** in the app settings. No callback/redirect URL is needed for device flow.
+
+Connect → a code dialog appears → enter it at github.com/login/device. Optionally type a repo name in the field on the GitHub card before connecting (defaults to `qirtas-notes`); if the repo doesn't exist it's created as private with `auto_init`.
 
 ### Local folder
 
@@ -124,10 +132,10 @@ metadata comparison (+`_conflict` copies) to the other three backends.
 
 ## 3. Known limitations / sharp edges
 
-1. ~~Hardcoded DB path~~ **Fixed (2026-06-12):** everything now lives in `$XDG_CONFIG_HOME/qirtas/` (default `~/.config/qirtas/`) — vault.db and the sync scripts. On first launch the app automatically copies (never deletes) any data found at the old `/home/.config/lawh/` location. Path is resolved once in `main.zig` (`configDir()`/`dbPathZ()`) and exported to C as `zig_db_path()`.
+1. ~~Hardcoded DB path~~ **Fixed (2026-06-12):** everything now lives in `$XDG_CONFIG_HOME/qirtas/` (default `~/.config/qirtas/`) — vault.db and the sync scripts. Path is resolved once in `main.zig` (`configDir()`/`dbPathZ()`) and exported to C as `zig_db_path()`.
 2. ~~Helper-script dependency~~ **Fixed (2026-06-12):** Dropbox and GitHub sync are native Zig HTTP — no bash, no curl/jq, nothing outside the binary. (`curl` is still used by the GitHub *connect* device flow in `gui_sync.c`; sync itself needs nothing.) Leftover scripts in `~/.config/qirtas/` are unused and can be deleted.
-3. **GitHub repo hardcoded** to `lawh-notes`; repo entry field in the UI is not wired.
-4. `zig_github_connect()` in sync.zig writes a mock token to a nonexistent column — dead code (the real flow is the C device flow); harmless but should be deleted.
+3. ~~GitHub repo hardcoded~~ **Fixed (2026-06-12):** repo-name field on the GitHub sync card is wired; defaults to `qirtas-notes` if left blank.
+4. ~~`zig_github_connect()` dead mock-token path~~ **Fixed (2026-06-12):** removed (the real flow is the C device flow).
 5. Sync scans only the app's **current working directory**, non-recursive.
 6. Deletion does not propagate: removing a file on one side resurrects it from the other on next sync.
 6. Tokens are machine-bound (`/etc/machine-id` key derivation): restoring vault.db onto new hardware silently invalidates all sync credentials → `Error: missing credentials.` after decryption fails.

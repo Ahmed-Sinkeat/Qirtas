@@ -45,52 +45,6 @@ pub export fn zig_db_path() callconv(.c) [*:0]const u8 {
     return dbPathZ();
 }
 
-const LEGACY_CONFIG_DIR = "/home/.config/lawh";
-
-fn copyFileRaw(src_z: [*:0]const u8, dst_z: [*:0]const u8, mode: c.mode_t) void {
-    const in_fd = c.open(src_z, c.O_RDONLY);
-    if (in_fd < 0) return;
-    defer _ = c.close(in_fd);
-    const out_fd = c.open(dst_z, c.O_WRONLY | c.O_CREAT | c.O_TRUNC, mode);
-    if (out_fd < 0) return;
-    defer _ = c.close(out_fd);
-    var buf: [65536]u8 = undefined;
-    while (true) {
-        const n = c.read(in_fd, &buf, buf.len);
-        if (n <= 0) break;
-        var written: isize = 0;
-        while (written < n) {
-            const w = c.write(out_fd, @as([*]const u8, @ptrCast(&buf)) + @as(usize, @intCast(written)), @as(usize, @intCast(n - written)));
-            if (w <= 0) return;
-            written += w;
-        }
-    }
-}
-
-/// One-time migration from the old hardcoded /home/.config/lawh dir.
-/// Copies (never deletes) vault.db and the sync helper scripts into the
-/// XDG config dir if they exist there and not yet at the new location.
-fn migrateLegacyConfig() void {
-    var path_buf: [600]u8 = undefined;
-    var legacy_buf: [600]u8 = undefined;
-
-    const new_db = dbPathZ();
-    if (c.access(new_db, c.F_OK) != 0 and
-        c.access(LEGACY_CONFIG_DIR ++ "/vault.db", c.F_OK) == 0)
-    {
-        copyFileRaw(LEGACY_CONFIG_DIR ++ "/vault.db", new_db, 0o600);
-    }
-
-    const scripts = [_][]const u8{ "dropbox_sync.sh", "github_sync.sh" };
-    for (scripts) |name| {
-        const new_path = std.fmt.bufPrintZ(&path_buf, "{s}/{s}", .{ configDir(), name }) catch continue;
-        const old_path = std.fmt.bufPrintZ(&legacy_buf, "{s}/{s}", .{ LEGACY_CONFIG_DIR, name }) catch continue;
-        if (c.access(new_path.ptr, c.F_OK) != 0 and c.access(old_path.ptr, c.F_OK) == 0) {
-            copyFileRaw(old_path.ptr, new_path.ptr, 0o755);
-        }
-    }
-}
-
 comptime {
     std.testing.refAllDecls(sync);
 }
@@ -147,7 +101,10 @@ pub fn atomicWriteFile(path: []const u8, content: []const u8) !void {
 extern fn run_gui(argc: c_int, argv: ?[*]? [*]const u8) c_int;
 extern fn gui_set_text(text: [*]const u8, len: c_int) void;
 extern fn gui_set_title(title: [*:0]const u8) void;
-extern fn gui_set_sync_status(status: [*:0]const u8) void;
+extern fn gui_set_sync_state(state: c_int) void;
+const SYNC_SYNCED: c_int = 0;
+const SYNC_SAVING: c_int = 1;
+const SYNC_NOT_SYNCED: c_int = 2;
 extern fn gui_show_editor() void;
 extern fn gui_get_cursor_position(line: *c_int, col: *c_int) void;
 extern fn gui_set_cursor_position(line: c_int, col: c_int) void;
@@ -165,9 +122,23 @@ extern fn gui_tabs_restore_active_from_cache() void;
 const GuiIdleCallback = *const fn (user_data: ?*anyopaque) callconv(.c) void;
 extern fn gui_run_on_main_thread(callback: GuiIdleCallback, user_data: ?*anyopaque) void;
 
-// Active file path
-var active_file_path: [256]u8 = undefined;
+// Active file path. 1024 bytes: Arabic filenames are 2 bytes/char in UTF-8,
+// so a 256-byte buffer overflowed at ~120 characters of path.
+var active_file_path: [1024]u8 = undefined;
 var active_file_path_len: usize = 0;
+
+/// Bounds-checked setter for the active file path. Returns false and leaves
+/// the current file active when the path doesn't fit — callers must refuse
+/// the open rather than truncate to a wrong path.
+fn setActiveFilePath(path: []const u8) bool {
+    if (path.len == 0 or path.len > active_file_path.len) {
+        std.debug.print("Refusing to open: path too long ({} bytes, max {})\n", .{ path.len, active_file_path.len });
+        return false;
+    }
+    @memcpy(active_file_path[0..path.len], path);
+    active_file_path_len = path.len;
+    return true;
+}
 
 // Active file mapping variables
 var active_mmap_ptr: ?[*]const u8 = null;
@@ -333,6 +304,63 @@ pub fn decryptWithMasterKey(allocator: std.mem.Allocator, key: [32]u8, blob: []c
     return pt_buf;
 }
 
+const hex_chars = "0123456789abcdef";
+
+fn hexEncodeAlloc(allocator: std.mem.Allocator, bytes: []const u8) ![]u8 {
+    const out = try allocator.alloc(u8, bytes.len * 2);
+    for (bytes, 0..) |b, i| {
+        out[i * 2] = hex_chars[b >> 4];
+        out[i * 2 + 1] = hex_chars[b & 0xf];
+    }
+    return out;
+}
+
+fn hexDecodeAlloc(allocator: std.mem.Allocator, hex: []const u8) ![]u8 {
+    if (hex.len % 2 != 0) return error.InvalidHexLength;
+    const out = try allocator.alloc(u8, hex.len / 2);
+    for (out, 0..) |*o, i| {
+        o.* = try std.fmt.parseInt(u8, hex[i * 2 .. i * 2 + 2], 16);
+    }
+    return out;
+}
+
+// Encrypts a file_history snapshot with the vault master key. Returns a
+// hex-encoded nonce+ciphertext+tag blob (safe for the sqlite TEXT column),
+// owned by the caller — free with zig_free_document_text. Null if no
+// master key is available (vault not yet initialized).
+pub export fn zig_history_encrypt(plaintext_ptr: [*:0]const u8) ?[*:0]const u8 {
+    const key = active_master_key orelse return null;
+    const plaintext = std.mem.span(plaintext_ptr);
+    const gpa = std.heap.page_allocator;
+
+    const blob = encryptWithMasterKey(gpa, key, plaintext) catch return null;
+    defer gpa.free(blob);
+
+    const hex = hexEncodeAlloc(gpa, blob) catch return null;
+    defer gpa.free(hex);
+
+    const hex_z = gpa.dupeZ(u8, hex) catch return null;
+    return hex_z.ptr;
+}
+
+// Decrypts a hex-encoded file_history snapshot blob produced by
+// zig_history_encrypt. Returned string owned by the caller — free with
+// zig_free_document_text. Null on bad input or missing master key.
+pub export fn zig_history_decrypt(hex_ptr: [*:0]const u8) ?[*:0]const u8 {
+    const key = active_master_key orelse return null;
+    const hex = std.mem.span(hex_ptr);
+    const gpa = std.heap.page_allocator;
+
+    const blob = hexDecodeAlloc(gpa, hex) catch return null;
+    defer gpa.free(blob);
+
+    const pt = decryptWithMasterKey(gpa, key, blob) catch return null;
+    defer gpa.free(pt);
+
+    const pt_z = gpa.dupeZ(u8, pt) catch return null;
+    return pt_z.ptr;
+}
+
 fn initMasterKey() void {
     var db: ?*c.sqlite3 = null;
     if (c.sqlite3_open(dbPathZ(), &db) != c.SQLITE_OK) {
@@ -341,6 +369,12 @@ fn initMasterKey() void {
     }
     defer _ = c.sqlite3_close(db);
     _ = c.sqlite3_busy_timeout(db, 5000);
+
+    // WAL lets the background indexer/autosave threads write without holding
+    // an exclusive lock that stalls the main thread's session-save on tab
+    // switch (default rollback-journal mode blocks all readers/writers
+    // during a writer's transaction). Persists in the db file header.
+    _ = c.sqlite3_exec(db, "PRAGMA journal_mode=WAL;", null, null, null);
 
     ensureSystemKeysSchema(db.?);
 
@@ -383,8 +417,7 @@ fn initMasterKey() void {
 }
 
 pub fn main(init: std.process.Init) !void {
-    // Ensure the XDG config directory exists, then migrate any data from
-    // the old hardcoded /home/.config/lawh location (copy, never delete).
+    // Ensure the XDG config directory exists.
     {
         var dir_z_buf: [600]u8 = undefined;
         if (std.fmt.bufPrintZ(&dir_z_buf, "{s}", .{configDir()})) |dir_z| {
@@ -399,7 +432,6 @@ pub fn main(init: std.process.Init) !void {
             _ = c.mkdir(dir_z.ptr, 0o700);
         } else |_| {}
     }
-    migrateLegacyConfig();
 
     initMasterKey();
 
@@ -454,8 +486,7 @@ pub fn main(init: std.process.Init) !void {
 
     // Default to Economics_Notes.md on launch
     const default_file = "Economics_Notes.md";
-    @memcpy(active_file_path[0..default_file.len], default_file);
-    active_file_path_len = default_file.len;
+    _ = setActiveFilePath(default_file);
 
     // Launch the GTK C GUI event loop
     const status = run_gui(0, null);
@@ -512,9 +543,7 @@ pub export fn zig_on_gui_ready() callconv(.c) void {
                 
                 if (file_text != null) {
                     const file_span = std.mem.span(file_text);
-                    if (file_span.len > 0) {
-                        @memcpy(active_file_path[0..file_span.len], file_span);
-                        active_file_path_len = file_span.len;
+                    if (file_span.len > 0 and setActiveFilePath(file_span)) {
                         initial_cursor_line = line;
                         initial_cursor_col = col;
                     }
@@ -524,7 +553,7 @@ pub export fn zig_on_gui_ready() callconv(.c) void {
     }
 
     if (active_master_key == null) {
-        gui_set_sync_status("Recovery required");
+        gui_set_sync_state(SYNC_NOT_SYNCED);
         return;
     }
 
@@ -554,9 +583,9 @@ pub export fn zig_on_gui_ready() callconv(.c) void {
         var file_buf: [256]u8 = undefined;
         if (find_first_indexable_file_posix(&file_buf)) {
             const tf = std.mem.span(@as([*:0]const u8, @ptrCast(&file_buf)));
-            @memcpy(active_file_path[0..tf.len], tf);
-            active_file_path_len = tf.len;
-            file_to_load = active_file_path[0..active_file_path_len];
+            if (setActiveFilePath(tf)) {
+                file_to_load = active_file_path[0..active_file_path_len];
+            }
         }
     }
 
@@ -631,13 +660,11 @@ pub export fn zig_open_file(filename_ptr: [*:0]const u8) callconv(.c) void {
         const gpa = std.heap.page_allocator;
         line_offsets.append(gpa, 0) catch {};
 
-        @memcpy(active_file_path[0..filename.len], filename);
-        active_file_path_len = filename.len;
-
+        if (!setActiveFilePath(filename)) return;
 
         gui_set_text("", 0);
         gui_set_title("Untitled - Qirtas");
-        gui_set_sync_status("Not Synced");
+        gui_set_sync_state(SYNC_NOT_SYNCED);
         gui_show_editor();
         gui_tabs_restore_active_from_cache();
         var seed_line: c_int = 0;
@@ -670,8 +697,7 @@ pub export fn zig_open_file(filename_ptr: [*:0]const u8) callconv(.c) void {
             }
         }
 
-        @memcpy(active_file_path[0..display_name.len], display_name);
-        active_file_path_len = display_name.len;
+        if (!setActiveFilePath(display_name)) return;
 
         // Register the file watch descriptor dynamically
         register_file_watch(display_name);
@@ -932,8 +958,7 @@ pub export fn zig_open_vault(dir_path_ptr: [*:0]const u8) callconv(.c) void {
     else
         "Welcome.md";
 
-    @memcpy(active_file_path[0..file_to_open.len], file_to_open);
-    active_file_path_len = file_to_open.len;
+    if (!setActiveFilePath(file_to_open)) return;
 
     // 5. Update UI title, refresh explorer, re-index
     gui_index_all_files();
@@ -1174,8 +1199,13 @@ fn load_file_and_update_gui(filename: []const u8) !void {
     defer gpa.free(title_z);
 
     gui_set_title(title_z.ptr);
-    gui_set_sync_status("Synced");
+    gui_set_sync_state(SYNC_SYNCED);
     gui_show_editor();
+
+    // Baseline undo snapshot: without it the first edit can never be undone
+    // (zig_undo needs two entries to step back).
+    zig_undo_push(0, 0);
+    zig_undo_commit();
 }
 
 // Background autosave scheduler (checks every 30s)
@@ -1207,17 +1237,15 @@ pub export fn zig_get_text_for_line_range(start_line: c_int, end_line: c_int, ou
         line_offsets.items[end_idx];
 
     if (active_mmap_ptr) |ptr| {
-        var s = start_offset;
-        var e = end_offset;
-        const doc = ptr[0..active_mmap_size];
+        const s = start_offset;
+        const e = end_offset;
 
-        while (s < e and s < active_mmap_size and (doc[s] & 0xC0) == 0x80) {
-            s += 1;
-        }
-        while (e > s and e <= active_mmap_size and (doc[e - 1] & 0xC0) == 0x80) {
-            e -= 1;
-        }
-
+        // line_offsets are always either 0, right after an ASCII '\n', or
+        // active_mmap_size (true EOF) — all char-boundary-aligned for valid
+        // UTF-8, so no continuation-byte trimming is needed. Trimming the
+        // end offset used to clip the final byte of a multibyte char at EOF,
+        // producing a truncated UTF-8 sequence gtk_text_buffer_set_text
+        // rejected (and then segfaulted on).
         if (s >= e) {
             out_len.* = 0;
             return "";
@@ -1347,7 +1375,7 @@ fn reload_file_callback(user_data: ?*anyopaque) callconv(.c) void {
     // Never clobber unsaved edits: if the GTK buffer is dirty, surface the
     // situation instead of reloading over the user's work.
     if (gui_get_buffer_modified() != 0) {
-        gui_set_sync_status("File changed on disk (unsaved edits kept)");
+        gui_set_sync_state(SYNC_NOT_SYNCED);
         return;
     }
 
@@ -1372,7 +1400,7 @@ fn reload_file_callback(user_data: ?*anyopaque) callconv(.c) void {
     const page_text_ptr = zig_get_text_for_line_range(0, total_lines, &page_len);
     gui_set_text(page_text_ptr.?, page_len);
 
-    gui_set_sync_status("Updated");
+    gui_set_sync_state(SYNC_SYNCED);
 }
 
 fn save_session(file_path: []const u8, line: c_int, col: c_int) !void {
@@ -1631,13 +1659,26 @@ fn write_document_content_and_remap(new_content: []const u8) !void {
     try remap_active_file();
 }
 
+/// Replace the in-memory document buffer without touching the file on disk.
+/// Per-keystroke edits go through here; disk writes happen only on explicit
+/// save / autosave / close (zig_save_document). The old path wrote, encrypted
+/// and remapped the whole file on every keystroke — the typing-lag bug.
+fn update_document_content_in_memory(new_content: []const u8) !void {
+    const gpa = std.heap.page_allocator;
+    const buf = try gpa.dupe(u8, new_content);
+    if (active_mmap_ptr) |ptr| {
+        unload_file_mmap(ptr, active_mmap_size);
+    }
+    active_mmap_ptr = buf.ptr;
+    active_mmap_size = buf.len;
+    try populate_line_offsets(buf);
+}
+
 fn restoreSnapshot(entry: UndoEntry) void {
-    file_open_in_progress.store(true, .release);
-    defer file_open_in_progress.store(false, .release);
-    write_document_content_and_remap(entry.text) catch return;
+    update_document_content_in_memory(entry.text) catch return;
     gui_reload_full_buffer();
     gui_set_buffer_modified(1);
-    gui_set_sync_status("Not Synced");
+    gui_set_sync_state(SYNC_NOT_SYNCED);
     gui_set_cursor_position(entry.cursor_line, entry.cursor_col);
 }
 
@@ -1710,7 +1751,7 @@ pub export fn zig_insert_text(pos: Position, text: [*:0]const u8) callconv(.c) v
     @memcpy(new_content[offset .. offset + text_slice.len], text_slice);
     @memcpy(new_content[offset + text_slice.len ..], content[offset..]);
 
-    write_document_content_and_remap(new_content) catch {};
+    update_document_content_in_memory(new_content) catch {};
 }
 
 pub export fn zig_delete_range(start: Position, end: Position) callconv(.c) void {
@@ -1729,7 +1770,7 @@ pub export fn zig_delete_range(start: Position, end: Position) callconv(.c) void
     @memcpy(new_content[0..start_offset], content[0..start_offset]);
     @memcpy(new_content[start_offset..], content[end_offset..]);
 
-    write_document_content_and_remap(new_content) catch {};
+    update_document_content_in_memory(new_content) catch {};
 }
 
 pub export fn zig_replace_range(start: Position, end: Position, text: [*:0]const u8) callconv(.c) void {
@@ -1750,7 +1791,7 @@ pub export fn zig_replace_range(start: Position, end: Position, text: [*:0]const
     @memcpy(new_content[start_offset .. start_offset + text_slice.len], text_slice);
     @memcpy(new_content[start_offset + text_slice.len ..], content[end_offset..]);
 
-    write_document_content_and_remap(new_content) catch {};
+    update_document_content_in_memory(new_content) catch {};
 }
 
 pub export fn zig_save_document() callconv(.c) c_int {
@@ -1890,6 +1931,31 @@ test "master key file blob round-trip" {
     try std.testing.expectEqualStrings(plaintext, decrypted);
 }
 
+test "file_history snapshot encrypt/decrypt round-trip via zig_history_encrypt/decrypt" {
+    const saved = active_master_key;
+    defer active_master_key = saved;
+
+    var key: [32]u8 = undefined;
+    try fillRandomBytes(&key);
+    active_master_key = key;
+
+    const plaintext = "# عنوان\nمحتوى تجريبي للقطة تاريخ";
+    const plaintext_z = try std.testing.allocator.dupeZ(u8, plaintext);
+    defer std.testing.allocator.free(plaintext_z);
+
+    const enc = zig_history_encrypt(plaintext_z.ptr) orelse return error.EncryptFailed;
+    defer zig_free_document_text(enc);
+
+    // Ciphertext must not contain the plaintext in the clear.
+    const enc_span = std.mem.span(enc);
+    try std.testing.expect(std.mem.indexOf(u8, enc_span, "عنوان") == null);
+
+    const dec = zig_history_decrypt(enc) orelse return error.DecryptFailed;
+    defer zig_free_document_text(dec);
+
+    try std.testing.expectEqualStrings(plaintext, std.mem.span(dec));
+}
+
 test "normalizeArabicAlloc unifies letters and strips tashkeel" {
     const allocator = std.testing.allocator;
     const a = try normalizeArabicAlloc(allocator, "المدرسة");
@@ -1905,4 +1971,117 @@ test "normalizeArabicAlloc unifies letters and strips tashkeel" {
     const d = try normalizeArabicAlloc(allocator, "english stays 123");
     defer allocator.free(d);
     try std.testing.expectEqualStrings("english stays 123", d);
+}
+
+// ============================================================
+// Editing-core tests: the in-memory document buffer and undo
+// stack. These are the paths rewritten in the perf fix —
+// keystroke edits must never touch disk, and undo must restore
+// exact prior states.
+// ============================================================
+
+fn setTestDocument(path: []const u8, content: []const u8) !void {
+    zig_undo_clear();
+    try std.testing.expect(setActiveFilePath(path));
+    active_file_is_encrypted = false;
+    active_master_key = null;
+    try update_document_content_in_memory(content);
+}
+
+fn testDocText() []const u8 {
+    return if (active_mmap_ptr) |ptr| ptr[0..active_mmap_size] else "";
+}
+
+test "insert/delete/replace round-trip in memory" {
+    try setTestDocument("Untitled", "hello world\nsecond line\n");
+
+    zig_insert_text(.{ .line = 0, .col = 5 }, ",");
+    try std.testing.expectEqualStrings("hello, world\nsecond line\n", testDocText());
+
+    zig_delete_range(.{ .line = 0, .col = 5 }, .{ .line = 0, .col = 6 });
+    try std.testing.expectEqualStrings("hello world\nsecond line\n", testDocText());
+
+    zig_replace_range(.{ .line = 1, .col = 0 }, .{ .line = 1, .col = 6 }, "third");
+    try std.testing.expectEqualStrings("hello world\nthird line\n", testDocText());
+
+    // Multibyte: Arabic insert must honor char (not byte) columns.
+    zig_insert_text(.{ .line = 0, .col = 0 }, "قلم ");
+    try std.testing.expectEqualStrings("قلم hello world\nthird line\n", testDocText());
+    zig_delete_range(.{ .line = 0, .col = 0 }, .{ .line = 0, .col = 4 });
+    try std.testing.expectEqualStrings("hello world\nthird line\n", testDocText());
+}
+
+test "undo push/commit/restore word-grain" {
+    try setTestDocument("Untitled", "base\n");
+
+    // Baseline snapshot (mirrors load_file_and_update_gui).
+    zig_undo_push(0, 0);
+    zig_undo_commit();
+    try std.testing.expectEqual(@as(usize, 1), undo_top);
+
+    // Type a word: push pending per keystroke, one commit at boundary.
+    zig_insert_text(.{ .line = 0, .col = 4 }, " w");
+    zig_undo_push(1, 6);
+    zig_insert_text(.{ .line = 0, .col = 6 }, "ord");
+    zig_undo_push(1, 9);
+    zig_undo_commit();
+    try std.testing.expectEqual(@as(usize, 2), undo_top);
+    try std.testing.expectEqualStrings("base word\n", testDocText());
+
+    // Second word.
+    zig_insert_text(.{ .line = 0, .col = 9 }, " two");
+    zig_undo_push(1, 13);
+    zig_undo_commit();
+    try std.testing.expectEqual(@as(usize, 3), undo_top);
+
+    // Undo removes whole words, not chars.
+    zig_undo();
+    try std.testing.expectEqualStrings("base word\n", testDocText());
+    zig_undo();
+    try std.testing.expectEqualStrings("base\n", testDocText());
+
+    // Redo replays.
+    zig_redo();
+    try std.testing.expectEqualStrings("base word\n", testDocText());
+}
+
+test "commit without push is no-op, commit copies doc once" {
+    try setTestDocument("Untitled", "abc\n");
+    zig_undo_commit();
+    try std.testing.expectEqual(@as(usize, 0), undo_top);
+
+    zig_undo_push(0, 0);
+    zig_undo_push(0, 1); // second push while pending must not double-snapshot
+    zig_undo_commit();
+    try std.testing.expectEqual(@as(usize, 1), undo_top);
+    zig_undo_commit(); // pending consumed
+    try std.testing.expectEqual(@as(usize, 1), undo_top);
+}
+
+test "edit sequence then save equals same file as direct save" {
+    const path = "/tmp/qirtas-editcore-save-test.md";
+    defer _ = c.unlink(path);
+    try setTestDocument(path, "alpha\n");
+
+    zig_insert_text(.{ .line = 0, .col = 5 }, " beta");
+    zig_insert_text(.{ .line = 1, .col = 0 }, "gamma\n");
+    try std.testing.expectEqual(@as(c_int, 0), zig_save_document());
+
+    const fd = c.open(path, c.O_RDONLY);
+    try std.testing.expect(fd >= 0);
+    defer _ = c.close(fd);
+    var buf: [256]u8 = undefined;
+    const n = c.read(fd, &buf, buf.len);
+    try std.testing.expect(n >= 0);
+    try std.testing.expectEqualStrings(testDocText(), buf[0..@intCast(n)]);
+}
+
+test "setActiveFilePath refuses oversized and empty paths" {
+    const saved_len = active_file_path_len;
+    const long_path = "ا" ** 600; // 1200 bytes UTF-8 — over the 1024 cap
+    try std.testing.expect(!setActiveFilePath(long_path));
+    try std.testing.expect(!setActiveFilePath(""));
+    try std.testing.expectEqual(saved_len, active_file_path_len);
+    try std.testing.expect(setActiveFilePath("notes/ملف.md"));
+    try std.testing.expectEqualStrings("notes/ملف.md", active_file_path[0..active_file_path_len]);
 }

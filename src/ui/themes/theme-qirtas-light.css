@@ -2,39 +2,41 @@
  *  Qirtas — Paper & Ink (Light)
  *  theme-qirtas-light.css
  *
- *  White paper, dark ink — matches the light logo: an ink-wash
- *  splash on bright paper. The editor card is the sheet of paper
- *  (#f6f3eb, same as the qirtas source scheme); the window around
- *  it is the desk. Caret and accents are ink, not UI blue.
+ *  Matches the logo: bright white paper (#faf9f7 sampled from the
+ *  light icon tile) with deep navy calligraphy ink (#071641 sampled
+ *  from the wordmark). The editor card IS the sheet of paper; the
+ *  desk around it is a cool paper-grey, not cream. Accents, caret,
+ *  and focus rings are all the same navy ink as the logo.
  * ============================================================ */
 
 :root {
   --ui-font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
   --editor-font-family: 'Lora', 'Inter', 'Noto Naskh Arabic', 'Segoe UI', serif;
 
-  --bg-window: #e9e3d4;
-  --bg-sidebar: #f1ecdf;
-  --bg-card: #f6f3eb;
-  --bg-hover: #eae4d3;
-  --bg-active: #e5dbbe;
-  --border: #d6cdb6;
-  --border-focus: #142d4c;
-  --accent: #16324f;
-  --accent-light: #142d4c;
+  /* desk → sidebar → paper: cool neutral steps toward the logo white */
+  --bg-window: #e7e6e1;
+  --bg-sidebar: #f0efeb;
+  --bg-card: #fbfaf7;          /* the paper — same value as scheme bg */
+  --bg-hover: #ebeae4;
+  --bg-active: #dde3f2;        /* faint ink-wash, not beige */
+  --border: #d7d6cf;
+  --border-focus: #14275e;
+  --accent: #14275e;           /* logo ink */
+  --accent-light: #2c4a8a;     /* lifted ink for hover/links */
 
-  --text-primary: #1b1816;
-  --text-muted: #4d463f;
-  --text-dim: #726861;
-  --cyan: #145a6e;
+  --text-primary: #141b30;     /* near-black with ink undertone */
+  --text-muted: #3c455f;
+  --text-dim: #79809a;
+  --cyan: #2f6386;             /* steel-blue secondary (links/info) */
 
-  --folder-icon: #8a6d3b;
-  --file-icon: #726861;
-  --md-icon: #16324f;
+  --folder-icon: #98793f;      /* quill gold — the one warm note */
+  --file-icon: #79809a;
+  --md-icon: #14275e;
 
-  --status-saved: #3f6f3f;
-  --status-saving: #145a6e;
-  --status-failed: #9b2c2c;
-  --dirty-dot-color: #1b1816;
+  --status-saved: #2f6f44;
+  --status-saving: #2f6386;
+  --status-failed: #a32b2b;
+  --dirty-dot-color: #14275e;
 
-  --caret-color: #1b1816;
+  --caret-color: #0e1d4f;      /* the pen writes in ink */
 }

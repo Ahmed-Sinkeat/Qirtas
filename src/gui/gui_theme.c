@@ -37,14 +37,13 @@ static char *resolve_resource_path(const char *rel_path) {
 
 static int theme_name_to_index(const char *theme_name) {
     if (!theme_name) return 0;
-    if (strcmp(theme_name, "sepia") == 0) return 1;
-    if (strcmp(theme_name, "midnight") == 0) return 2;
-    if (strcmp(theme_name, "things") == 0) return 3;
-    if (strcmp(theme_name, "typewriter-light") == 0) return 4;
-    if (strcmp(theme_name, "typewriter-dark") == 0) return 5;
-    if (strcmp(theme_name, "qirtas") == 0) return 6;
-    if (strcmp(theme_name, "qirtas-dark") == 0) return 7;
-    if (strcmp(theme_name, "custom") == 0) return 8;
+    if (strcmp(theme_name, "sepia") == 0) return 0;
+    if (strcmp(theme_name, "typewriter-light") == 0) return 1;
+    if (strcmp(theme_name, "typewriter-dark") == 0) return 2;
+    if (strcmp(theme_name, "qirtas") == 0) return 3;
+    if (strcmp(theme_name, "qirtas-dark") == 0) return 4;
+    if (strcmp(theme_name, "navy") == 0) return 5;
+    if (strcmp(theme_name, "custom") == 0) return 6;
     return 0;
 }
 
@@ -205,34 +204,65 @@ void on_ar_font_changed(GObject *gobject, GParamSpec *pspec, gpointer user_data)
     }
 }
 
+gboolean qirtas_theme_is_dark(const char *theme_name) {
+    if (!theme_name) return FALSE;
+    if (strcmp(theme_name, "sepia") == 0 ||
+        strcmp(theme_name, "typewriter-light") == 0 ||
+        strcmp(theme_name, "qirtas") == 0 ||
+        strcmp(theme_name, "navy") == 0) {
+        return FALSE;
+    }
+    return TRUE;
+}
+
+/* Swap the sidebar brand logo between the light-mode (dark ink on pale
+ * paper) and dark-mode (pale ink) PNGs. Safe to call before gui->logo_image
+ * exists (initial build) or repeatedly on every theme change. */
+void gui_update_brand_logo(AppGui *gui) {
+    if (!gui || !gui->logo_image || !GTK_IS_IMAGE(gui->logo_image)) return;
+
+    const char *rel_path = qirtas_theme_is_dark(gui->current_theme)
+        ? "src/ui/icons/qirtas-logo-dark.png"
+        : "src/ui/icons/qirtas-logo.png";
+
+    GError *logo_err = NULL;
+    GdkPixbuf *logo_pixbuf = gdk_pixbuf_new_from_file_at_scale(
+        resolve_resource_path(rel_path), -1, 160, TRUE, &logo_err);
+    if (logo_pixbuf) {
+        GdkTexture *logo_tex = gdk_texture_new_for_pixbuf(logo_pixbuf);
+        gtk_image_set_from_paintable(GTK_IMAGE(gui->logo_image), GDK_PAINTABLE(logo_tex));
+        gtk_image_set_pixel_size(GTK_IMAGE(gui->logo_image), 48);
+        g_object_unref(logo_tex);
+        g_object_unref(logo_pixbuf);
+    } else {
+        if (logo_err) g_error_free(logo_err);
+        gtk_image_set_from_icon_name(GTK_IMAGE(gui->logo_image), "text-editor-symbolic");
+        gtk_image_set_pixel_size(GTK_IMAGE(gui->logo_image), 32);
+    }
+}
+
 void apply_theme(AppGui *gui, const char *theme_name) {
     if (!gui || !theme_name) return;
     g_strlcpy(gui->current_theme, theme_name, sizeof(gui->current_theme));
 
     AdwStyleManager *style_manager = adw_style_manager_get_default();
-    if (strcmp(theme_name, "sepia") == 0 || strcmp(theme_name, "typewriter-light") == 0 || strcmp(theme_name, "qirtas") == 0) {
+    if (strcmp(theme_name, "sepia") == 0 || strcmp(theme_name, "typewriter-light") == 0 || strcmp(theme_name, "qirtas") == 0 || strcmp(theme_name, "navy") == 0) {
         adw_style_manager_set_color_scheme(style_manager, ADW_COLOR_SCHEME_FORCE_LIGHT);
     } else {
         adw_style_manager_set_color_scheme(style_manager, ADW_COLOR_SCHEME_FORCE_DARK);
     }
 
+    gui_update_brand_logo(gui);
+
     const char *fallback_css     = CSS_FALLBACK_MINIMAL;
-    const char *gutter_color     = "#555555";
-    const char *active_num_color = "#ff79c6";
-    const char *theme_css_path   = "src/ui/themes/theme-dark.css";
+    const char *gutter_color     = "#8a8173";
+    const char *active_num_color = "#1b1816";
+    const char *theme_css_path   = "src/ui/themes/theme-qirtas-light.css";
 
     if (strcmp(theme_name, "sepia") == 0) {
         gutter_color     = "#586e75";
         active_num_color = "#a42e79";
         theme_css_path   = "src/ui/themes/theme-sepia.css";
-    } else if (strcmp(theme_name, "midnight") == 0) {
-        gutter_color     = "#555555";
-        active_num_color = "#ff79c6";
-        theme_css_path   = "src/ui/themes/theme-midnight.css";
-    } else if (strcmp(theme_name, "things") == 0) {
-        gutter_color     = "#555555";
-        active_num_color = "#2e80f2";
-        theme_css_path   = "src/ui/themes/theme-things.css";
     } else if (strcmp(theme_name, "typewriter-light") == 0) {
         gutter_color     = "#777777";
         active_num_color = "#b82e2e";
@@ -246,9 +276,13 @@ void apply_theme(AppGui *gui, const char *theme_name) {
         active_num_color = "#1b1816";
         theme_css_path   = "src/ui/themes/theme-qirtas-light.css";
     } else if (strcmp(theme_name, "qirtas-dark") == 0) {
-        gutter_color     = "#6e675c";
-        active_num_color = "#ece7db";
+        gutter_color     = "#6d7385";
+        active_num_color = "#c9a86b";
         theme_css_path   = "src/ui/themes/theme-qirtas-dark.css";
+    } else if (strcmp(theme_name, "navy") == 0) {
+        gutter_color     = "#a59d88";
+        active_num_color = "#213a63";
+        theme_css_path   = "src/ui/themes/theme-qirtas-navy.css";
     } else if (strcmp(theme_name, "custom") == 0) {
         gutter_color     = "#555555";
         active_num_color = "#2e80f2";
@@ -364,13 +398,6 @@ void apply_theme(AppGui *gui, const char *theme_name) {
             scheme = gtk_source_style_scheme_manager_get_scheme(sm, "qirtas-sepia");
             if (!scheme) scheme = gtk_source_style_scheme_manager_get_scheme(sm, "classic");
             if (!scheme) scheme = gtk_source_style_scheme_manager_get_scheme(sm, "solarized-light");
-        } else if (strcmp(theme_name, "midnight") == 0) {
-            scheme = gtk_source_style_scheme_manager_get_scheme(sm, "qirtas-midnight");
-            if (!scheme) scheme = gtk_source_style_scheme_manager_get_scheme(sm, "oblivion");
-        } else if (strcmp(theme_name, "things") == 0) {
-            scheme = gtk_source_style_scheme_manager_get_scheme(sm, "qirtas-things");
-            if (!scheme) scheme = gtk_source_style_scheme_manager_get_scheme(sm, "qirtas-dark");
-            if (!scheme) scheme = gtk_source_style_scheme_manager_get_scheme(sm, "adwaita-dark");
         } else if (strcmp(theme_name, "typewriter-light") == 0) {
             scheme = gtk_source_style_scheme_manager_get_scheme(sm, "qirtas-typewriter-light");
             if (!scheme) scheme = gtk_source_style_scheme_manager_get_scheme(sm, "classic");
@@ -387,6 +414,11 @@ void apply_theme(AppGui *gui, const char *theme_name) {
             scheme = gtk_source_style_scheme_manager_get_scheme(sm, "qirtas-night");
             if (!scheme) scheme = gtk_source_style_scheme_manager_get_scheme(sm, "qirtas-dark");
             if (!scheme) scheme = gtk_source_style_scheme_manager_get_scheme(sm, "adwaita-dark");
+        } else if (strcmp(theme_name, "navy") == 0) {
+            scheme = gtk_source_style_scheme_manager_get_scheme(sm, "qirtas-navy");
+            if (!scheme) scheme = gtk_source_style_scheme_manager_get_scheme(sm, "qirtas");
+            if (!scheme) scheme = gtk_source_style_scheme_manager_get_scheme(sm, "classic");
+            if (!scheme) scheme = gtk_source_style_scheme_manager_get_scheme(sm, "solarized-light");
         } else if (strcmp(theme_name, "custom") == 0) {
             scheme = gtk_source_style_scheme_manager_get_scheme(sm, "qirtas-dark");
             if (!scheme) scheme = gtk_source_style_scheme_manager_get_scheme(sm, "adwaita-dark");
@@ -436,22 +468,18 @@ void on_theme_dropdown_changed(GObject *gobject, GParamSpec *pspec, gpointer use
     AppGui *gui = (AppGui *)user_data;
     
     if (selected == 0) {
-        apply_theme(gui, "dark");
-    } else if (selected == 1) {
         apply_theme(gui, "sepia");
-    } else if (selected == 2) {
-        apply_theme(gui, "midnight");
-    } else if (selected == 3) {
-        apply_theme(gui, "things");
-    } else if (selected == 4) {
+    } else if (selected == 1) {
         apply_theme(gui, "typewriter-light");
-    } else if (selected == 5) {
+    } else if (selected == 2) {
         apply_theme(gui, "typewriter-dark");
-    } else if (selected == 6) {
+    } else if (selected == 3) {
         apply_theme(gui, "qirtas");
-    } else if (selected == 7) {
+    } else if (selected == 4) {
         apply_theme(gui, "qirtas-dark");
-    } else if (selected == 8) {
+    } else if (selected == 5) {
+        apply_theme(gui, "navy");
+    } else if (selected == 6) {
         GtkFileDialog *dialog = gtk_file_dialog_new();
         gtk_file_dialog_set_title(dialog, qirtas_tr("Select Custom Theme CSS"));
         

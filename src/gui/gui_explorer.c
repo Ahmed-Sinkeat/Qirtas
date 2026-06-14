@@ -12,12 +12,34 @@ typedef struct {
     GtkWidget *children_box; /* The collapsible children container */
     GtkWidget *arrow_label;  /* "▶" / "▼" label */
     gboolean   expanded;
+    gboolean   populated;    /* children_box filled in yet? (lazy) */
+    char      *dir_path;
 } TreeDirData;
+
+/* Forward declaration */
+static void tree_build_dir(GtkWidget *parent_box, const char *dir_path, int depth);
+
+static void tree_dir_data_free(gpointer data) {
+    TreeDirData *d = (TreeDirData *)data;
+    g_free(d->dir_path);
+    g_free(d);
+}
+
+/* Build children on first expand instead of recursing into every
+ * subdirectory up front — a vault with many nested folders previously
+ * walked and built widgets for the whole tree on every populate_explorer
+ * call (startup, file open/create, every sync). */
+static void tree_dir_data_ensure_populated(TreeDirData *d) {
+    if (d->populated) return;
+    d->populated = TRUE;
+    tree_build_dir(d->children_box, d->dir_path, 0);
+}
 
 static void on_tree_dir_toggle(GtkButton *btn, gpointer user_data) {
     (void)btn;
     TreeDirData *d = (TreeDirData *)user_data;
     d->expanded = !d->expanded;
+    if (d->expanded) tree_dir_data_ensure_populated(d);
     gtk_widget_set_visible(d->children_box, d->expanded);
     gtk_label_set_text(GTK_LABEL(d->arrow_label), d->expanded ? "▼" : "▶");
 }
@@ -31,9 +53,6 @@ static void on_tree_file_clicked(GtkButton *btn, gpointer user_data) {
     extern void zig_open_file(const char *filename);
     zig_open_file((const char *)user_data);
 }
-
-/* Forward declaration */
-static void tree_build_dir(GtkWidget *parent_box, const char *dir_path, int depth);
 
 /*
  * Build a single file row widget.
@@ -122,18 +141,21 @@ static GtkWidget *tree_build_dir_row(const char *dir_path, const char *name) {
     gtk_widget_set_visible(children_box, FALSE);
     gtk_box_append(GTK_BOX(wrapper), children_box);
 
-    /* Recursively populate children */
-    tree_build_dir(children_box, dir_path, 0);
-
-    /* Toggle data */
+    /* Toggle data (children populated lazily on first expand) */
     TreeDirData *data = g_new0(TreeDirData, 1);
     data->children_box = children_box;
     data->arrow_label  = arrow;
     data->expanded     = FALSE;
+    data->populated    = FALSE;
+    data->dir_path     = g_strdup(dir_path);
+
+    /* Let tree_filter_walk find this on the children_box to populate
+     * on-demand when searching into a not-yet-expanded folder. */
+    g_object_set_data(G_OBJECT(children_box), "tree_dir_data", data);
 
     g_signal_connect_data(btn, "clicked",
                           G_CALLBACK(on_tree_dir_toggle),
-                          data, (GClosureNotify)g_free, 0);
+                          data, (GClosureNotify)tree_dir_data_free, 0);
 
     return wrapper;
 }
@@ -254,6 +276,10 @@ static int tree_filter_walk(GtkWidget *box, const char *query, int *match_count)
             /* Could be a dir wrapper or children_box */
             /* Check if it has the tree-children class → recurse into it */
             if (gtk_widget_has_css_class(child, "tree-children")) {
+                if (query && strlen(query) > 0) {
+                    TreeDirData *dd = g_object_get_data(G_OBJECT(child), "tree_dir_data");
+                    if (dd) tree_dir_data_ensure_populated(dd);
+                }
                 int sub = tree_filter_walk(child, query, match_count);
                 /* Make children_box visible if it has matches and we are searching */
                 if (query && strlen(query) > 0) {
