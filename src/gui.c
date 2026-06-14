@@ -4986,21 +4986,29 @@ void gui_set_text(const char *text, int len) {
     
     g_signal_handlers_block_by_func(buf, on_insert_text_before, global_gui);
     g_signal_handlers_block_by_func(buf, on_insert_text_after, global_gui);
+    g_signal_handlers_block_by_func(buf, on_delete_range_before, global_gui);
     g_signal_handlers_block_by_func(buf, on_delete_range_after, global_gui);
     g_signal_handlers_block_by_func(buf, on_buffer_changed, global_gui);
-    
-    gtk_text_buffer_set_text(buf, text, len);
+
+    gtk_text_buffer_set_text(buf, text ? text : "", text ? len : 0);
     reset_cursor_trail(global_gui);
-    
+
     parse_and_render_hrs(buf, global_gui);
-    
+    /* A freshly loaded file is not a user edit — don't mark it dirty (was
+     * lighting the unsaved dot on every tab the moment it opened). */
+    gtk_text_buffer_set_modified(buf, FALSE);
+
     g_signal_handlers_unblock_by_func(buf, on_insert_text_before, global_gui);
     g_signal_handlers_unblock_by_func(buf, on_insert_text_after, global_gui);
+    g_signal_handlers_unblock_by_func(buf, on_delete_range_before, global_gui);
     g_signal_handlers_unblock_by_func(buf, on_delete_range_after, global_gui);
     g_signal_handlers_unblock_by_func(buf, on_buffer_changed, global_gui);
-    
+
     update_all_paragraphs_direction(buf);
     apply_wiki_link_tags(buf);
+    /* on_buffer_changed was blocked, so conceal + word/char/line stats never
+     * ran for the load. Trigger them explicitly (deferred). */
+    gui_refresh_buffer_stats();
 }
 
 void gui_get_cursor_position(int *line, int *col) {
