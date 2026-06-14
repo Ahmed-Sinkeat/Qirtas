@@ -4535,6 +4535,59 @@ static void activate(GtkApplication *app, gpointer user_data) {
 
 
 /* ============================================================
+ * EXPLORER ROW CONTEXT MENU (right-click)
+ * ============================================================ */
+
+static void on_tree_open_clicked(GtkButton *btn, gpointer user_data) {
+    popdown_ancestor_popover(GTK_WIDGET(btn));
+    extern void zig_open_file(const char *filename);
+    zig_open_file((const char *)user_data);
+}
+
+static void on_tree_open_in_fm_clicked(GtkButton *btn, gpointer user_data) {
+    popdown_ancestor_popover(GTK_WIDGET(btn));
+    const char *path = (const char *)user_data;
+    GFile *file = g_file_new_for_path(path);
+    GtkFileLauncher *launcher = gtk_file_launcher_new(file);
+    GtkWindow *parent = global_gui ? GTK_WINDOW(global_gui->window) : NULL;
+    gtk_file_launcher_open_containing_folder(launcher, parent, NULL, NULL, NULL);
+    g_object_unref(launcher);
+    g_object_unref(file);
+}
+
+/* Secondary-click handler attached to each explorer file row (gui_explorer.c).
+ * user_data is the row's file path (lifetime tied to the gesture controller). */
+void on_tree_file_right_click(GtkGestureClick *gesture, gint n_press,
+                              gdouble x, gdouble y, gpointer user_data) {
+    (void)n_press;
+    GtkWidget *row = gtk_event_controller_get_widget(GTK_EVENT_CONTROLLER(gesture));
+    const char *path = (const char *)user_data;
+
+    GtkWidget *popover = gtk_popover_new();
+    gtk_widget_set_parent(popover, row);
+    GdkRectangle rect = { (int)x, (int)y, 1, 1 };
+    gtk_popover_set_pointing_to(GTK_POPOVER(popover), &rect);
+    g_signal_connect(popover, "closed", G_CALLBACK(gtk_widget_unparent), NULL);
+
+    GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 4);
+    gtk_widget_set_margin_start(box, 6);
+    gtk_widget_set_margin_end(box, 6);
+    gtk_widget_set_margin_top(box, 6);
+    gtk_widget_set_margin_bottom(box, 6);
+
+    gtk_box_append(GTK_BOX(box),
+        status_menu_item(qirtas_icon("open"), qirtas_tr("Open"), NULL,
+                         G_CALLBACK(on_tree_open_clicked), (gpointer)path));
+    gtk_box_append(GTK_BOX(box),
+        status_menu_item(qirtas_icon("filemanager"), qirtas_tr("Open with File Manager"), NULL,
+                         G_CALLBACK(on_tree_open_in_fm_clicked), (gpointer)path));
+
+    gtk_popover_set_child(GTK_POPOVER(popover), box);
+    gtk_popover_popup(GTK_POPOVER(popover));
+    gtk_gesture_set_state(GTK_GESTURE(gesture), GTK_EVENT_SEQUENCE_CLAIMED);
+}
+
+/* ============================================================
  * APPLICATION ENTRY POINT
  * ============================================================ */
 
