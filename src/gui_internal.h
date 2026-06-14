@@ -351,8 +351,6 @@ void on_editor_left_click(GtkGestureClick *gesture, gint n_press, gdouble x, gdo
 void on_editor_motion(GtkEventControllerMotion *controller, gdouble x, gdouble y, gpointer user_data);
 void update_conceal_markdown(GtkTextBuffer *buf);
 void update_conceal_markdown_range(GtkTextBuffer *buf, int first_line, int last_line);
-void update_conceal_visible(void);
-void on_source_vscroll(GtkAdjustment *adj, gpointer data);
 void update_conceal_markdown_all(GtkTextBuffer *buf);
 void update_conceal_markdown_all_sync(GtkTextBuffer *buf);
 void on_buffer_changed(GtkTextBuffer *buf, gpointer user_data);

@@ -540,64 +540,6 @@ void update_conceal_markdown_range(GtkTextBuffer *buf, int first_line, int last_
     update_conceal_markdown_range_impl(buf, first_line, last_line);
 }
 
-/* Viewport-scoped conceal (GtkSourceView-style). Conceal markers + size
- * headings ONLY on the visible line range plus a margin, and strip those tags
- * everywhere else. GtkTextView's per-line height validation cost scales with
- * the number of tagged (height-changing) lines, so bounding the tagged set to
- * the viewport keeps scroll cheap on big documents instead of paying for every
- * line in the file. The MARGIN means lines are concealed/sized a screenful
- * before they scroll into view, so there is no marker flicker or heading-size
- * jump during normal scrolling. */
-#define CONCEAL_VIEWPORT_MARGIN 80
-void update_conceal_visible(void) {
-    if (qirtas_no_conceal) return;
-    if (!global_gui || !global_gui->source_view) return;
-    GtkTextView *tv = GTK_TEXT_VIEW(global_gui->source_view);
-    GtkTextBuffer *buf = gtk_text_view_get_buffer(tv);
-
-    GdkRectangle vr;
-    gtk_text_view_get_visible_rect(tv, &vr);
-    GtkTextIter it_top, it_bot;
-    gtk_text_view_get_iter_at_location(tv, &it_top, vr.x, vr.y);
-    gtk_text_view_get_iter_at_location(tv, &it_bot, vr.x, vr.y + vr.height);
-    int first = gtk_text_iter_get_line(&it_top);
-    int last = gtk_text_iter_get_line(&it_bot);
-
-    int total = gtk_text_buffer_get_line_count(buf);
-    int lo = first - CONCEAL_VIEWPORT_MARGIN; if (lo < 0) lo = 0;
-    int hi = last + CONCEAL_VIEWPORT_MARGIN; if (hi > total - 1) hi = total - 1;
-
-    /* Strip conceal/heading tags over the whole buffer, then reapply to
-     * [lo,hi]. Only the viewport window is ever tagged, so this remove walks a
-     * small tagged set and stays cheap. */
-    GtkTextTagTable *table = gtk_text_buffer_get_tag_table(buf);
-    GtkTextIter bs, be;
-    gtk_text_buffer_get_bounds(buf, &bs, &be);
-    static const char *const names[] = { "conceal", "heading1", "heading2", "heading3", "heading4" };
-    for (int i = 0; i < 5; i++) {
-        GtkTextTag *t = gtk_text_tag_table_lookup(table, names[i]);
-        if (t) gtk_text_buffer_remove_tag(buf, t, &bs, &be);
-    }
-
-    update_conceal_markdown_range_impl(buf, lo, hi);
-}
-
-/* Debounced reconceal of the viewport as the user scrolls. */
-static guint conceal_scroll_timeout_id = 0;
-static gboolean conceal_scroll_timeout_cb(gpointer data) {
-    (void)data;
-    conceal_scroll_timeout_id = 0;
-    update_conceal_visible();
-    return G_SOURCE_REMOVE;
-}
-void on_source_vscroll(GtkAdjustment *adj, gpointer data) {
-    (void)adj; (void)data;
-    if (qirtas_no_conceal) return;
-    if (!global_gui) return;
-    if (conceal_scroll_timeout_id) g_source_remove(conceal_scroll_timeout_id);
-    conceal_scroll_timeout_id = g_timeout_add(90, conceal_scroll_timeout_cb, NULL);
-}
-
 /* Cursor-move reconceal: the line under the caret plus one on each side, so
  * syntax markers reveal/hide as the caret enters/leaves them. */
 static void update_conceal_markdown_impl(GtkTextBuffer *buf) {

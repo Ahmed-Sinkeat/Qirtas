@@ -459,11 +459,7 @@ static gboolean buffer_stats_timeout_cb(gpointer user_data) {
     gint64 _t_c0 = _verbose ? g_get_monotonic_time() : 0;
     int _conceal_full = (gui->conceal_dirty_start < 0);
     if (_conceal_full) {
-        /* Load / tab-switch / read-mode toggle: conceal the VISIBLE region only
-         * (plus margin) rather than the whole document — keeps the tagged set,
-         * and thus GtkTextView's height-validation cost, bounded. The scroll
-         * handler reconceals new regions as they come into view. */
-        update_conceal_visible();
+        update_conceal_markdown_all(buf);
     } else {
         update_conceal_markdown_range(buf, gui->conceal_dirty_start - 1,
                                            gui->conceal_dirty_end + 1);
