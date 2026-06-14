@@ -314,10 +314,15 @@ static void on_kb_window_destroy(GtkWidget *widget, gpointer user_data) {
 
 void show_keybindings_window(AppGui *gui) {
     GtkWidget *dialog = gtk_window_new();
-    gtk_window_set_title(GTK_WINDOW(dialog), "Keyboard Shortcuts");
+    gtk_window_set_title(GTK_WINDOW(dialog), qirtas_tr("Keyboard Shortcuts"));
     gtk_window_set_default_size(GTK_WINDOW(dialog), 550, 600);
-    gtk_window_set_transient_for(GTK_WINDOW(dialog), GTK_WINDOW(gui->window));
-    gtk_window_set_modal(GTK_WINDOW(dialog), TRUE);
+    /* Float above the settings window if it's open, else the main window. */
+    GtkWindow *parent = (gui->settings_window && gtk_widget_get_visible(gui->settings_window))
+                            ? GTK_WINDOW(gui->settings_window) : GTK_WINDOW(gui->window);
+    gtk_window_set_transient_for(GTK_WINDOW(dialog), parent);
+    /* Non-modal: a modal shortcuts window blocked editing AND prevented the
+     * settings window from closing until it was dismissed. */
+    gtk_window_set_modal(GTK_WINDOW(dialog), FALSE);
     gtk_window_set_destroy_with_parent(GTK_WINDOW(dialog), TRUE);
     gtk_widget_add_css_class(dialog, "kb-dialog");
 
@@ -335,7 +340,7 @@ void show_keybindings_window(AppGui *gui) {
 
     /* Helper: add section header */
     #define KB_SECTION(label_text) { \
-        GtkWidget *_s = gtk_label_new(label_text); \
+        GtkWidget *_s = gtk_label_new(qirtas_tr(label_text)); \
         gtk_widget_add_css_class(_s, "kb-section-label"); \
         gtk_widget_set_halign(_s, GTK_ALIGN_START); \
         gtk_box_append(GTK_BOX(vbox), _s); \
@@ -358,7 +363,7 @@ void show_keybindings_window(AppGui *gui) {
         gtk_widget_add_css_class(_k, "kb-key"); \
         gtk_widget_set_halign(_k, GTK_ALIGN_START); \
         if (_curr_shortcut) g_free(_curr_shortcut); \
-        GtkWidget *_d = gtk_label_new(description); \
+        GtkWidget *_d = gtk_label_new(qirtas_tr(description)); \
         gtk_widget_add_css_class(_d, "kb-desc"); \
         gtk_widget_set_halign(_d, GTK_ALIGN_START); \
         gtk_widget_set_hexpand(_d, TRUE); \
