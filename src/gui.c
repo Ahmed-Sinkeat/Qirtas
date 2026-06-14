@@ -351,7 +351,7 @@ static const char *CSS_FALLBACK_MINIMAL =
     ".tree-row   { padding: 4px 8px; border-radius: 6px; }\n"
     ".bottom-bar { padding: 4px 12px; }\n";
 
-static char current_theme[32] = "dark";
+static char current_theme[32] = "qirtas";
 static char custom_theme_path[1024] = "";
 void on_theme_dropdown_changed(GObject *gobject, GParamSpec *pspec, gpointer user_data);
 /* ghost shadow carets, push only on big jumps, decay fast.
@@ -3934,11 +3934,8 @@ static void activate(GtkApplication *app, gpointer user_data) {
     gtk_widget_set_halign(theme_label, GTK_ALIGN_START);
 
     const char *themes[] = {
-        "Classic Sepia",
-        "Typewriter Light",
-        "Typewriter Dark",
-        "Qirtas Ink",
-        "Qirtas Ink Dark",
+        "Qirtas Light",
+        "Qirtas Dark",
         "Paper & Ink Navy",
         "Add Custom Theme...",
         NULL
@@ -3946,13 +3943,10 @@ static void activate(GtkApplication *app, gpointer user_data) {
     GtkWidget *theme_dropdown = gtk_drop_down_new_from_strings(themes);
 
     int theme_idx = 0;
-    if (strcmp(current_theme, "sepia") == 0) theme_idx = 0;
-    else if (strcmp(current_theme, "typewriter-light") == 0) theme_idx = 1;
-    else if (strcmp(current_theme, "typewriter-dark") == 0) theme_idx = 2;
-    else if (strcmp(current_theme, "qirtas") == 0) theme_idx = 3;
-    else if (strcmp(current_theme, "qirtas-dark") == 0) theme_idx = 4;
-    else if (strcmp(current_theme, "navy") == 0) theme_idx = 5;
-    else if (strcmp(current_theme, "custom") == 0) theme_idx = 6;
+    if (strcmp(current_theme, "qirtas") == 0) theme_idx = 0;
+    else if (strcmp(current_theme, "qirtas-dark") == 0) theme_idx = 1;
+    else if (strcmp(current_theme, "navy") == 0) theme_idx = 2;
+    else if (strcmp(current_theme, "custom") == 0) theme_idx = 3;
     gtk_drop_down_set_selected(GTK_DROP_DOWN(theme_dropdown), theme_idx);
     
     g_signal_connect(theme_dropdown, "notify::selected", G_CALLBACK(on_theme_dropdown_changed), gui);
@@ -4033,28 +4027,8 @@ static void activate(GtkApplication *app, gpointer user_data) {
     g_signal_connect(trail_chk, "toggled", G_CALLBACK(on_trail_toggled), gui);
     gtk_box_append(GTK_BOX(pop_box), trail_chk);
 
-    GtkWidget *trail_color_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
-    GtkWidget *trail_color_lbl = gtk_label_new(qirtas_tr("Trail Color"));
-    gtk_widget_set_hexpand(trail_color_lbl, TRUE);
-    gtk_widget_set_halign(trail_color_lbl, GTK_ALIGN_START);
-    gtk_box_append(GTK_BOX(trail_color_row), trail_color_lbl);
-
-    GtkColorDialog *color_dialog = gtk_color_dialog_new();
-    gtk_color_dialog_set_modal(color_dialog, TRUE);
-    GtkWidget *trail_color_btn = gtk_color_dialog_button_new(color_dialog);
-    gtk_color_dialog_button_set_rgba(GTK_COLOR_DIALOG_BUTTON(trail_color_btn), &gui->custom_trail_color);
-    gtk_widget_set_sensitive(trail_color_btn, gui->use_custom_trail_color);
-    g_signal_connect(trail_color_btn, "notify::rgba", G_CALLBACK(on_trail_color_changed), gui);
-    gtk_box_append(GTK_BOX(trail_color_row), trail_color_btn);
-    gui->trail_color_btn = trail_color_btn;
-
-    GtkWidget *trail_color_custom_chk = gtk_check_button_new_with_label(qirtas_tr("Custom"));
-    gtk_check_button_set_active(GTK_CHECK_BUTTON(trail_color_custom_chk), gui->use_custom_trail_color);
-    g_signal_connect(trail_color_custom_chk, "toggled", G_CALLBACK(on_trail_color_custom_toggled), gui);
-    gtk_box_append(GTK_BOX(trail_color_row), trail_color_custom_chk);
-    gui->trail_color_chk = trail_color_custom_chk;
-
-    gtk_box_append(GTK_BOX(pop_box), trail_color_row);
+    /* Trail-color customization removed — the cursor trail uses the default
+     * (theme caret) color. gui->use_custom_trail_color stays 0. */
 
     GtkWidget *pointer_color_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
     GtkWidget *pointer_color_lbl = gtk_label_new(qirtas_tr("Pointer Color"));
@@ -4062,6 +4036,8 @@ static void activate(GtkApplication *app, gpointer user_data) {
     gtk_widget_set_halign(pointer_color_lbl, GTK_ALIGN_START);
     gtk_box_append(GTK_BOX(pointer_color_row), pointer_color_lbl);
 
+    GtkColorDialog *color_dialog = gtk_color_dialog_new();
+    gtk_color_dialog_set_modal(color_dialog, TRUE);
     GtkWidget *pointer_color_btn = gtk_color_dialog_button_new(color_dialog);
     gtk_color_dialog_button_set_rgba(GTK_COLOR_DIALOG_BUTTON(pointer_color_btn), &gui->custom_pointer_color);
     gtk_widget_set_sensitive(pointer_color_btn, gui->use_custom_pointer_color);
