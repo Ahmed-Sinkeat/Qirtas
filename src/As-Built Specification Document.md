@@ -236,6 +236,16 @@ The §4.5 fix patched our own call sites, but the same buggy GTK path (`gtk_text
   they exceed 8 ms (`QIRTAS_PERF_BEGIN/END` macros in `gui_internal.h`).
   Optimization policy: fix what this log catches; the deferred items (delta
   undo, viewport-limited conceal) only matter if it ever fires.
+- **`QIRTAS_BENCH=<file>`** — offline edit-path microbenchmark. Loads the file
+  into the real `doc_buf`, drives `zig_insert_text` N times mid-document, and
+  reports min/avg/max ms for `zig_insert_text` and `populate_line_offsets`,
+  then exits before the GUI. Isolates per-keystroke CPU (mine) from GTK layout
+  (the widget's). Measured 2026-06-14: `populate_line_offsets` is ~100% of the
+  per-keystroke cost (the in-place splice memmove is free), strictly
+  O(document) — 0.52 ms @ 29 k bytes / 3 k lines → 10.2 ms @ 581 k / 60 k lines
+  (linear). Scrolling triggers none of this path (edit code only runs on buffer
+  change), so scroll CPU is pure GTK relayout. Next no-viewport win:
+  incrementalize `populate_line_offsets` instead of full rescan per edit.
 - **CI** — `.github/workflows/ci.yml` builds + tests on every push
   (ubuntu-24.04, GTK stack via apt, Zig 0.16.0). First run may need version
   pin adjustments.
