@@ -455,11 +455,17 @@ fn runEditBench(path: []const u8) void {
     var ins_max: i128 = 0;
     var ins_sum: i128 = 0;
 
+    var mismatches: usize = 0;
+    var first_bad: i64 = -1;
+    var verify_buf: std.ArrayList(usize) = .empty;
+    defer verify_buf.deinit(gpa);
+
     var k: usize = 0;
     while (k < N) : (k += 1) {
         // insert one char mid-document (worst-ish: half the tail shifts)
         const mid: Position = .{ .line = @intCast(line_offsets.items.len / 2), .col = 0 };
 
+        // incremental edit path (what ships)
         const t0 = nowNs();
         zig_insert_text(mid, "x");
         const t1 = nowNs();
@@ -468,7 +474,11 @@ fn runEditBench(path: []const u8) void {
         if (ins_d < ins_min) ins_min = ins_d;
         if (ins_d > ins_max) ins_max = ins_d;
 
-        // isolated populate_line_offsets timing
+        // snapshot the incremental result, then recompute from scratch and
+        // compare — proves the incremental offsets stay byte-correct.
+        verify_buf.clearRetainingCapacity();
+        verify_buf.appendSlice(gpa, line_offsets.items) catch {};
+
         const t2 = nowNs();
         populate_line_offsets(doc_buf.items) catch {};
         const t3 = nowNs();
@@ -476,6 +486,20 @@ fn runEditBench(path: []const u8) void {
         plo_sum += plo_d;
         if (plo_d < plo_min) plo_min = plo_d;
         if (plo_d > plo_max) plo_max = plo_d;
+
+        var ok = verify_buf.items.len == line_offsets.items.len;
+        if (ok) {
+            for (verify_buf.items, line_offsets.items) |a, b| {
+                if (a != b) {
+                    ok = false;
+                    break;
+                }
+            }
+        }
+        if (!ok) {
+            mismatches += 1;
+            if (first_bad < 0) first_bad = @intCast(k);
+        }
     }
 
     const f = struct {
@@ -484,8 +508,48 @@ fn runEditBench(path: []const u8) void {
         }
     };
     _ = c.printf("[bench] file=%.*s bytes=%zu lines=%zu iters=%zu\n", @as(c_int, @intCast(path.len)), path.ptr, bytes, lines, N);
-    _ = c.printf("[bench] zig_insert_text         min=%.4f avg=%.4f max=%.4f ms\n", f.ms(ins_min), f.ms(@divTrunc(ins_sum, @as(i128, N))), f.ms(ins_max));
-    _ = c.printf("[bench] populate_line_offsets   min=%.4f avg=%.4f max=%.4f ms\n", f.ms(plo_min), f.ms(@divTrunc(plo_sum, @as(i128, N))), f.ms(plo_max));
+    _ = c.printf("[bench] incremental zig_insert_text  min=%.4f avg=%.4f max=%.4f ms\n", f.ms(ins_min), f.ms(@divTrunc(ins_sum, @as(i128, N))), f.ms(ins_max));
+    _ = c.printf("[bench] full populate_line_offsets   min=%.4f avg=%.4f max=%.4f ms\n", f.ms(plo_min), f.ms(@divTrunc(plo_sum, @as(i128, N))), f.ms(plo_max));
+    _ = c.printf("[bench] correctness(insert): %zu/%zu mismatches (first_bad_iter=%lld)\n", mismatches, N, @as(c_longlong, first_bad));
+
+    // Mixed-edit correctness sweep: delete, replace, multi-char + newline
+    // inserts at varied offsets, each checked against a full rescan.
+    var mixed_bad: usize = 0;
+    var step: usize = 0;
+    while (step < 4000) : (step += 1) {
+        const len = doc_buf.items.len;
+        if (len < 8) break;
+        const a: Position = .{ .line = @intCast((line_offsets.items.len / 3) + (step % 7)), .col = 0 };
+        switch (step % 4) {
+            0 => zig_insert_text(a, "hello\nworld\n"), // multi-char + newlines
+            1 => {
+                const b: Position = .{ .line = a.line + 1, .col = 0 };
+                zig_delete_range(a, b); // delete a whole line (crosses '\n')
+            },
+            2 => {
+                const b: Position = .{ .line = a.line, .col = 3 };
+                zig_replace_range(a, b, "XY"); // shrink replace
+            },
+            else => {
+                const b: Position = .{ .line = a.line, .col = 2 };
+                zig_replace_range(a, b, "a\nbc\n"); // grow replace w/ newlines
+            },
+        }
+        verify_buf.clearRetainingCapacity();
+        verify_buf.appendSlice(gpa, line_offsets.items) catch {};
+        populate_line_offsets(doc_buf.items) catch {};
+        var ok2 = verify_buf.items.len == line_offsets.items.len;
+        if (ok2) {
+            for (verify_buf.items, line_offsets.items) |x, y| {
+                if (x != y) {
+                    ok2 = false;
+                    break;
+                }
+            }
+        }
+        if (!ok2) mixed_bad += 1;
+    }
+    _ = c.printf("[bench] correctness(mixed del/replace/nl): %zu/%zu mismatches\n", mixed_bad, step);
 }
 
 pub fn main(init: std.process.Init) !void {
@@ -1261,6 +1325,58 @@ fn populate_line_offsets(content: []const u8) !void {
     }
 }
 
+// First index i where line_offsets[i] > threshold (binary search).
+fn lineIdxFirstGreater(threshold: usize) usize {
+    var lo: usize = 0;
+    var hi: usize = line_offsets.items.len;
+    while (lo < hi) {
+        const mid = lo + (hi - lo) / 2;
+        if (line_offsets.items[mid] > threshold) hi = mid else lo = mid + 1;
+    }
+    return lo;
+}
+
+// Incremental line_offsets maintenance — avoids the O(document) full rescan in
+// populate_line_offsets on every keystroke. Mirrors its semantics exactly:
+// one entry per '\n' (the offset just after it), entry 0 always present.
+fn lineOffsetsInsert(off: usize, text: []const u8) !void {
+    const gpa = std.heap.page_allocator;
+    const L = text.len;
+    if (L == 0) return;
+    const idx = lineIdxFirstGreater(off);
+    // Shift every line start after the insertion point right by L.
+    var i = idx;
+    while (i < line_offsets.items.len) : (i += 1) line_offsets.items[i] += L;
+    // Each '\n' in the inserted text starts a new line at off+k+1. These all
+    // fall in (off, off+L], i.e. before the just-shifted entries, so they
+    // insert in order at idx.
+    var tmp: std.ArrayList(usize) = .empty;
+    defer tmp.deinit(gpa);
+    var k: usize = 0;
+    while (k < text.len) : (k += 1) {
+        if (text[k] == '\n') try tmp.append(gpa, off + k + 1);
+    }
+    if (tmp.items.len > 0) try line_offsets.insertSlice(gpa, idx, tmp.items);
+}
+
+fn lineOffsetsDelete(start: usize, end: usize) void {
+    const gpa = std.heap.page_allocator;
+    if (end <= start) return;
+    const D = end - start;
+    const idx_lo = lineIdxFirstGreater(start); // first entry with value > start
+    const idx_hi = lineIdxFirstGreater(end); // first entry with value > end
+    // Entries in [idx_lo, idx_hi) have start < value <= end → inside the
+    // deleted bytes → gone. Entries from idx_hi shift left by D.
+    var i = idx_hi;
+    while (i < line_offsets.items.len) : (i += 1) line_offsets.items[i] -= D;
+    if (idx_hi > idx_lo) {
+        line_offsets.replaceRange(gpa, idx_lo, idx_hi - idx_lo, &[_]usize{}) catch {
+            // Shrink-only replaceRange shouldn't fail; rescan if it ever does.
+            populate_line_offsets(doc_buf.items) catch {};
+        };
+    }
+}
+
 fn remap_active_file() !void {
     if (!file_open_in_progress.load(.acquire)) return error.RemapWithoutGuard;
     const gpa = std.heap.page_allocator;
@@ -1850,7 +1966,7 @@ pub export fn zig_insert_text(pos: Position, text: [*:0]const u8) callconv(.c) v
     // per-keystroke allocation unless the buffer must grow.
     doc_buf.insertSlice(gpa, offset, text_slice) catch return;
     syncActiveView();
-    populate_line_offsets(doc_buf.items) catch {};
+    lineOffsetsInsert(offset, text_slice) catch populate_line_offsets(doc_buf.items) catch {};
 }
 
 pub export fn zig_delete_range(start: Position, end: Position) callconv(.c) void {
@@ -1861,7 +1977,7 @@ pub export fn zig_delete_range(start: Position, end: Position) callconv(.c) void
     const gpa = std.heap.page_allocator;
     doc_buf.replaceRange(gpa, start_offset, end_offset - start_offset, "") catch return;
     syncActiveView();
-    populate_line_offsets(doc_buf.items) catch {};
+    lineOffsetsDelete(start_offset, end_offset);
 }
 
 pub export fn zig_replace_range(start: Position, end: Position, text: [*:0]const u8) callconv(.c) void {
@@ -1873,7 +1989,9 @@ pub export fn zig_replace_range(start: Position, end: Position, text: [*:0]const
     const gpa = std.heap.page_allocator;
     doc_buf.replaceRange(gpa, start_offset, end_offset - start_offset, text_slice) catch return;
     syncActiveView();
-    populate_line_offsets(doc_buf.items) catch {};
+    // Delete the old span, then insert the new text at the same offset.
+    lineOffsetsDelete(start_offset, end_offset);
+    lineOffsetsInsert(start_offset, text_slice) catch populate_line_offsets(doc_buf.items) catch {};
 }
 
 pub export fn zig_save_document() callconv(.c) c_int {
