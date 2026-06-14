@@ -3849,6 +3849,9 @@ static void activate(GtkApplication *app, gpointer user_data) {
 
     GtkAdjustment *vadj = gtk_scrolled_window_get_vadjustment(GTK_SCROLLED_WINDOW(scrolled));
     gui->vadjustment = vadj;
+    /* Reconceal the viewport (debounced) as the user scrolls, so conceal tags
+     * stay scoped to the visible region — keeps scroll cheap on big docs. */
+    g_signal_connect(vadj, "value-changed", G_CALLBACK(on_source_vscroll), gui);
 
     /* Overview map — floats over the right edge of the paper card */
     GtkWidget *source_map = gtk_source_map_new();
