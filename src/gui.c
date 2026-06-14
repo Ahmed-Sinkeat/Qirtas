@@ -769,10 +769,49 @@ static void on_popover_closed(GtkPopover *popover, gpointer user_data) {
     gtk_editable_set_text(GTK_EDITABLE(w->entry_name), "");
 }
 
-static gboolean on_window_close_request(GtkWindow *window, gpointer user_data) {
-    (void)window;
+/* Final cleanup: fires exactly once when the GApplication terminates, no
+ * matter how (window close, quit action, last-window-removed). The right
+ * place for the DB flush — close-request only covers the window path. */
+static void on_app_shutdown(GApplication *app, gpointer user_data) {
+    (void)app; (void)user_data;
     zig_on_shutdown();
-    return FALSE; // Allow window closure
+}
+
+static void on_close_confirm_response(AdwAlertDialog *dlg, const char *response, gpointer user_data) {
+    (void)dlg;
+    AppGui *gui = (AppGui *)user_data;
+    if (!gui) return;
+    if (strcmp(response, "save") == 0) {
+        gui_manual_save(gui);
+        gtk_window_destroy(GTK_WINDOW(gui->window));   /* bypasses close-request */
+    } else if (strcmp(response, "discard") == 0) {
+        gui_set_buffer_modified(FALSE);
+        gtk_window_destroy(GTK_WINDOW(gui->window));
+    }
+    /* "cancel": keep the window open, do nothing. */
+}
+
+static gboolean on_window_close_request(GtkWindow *window, gpointer user_data) {
+    AppGui *gui = (AppGui *)user_data;
+    /* Unsaved changes → prompt Save / Discard / Cancel and block the close
+     * until the user decides. Cleanup itself runs from the shutdown signal. */
+    if (gui && gui_get_buffer_modified()) {
+        AdwAlertDialog *dlg = ADW_ALERT_DIALOG(
+            adw_alert_dialog_new(qirtas_tr("Unsaved changes"),
+                                 qirtas_tr("Save your changes before closing?")));
+        adw_alert_dialog_add_responses(dlg,
+            "cancel",  qirtas_tr("Cancel"),
+            "discard", qirtas_tr("Discard"),
+            "save",    qirtas_tr("Save"), NULL);
+        adw_alert_dialog_set_response_appearance(dlg, "discard", ADW_RESPONSE_DESTRUCTIVE);
+        adw_alert_dialog_set_response_appearance(dlg, "save", ADW_RESPONSE_SUGGESTED);
+        adw_alert_dialog_set_default_response(dlg, "save");
+        adw_alert_dialog_set_close_response(dlg, "cancel");
+        g_signal_connect(dlg, "response", G_CALLBACK(on_close_confirm_response), gui);
+        adw_dialog_present(ADW_DIALOG(dlg), GTK_WIDGET(window));
+        return TRUE;   /* block; the response handler destroys when ready */
+    }
+    return FALSE;       /* clean → allow close, shutdown signal does cleanup */
 }
 
 static void on_popover_destroy(GtkWidget *widget, gpointer user_data) {
@@ -4505,6 +4544,7 @@ int run_gui(int argc, char **argv) {
     AdwApplication *app = adw_application_new("org.qirtas.notebook",
                                                G_APPLICATION_DEFAULT_FLAGS);
     g_signal_connect(app, "activate", G_CALLBACK(activate), NULL);
+    g_signal_connect(app, "shutdown", G_CALLBACK(on_app_shutdown), NULL);
     int status = g_application_run(G_APPLICATION(app), argc, argv);
     g_object_unref(app);
     gtk_source_finalize();
