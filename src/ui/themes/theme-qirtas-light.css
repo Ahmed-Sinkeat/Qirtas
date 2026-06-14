@@ -13,30 +13,32 @@
   --ui-font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
   --editor-font-family: 'Lora', 'Inter', 'Noto Naskh Arabic', 'Segoe UI', serif;
 
-  /* desk → sidebar → paper: cool neutral steps toward the logo white */
-  --bg-window: #e7e6e1;
-  --bg-sidebar: #f0efeb;
-  --bg-card: #fbfaf7;          /* the paper — same value as scheme bg */
-  --bg-hover: #ebeae4;
-  --bg-active: #dde3f2;        /* faint ink-wash, not beige */
-  --border: #d7d6cf;
-  --border-focus: #14275e;
-  --accent: #14275e;           /* logo ink */
-  --accent-light: #2c4a8a;     /* lifted ink for hover/links */
+  /* Warm paper palette from the design handoff (Qirtas Light):
+   * beige desk → cream sidebar → warm-white paper sheet. */
+  --bg-window: #e1dccd;        /* desk */
+  --bg-sidebar: #e6e1d4;       /* sidebar / library */
+  --bg-card: #faf7f0;          /* the paper sheet */
+  --bg-hover: #e6e1d4;
+  --bg-active: #dfe6f1;        /* active note row — faint navy wash */
+  --border: #d8d0bf;
+  --border-focus: #213a63;
+  --accent: #213a63;           /* navy from the app icon */
+  --accent-light: #2f4f86;     /* lifted navy for hover/links */
 
-  --text-primary: #141b30;     /* near-black with ink undertone */
-  --text-muted: #3c455f;
-  --text-dim: #79809a;
-  --cyan: #2f6386;             /* steel-blue secondary (links/info) */
+  /* Warm ink hierarchy — high-contrast body, readable muted tiers. */
+  --text-primary: #2a2722;     /* headings / strong */
+  --text-muted: #4a4537;       /* body text */
+  --text-dim: #76705f;         /* secondary / labels */
+  --cyan: #2f4f86;             /* secondary navy (links/info) */
 
-  --folder-icon: #98793f;      /* quill gold — the one warm note */
-  --file-icon: #79809a;
-  --md-icon: #14275e;
+  --folder-icon: #a59d88;      /* warm grey-gold */
+  --file-icon: #8c8571;
+  --md-icon: #213a63;
 
   --status-saved: #2f6f44;
-  --status-saving: #2f6386;
+  --status-saving: #2f4f86;
   --status-failed: #a32b2b;
-  --dirty-dot-color: #14275e;
+  --dirty-dot-color: #213a63;
 
-  --caret-color: #0e1d4f;      /* the pen writes in ink */
+  --caret-color: #213a63;      /* the pen writes in navy ink */
 }
