@@ -16,8 +16,6 @@
  * own take on the tradition, not a reproduction of any publisher's
  * template. */
 
-extern void qirtas_export_editor_look(AppGui *gui); /* legacy compositor path */
-
 /* ── Theme definition: adding a theme is data, not code ── */
 typedef struct {
     const char *id;
@@ -46,6 +44,7 @@ typedef struct {
     gboolean frame;            /* double-rule border */
     gboolean eastern_folios;   /* page numbers ٠١٢, ‹ ٥ › style */
     gboolean title_header;     /* doc title in top margin */
+    gboolean hide_page_number; /* suppress the footer folio entirely */
 } PrintTheme;
 
 static const PrintTheme THEMES[] = {
@@ -92,6 +91,18 @@ static const PrintTheme THEMES[] = {
         .ink = "#222222", .accent = "#222222",
         .rubricate_bold = FALSE, .quote_accent = FALSE,
         .frame = FALSE, .eastern_folios = FALSE, .title_header = FALSE,
+    },
+    {
+        .id = "editor", .name = "Editor — Plain", .sample = "Markdown rendered, no folios",
+        .page_w = 595.276, .page_h = 841.890,
+        .margin_top = 56, .margin_bottom = 56, .margin_inner = 56, .margin_outer = 56,
+        .body_font = "Inter", .heading_font = "Inter", .code_font = "JetBrains Mono",
+        .body_size = 11.0, .line_spacing = 1.5, .justify = FALSE, .rtl_furniture = FALSE,
+        .h_scale = { 1.7, 1.4, 1.2 }, .heading_center = FALSE, .number_headings = FALSE,
+        .ink = "#1b1b1b", .accent = "#2a4d8f",
+        .rubricate_bold = FALSE, .quote_accent = FALSE,
+        .frame = FALSE, .eastern_folios = FALSE, .title_header = FALSE,
+        .hide_page_number = TRUE,
     },
 };
 #define N_THEMES ((int)G_N_ELEMENTS(THEMES))
@@ -349,24 +360,27 @@ static void draw_page_furniture(Render *r) {
     pango_layout_set_font_description(pl, fd);
 
     /* footer folio */
-    char num[32], shown[96];
-    snprintf(num, sizeof(num), "%d", r->page_num);
-    if (t->eastern_folios) {
-        char ar[64];
-        arabize_digits(num, ar, sizeof(ar));
-        snprintf(shown, sizeof(shown), "‹ %s ›", ar);
-    } else {
-        snprintf(shown, sizeof(shown), "%s", num);
+    if (!t->hide_page_number) {
+        char num[32], shown[96];
+        snprintf(num, sizeof(num), "%d", r->page_num);
+        if (t->eastern_folios) {
+            char ar[64];
+            arabize_digits(num, ar, sizeof(ar));
+            snprintf(shown, sizeof(shown), "‹ %s ›", ar);
+        } else {
+            snprintf(shown, sizeof(shown), "%s", num);
+        }
+        pango_layout_set_text(pl, shown, -1);
+        int pw, ph;
+        pango_layout_get_pixel_size(pl, &pw, &ph);
+        gdk_cairo_set_source_rgba(cr, &r->ink);
+        cairo_move_to(cr, (t->page_w - pw) / 2.0, t->page_h - t->margin_bottom + (t->margin_bottom - ph) / 2.0);
+        pango_cairo_show_layout(cr, pl);
     }
-    pango_layout_set_text(pl, shown, -1);
-    int pw, ph;
-    pango_layout_get_pixel_size(pl, &pw, &ph);
-    gdk_cairo_set_source_rgba(cr, &r->ink);
-    cairo_move_to(cr, (t->page_w - pw) / 2.0, t->page_h - t->margin_bottom + (t->margin_bottom - ph) / 2.0);
-    pango_cairo_show_layout(cr, pl);
 
     /* header: document title */
     if (t->title_header && r->doc_title && r->doc_title[0] && r->page_num > 1) {
+        int pw, ph;
         pango_layout_set_text(pl, r->doc_title, -1);
         pango_layout_get_pixel_size(pl, &pw, &ph);
         cairo_move_to(cr, (t->page_w - pw) / 2.0, (t->margin_top - ph) / 2.0 + 6.0);
@@ -633,7 +647,7 @@ static void on_export_save_response(GObject *source_object, GAsyncResult *res, g
         char *path = g_file_get_path(file);
         if (path) {
             gboolean ok = export_with_theme(ec->gui, &THEMES[ec->theme_idx], path);
-            gui_set_sync_status(ok ? "PDF exported" : "PDF export failed");
+            gui_set_sync_state(ok ? QIRTAS_SYNC_SYNCED : QIRTAS_SYNC_NOT_SYNCED);
             g_free(path);
         }
         g_object_unref(file);
@@ -669,10 +683,6 @@ static void on_theme_card_clicked(GtkButton *btn, gpointer user_data) {
     GtkWidget *win = gtk_widget_get_ancestor(GTK_WIDGET(btn), GTK_TYPE_WINDOW);
     if (win) gtk_window_destroy(GTK_WINDOW(win));
 
-    if (idx < 0) {
-        qirtas_export_editor_look(gui);
-        return;
-    }
     qirtas_pref_set_string("export_theme", THEMES[idx].id);
     launch_save_dialog(gui, idx);
 }
@@ -733,12 +743,6 @@ void qirtas_export_to_pdf(AppGui *gui) {
         gtk_box_append(GTK_BOX(vbox), card);
     }
     g_free(last);
-
-    GtkWidget *plain = gtk_button_new_with_label(qirtas_tr("Editor look (syntax highlighted)"));
-    gtk_widget_add_css_class(plain, "pop-btn");
-    g_object_set_data(G_OBJECT(plain), "theme-idx", GINT_TO_POINTER(-1));
-    g_signal_connect(plain, "clicked", G_CALLBACK(on_theme_card_clicked), gui);
-    gtk_box_append(GTK_BOX(vbox), plain);
 
     gtk_window_present(GTK_WINDOW(win));
 }

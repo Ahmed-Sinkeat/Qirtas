@@ -3,6 +3,7 @@ zig-out/
 *.db
 *.png
 *.jpg
+!src/ui/icons/**/*.png
 *.bak
 *.step*
 *.before_*
@@ -10,3 +11,21 @@ test_run.log
 crash_run.log
 test_*.md
 2026-*-this-session-*.txt
+
+# Session artifacts the app writes into the repo when opened as a vault
+# (real fix = external-files/vault separation)
+capture.syscap
+*.syscap
+untitled.md
+/*.md.original.md
+/شرح*.md
+
+# Scratch files app/dev wrote into the tree (untracked, kept on disk)
+src/english.txt
+src/sa.md
+src/test.md
+src/Wiki link.md
+src/ىى.md
+
+# Stale rescue copies / leftover stubs swept up during clobber cleanup
+/_archive/

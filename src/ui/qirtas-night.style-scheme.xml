@@ -3,28 +3,37 @@
   <author>Qirtas Team</author>
   <description>Qirtas Ink Dark style scheme (White ink on black paper)</description>
 
-  <!-- ── Palette ── -->
-  <color name="ink"        value="#ece7db"/>
-  <color name="ink-muted"  value="#c9c0b0"/>
-  <color name="ink-faint"  value="#8a8174"/>
-  <color name="bg"         value="#171513"/>
-  <color name="bg-line"    value="#1d1a17"/>
-  <color name="selection"  value="#3a342c"/>
-  <color name="indigo"     value="#9db8d6"/>
+  <!-- ── Palette (dark + quill gold) ── -->
+  <color name="ink"        value="#d6d2c6"/>
+  <color name="ink-muted"  value="#9aa0ac"/>
+  <color name="ink-faint"  value="#6d7385"/>
+  <color name="bg"         value="#1d1f27"/>
+  <color name="bg-line"    value="#232734"/>
+  <color name="selection"  value="#33384a"/>
+  <color name="indigo"     value="#c9a86b"/>
+  <color name="gold"       value="#c9a86b"/>
+  <color name="gold-bright" value="#d9b577"/>
+
+  <!-- ── Heading / formatting accents (jewel tones on black paper) ── -->
+  <color name="sapphire"   value="#9bc4e6"/>
+  <color name="coral"      value="#d98a73"/>
+  <color name="sage"       value="#9bc49a"/>
+  <color name="quote-fg"   value="#9db8d6"/>
+  <color name="quote-bg"   value="#222c40"/>
 
   <!-- ── Editor base ── -->
   <style name="text"               foreground="ink"     background="bg"/>
   <style name="selection"          background="selection"/>
   <style name="current-line"       background="bg-line"/>
   <style name="line-numbers"       foreground="ink-faint" background="bg"/>
-  <style name="current-line-number" foreground="ink"      bold="true"/>
+  <style name="current-line-number" foreground="gold"     bold="true"/>
   <style name="search-match"       background="ink"      foreground="bg"/>
   <style name="bracket-match"      foreground="ink"     bold="true"/>
 
   <!-- ── def: base styles ── -->
-  <style name="def:heading"              foreground="ink"   bold="true"/>
+  <style name="def:heading"              foreground="gold"  bold="true"/>
   <style name="def:emphasis"             italic="true"/>
-  <style name="def:strong-emphasis"      foreground="ink"  bold="true"/>
+  <style name="def:strong-emphasis"      foreground="gold" bold="true"/>
   <style name="def:inline-code"          foreground="ink-muted"/>
   <style name="def:preformatted-section" foreground="ink-muted"/>
   <style name="def:comment"             foreground="ink-faint" italic="true"/>
@@ -37,24 +46,28 @@
   <style name="def:special-char"        foreground="ink"/>
   <style name="def:note"                foreground="ink"            bold="true"/>
 
-  <!-- ── Headings by level ── -->
-  <style name="qirtas_markdown:h1"         foreground="ink"    bold="true" weight="bold" scale="1.5"/>
-  <style name="qirtas_markdown:h2"         foreground="ink"    bold="true" weight="bold" scale="1.3"/>
-  <style name="qirtas_markdown:h3"         foreground="ink"    bold="true" weight="bold" scale="1.15"/>
-  <style name="qirtas_markdown:h4"         foreground="ink"    bold="true" weight="bold" scale="1.0"/>
-  <style name="qirtas_markdown:h5"         foreground="ink"    bold="true" weight="bold" scale="1.0"/>
-  <style name="qirtas_markdown:h6"         foreground="ink"    bold="true" weight="bold" scale="1.0"/>
+  <!-- ── Headings by level (jewel-toned — each level its own ink) ── -->
+  <style name="qirtas_markdown:h1"         foreground="gold-bright" bold="true" weight="bold" scale="1.5"/>
+  <style name="qirtas_markdown:h2"         foreground="sapphire"    bold="true" weight="bold" scale="1.3"/>
+  <style name="qirtas_markdown:h3"         foreground="coral"       bold="true" weight="bold" scale="1.15"/>
+  <style name="qirtas_markdown:h4"         foreground="sage"        bold="true" weight="bold" scale="1.0"/>
+  <style name="qirtas_markdown:h5"         foreground="ink-muted"   bold="true" weight="bold" scale="1.0"/>
+  <style name="qirtas_markdown:h6"         foreground="ink-faint"   bold="true" weight="bold" scale="1.0"/>
 
   <!-- ── Inline formatting ── -->
-  <style name="qirtas_markdown:bold"        foreground="ink"  bold="true" weight="bold"/>
-  <style name="qirtas_markdown:italic"      foreground="ink"   italic="true"/>
-  <style name="qirtas_markdown:bold-italic" foreground="ink"   bold="true" weight="bold" italic="true"/>
+  <style name="qirtas_markdown:bold"        foreground="gold" bold="true" weight="bold"/>
+  <style name="qirtas_markdown:italic"      foreground="quote-fg"   italic="true"/>
+  <style name="qirtas_markdown:bold-italic" foreground="gold-bright"  bold="true" weight="bold" italic="true"/>
   <style name="qirtas_markdown:strikethrough" strikethrough="true" foreground="ink-faint"/>
-  <style name="qirtas_markdown:inline-code" foreground="ink-muted"   background="selection"/>
+  <style name="qirtas_markdown:inline-code" foreground="sage"   background="selection"/>
 
-  <!-- ── Block elements ── -->
-  <style name="qirtas_markdown:blockquote"  foreground="ink-muted"   italic="true"/>
-  <style name="qirtas_markdown:list-marker" foreground="ink-muted"/>
+  <!-- ── Block elements ──
+       Quote gets its own slate-blue ink + faint tinted background so it reads
+       like a quoted block, distinct from the gold accent of the theme. -->
+  <style name="qirtas_markdown:blockquote"  foreground="quote-fg" background="quote-bg" italic="true"/>
+  <style name="def:blockquote"              foreground="quote-fg" background="quote-bg" italic="true"/>
+  <style name="markdown:blockquote-line"    foreground="quote-fg" background="quote-bg" italic="true"/>
+  <style name="qirtas_markdown:list-marker" foreground="gold"/>
 
   <!-- ── Links ── -->
   <style name="qirtas_markdown:link-text"   foreground="ink"/>
@@ -67,20 +80,19 @@
   <style name="qirtas_markdown:comment"     foreground="ink-faint" italic="true"/>
 
   <!-- ── Compatibility aliases ── -->
-  <style name="markdown:header"           foreground="ink"   bold="true"/>
-  <style name="markdown:h1"              foreground="ink"    bold="true"  scale="1.5"/>
-  <style name="markdown:h2"              foreground="ink"    bold="true"  scale="1.3"/>
-  <style name="markdown:h3"              foreground="ink"    bold="true"/>
-  <style name="markdown:h4"              foreground="ink"    bold="true"/>
-  <style name="markdown:h5"              foreground="ink"    bold="true"/>
-  <style name="markdown:h6"              foreground="ink"    bold="true"/>
-  <style name="markdown:bold"            foreground="ink"  bold="true"/>
-  <style name="markdown:italic"          italic="true"/>
+  <style name="markdown:header"           foreground="gold-bright" bold="true"/>
+  <style name="markdown:h1"              foreground="gold-bright" bold="true"  scale="1.5"/>
+  <style name="markdown:h2"              foreground="sapphire"    bold="true"  scale="1.3"/>
+  <style name="markdown:h3"              foreground="coral"       bold="true"/>
+  <style name="markdown:h4"              foreground="sage"        bold="true"/>
+  <style name="markdown:h5"              foreground="ink-muted"   bold="true"/>
+  <style name="markdown:h6"              foreground="ink-faint"   bold="true"/>
+  <style name="markdown:bold"            foreground="gold"  bold="true"/>
+  <style name="markdown:italic"          foreground="quote-fg" italic="true"/>
   <style name="markdown:strikethrough"   strikethrough="true" foreground="ink-faint"/>
-  <style name="markdown:inline-code"     foreground="ink-muted"/>
-  <style name="markdown:code"            foreground="ink-muted"   background="selection"/>
+  <style name="markdown:inline-code"     foreground="sage"/>
+  <style name="markdown:code"            foreground="sage"   background="selection"/>
   <style name="markdown:link-text"       foreground="ink"/>
   <style name="markdown:url"             foreground="indigo"   underline="true"/>
-  <style name="markdown:blockquote-line" foreground="ink-muted"   italic="true"/>
-  <style name="markdown:list-marker"     foreground="ink-muted"/>
+  <style name="markdown:list-marker"     foreground="gold"/>
 </style-scheme>

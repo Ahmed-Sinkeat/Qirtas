@@ -12,11 +12,12 @@ pub fn build(b: *std.Build) void {
         "src/gui/gui_explorer.c",
         "src/gui/gui_tabs.c",
         "src/gui/gui_editor.c",
-        "src/gui/gui_pdf.c",
         "src/gui/gui_shortcuts.c",
         "src/gui/gui_switcher.c",
         "src/gui/gui_outline.c",
         "src/gui/gui_export.c",
+        "src/gui/gui_history.c",
+        "src/gui/gui_buffer.c",
     };
 
 

@@ -1,0 +1,41 @@
+/* ============================================================
+ *  Qirtas — Paper & Ink Navy (Light)
+ *  theme-qirtas-navy.css
+ *
+ *  The redesign light theme: pure-white paper on a warm parchment
+ *  desk, with the app-icon navy (#213A63) as the single accent. The
+ *  thread, active tab underline, unsaved dot, and active note row all
+ *  carry the navy ink; the desk and sidebar stay warm paper tones.
+ * ============================================================ */
+
+:root {
+  --ui-font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  --editor-font-family: 'Lora', 'Inter', 'Noto Naskh Arabic', 'Segoe UI', serif;
+
+  /* desk → sidebar → paper */
+  --bg-window: #e3ddce;        /* warm parchment desk */
+  --bg-sidebar: #efebe0;       /* sidebar + tab strip + status bar */
+  --bg-card: #ffffff;          /* pure-white paper */
+  --bg-hover: #e6e1d4;         /* hovered tree/tab row */
+  --bg-active: #dfe6f1;        /* active note row — soft navy tint */
+  --border: #d8d0bf;
+  --border-focus: #213a63;
+  --accent: #213a63;           /* app-icon navy */
+  --accent-light: #2e4f86;     /* lifted navy for hover/links */
+
+  --text-primary: #33302a;     /* body ink */
+  --text-muted: #76705f;       /* secondary / inactive tabs */
+  --text-dim: #a59d88;         /* section labels / placeholders */
+  --cyan: #213a63;             /* secondary info reads navy */
+
+  --folder-icon: #98793f;      /* quill gold — the one warm note */
+  --file-icon: #a59d88;
+  --md-icon: #213a63;
+
+  --status-saved: #4e9d5b;
+  --status-saving: #213a63;
+  --status-failed: #a32b2b;
+  --dirty-dot-color: #213a63;
+
+  --caret-color: #213a63;      /* the pen writes in navy ink */
+}

@@ -14,8 +14,6 @@ static GdkRGBA trail_color_for_theme(const char *theme_name) {
     if (theme_name) {
         if (strcmp(theme_name, "sepia") == 0)
             return (GdkRGBA){ 164.0/255.0,  46.0/255.0, 121.0/255.0, 1.0 };
-        if (strcmp(theme_name, "things") == 0)
-            return (GdkRGBA){  46.0/255.0, 128.0/255.0, 242.0/255.0, 1.0 };
         if (strcmp(theme_name, "typewriter-light") == 0)
             return (GdkRGBA){ 184.0/255.0,  46.0/255.0,  46.0/255.0, 1.0 };
         if (strcmp(theme_name, "typewriter-dark") == 0)
@@ -24,8 +22,6 @@ static GdkRGBA trail_color_for_theme(const char *theme_name) {
             return (GdkRGBA){  27.0/255.0,  24.0/255.0,  22.0/255.0, 1.0 };
         if (strcmp(theme_name, "qirtas-dark") == 0)
             return (GdkRGBA){ 236.0/255.0, 231.0/255.0, 219.0/255.0, 1.0 };
-        if (strcmp(theme_name, "midnight") == 0)
-            return (GdkRGBA){ 170.0/255.0, 196.0/255.0, 255.0/255.0, 1.0 };
     }
     return (GdkRGBA){ 255.0/255.0, 121.0/255.0, 198.0/255.0, 1.0 };
 }
@@ -216,10 +212,13 @@ gboolean on_cursor_tick(GtkWidget *widget, GdkFrameClock *frame_clock, gpointer 
     AppGui *gui = (AppGui *)user_data;
     if (!gui->enable_cursor_trail) {
         gui->trail_len = 0;
-        return G_SOURCE_CONTINUE;
+        gui->cursor_tick_id = 0;
+        return G_SOURCE_REMOVE;
     }
-    if (!gui->source_view || !gtk_widget_get_mapped(gui->source_view))
-        return G_SOURCE_CONTINUE;
+    if (!gui->source_view || !gtk_widget_get_mapped(gui->source_view)) {
+        gui->cursor_tick_id = 0;
+        return G_SOURCE_REMOVE;
+    }
 
     GtkTextBuffer *buf         = gtk_text_view_get_buffer(GTK_TEXT_VIEW(gui->source_view));
     GtkTextMark   *insert_mark = gtk_text_buffer_get_insert(buf);
@@ -306,18 +305,31 @@ gboolean on_cursor_tick(GtkWidget *widget, GdkFrameClock *frame_clock, gpointer 
                            (gui->cursor_current_y != gui->cursor_target_y);
     if (needs_draw) {
         gui->trail_needs_clear = TRUE;
-    }
-
-    if (needs_draw || gui->trail_needs_clear) {
         if (gui->cursor_trail_area) {
             gtk_widget_queue_draw(gui->cursor_trail_area);
         }
-        if (!needs_draw) {
-            gui->trail_needs_clear = FALSE;
-        }
+        return G_SOURCE_CONTINUE;
     }
 
-    return G_SOURCE_CONTINUE;
+    if (gui->trail_needs_clear) {
+        gui->trail_needs_clear = FALSE;
+        if (gui->cursor_trail_area) {
+            gtk_widget_queue_draw(gui->cursor_trail_area);
+        }
+        return G_SOURCE_CONTINUE;
+    }
+
+    /* Nothing animating — detach so the frame clock can go idle.
+     * cursor_trail_wake() re-attaches on the next cursor move. */
+    gui->cursor_tick_id = 0;
+    return G_SOURCE_REMOVE;
+}
+
+void cursor_trail_wake(AppGui *gui) {
+    if (!gui || gui->cursor_tick_id || !gui->enable_cursor_trail) return;
+    if (!gui->source_view) return;
+    gui->cursor_tick_id =
+        gtk_widget_add_tick_callback(gui->source_view, on_cursor_tick, gui, NULL);
 }
 
 static void draw_ghost_caret(cairo_t *cr,
@@ -484,7 +496,7 @@ void init_cursor_trail(AppGui *gui) {
     load_trail_color_settings(gui);
     load_pointer_color_settings(gui);
 
-    gtk_widget_add_tick_callback(gui->source_view, on_cursor_tick, gui, NULL);
+    cursor_trail_wake(gui);
 
     gtk_drawing_area_set_draw_func(GTK_DRAWING_AREA(gui->cursor_trail_area),
                                    draw_cursor_trail,

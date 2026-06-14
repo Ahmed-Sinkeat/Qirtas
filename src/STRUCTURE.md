@@ -26,31 +26,29 @@ Qirtas/
 │       ├── gui_search.c                 ← Inline search bar overlay
 │       ├── gui_explorer.c               ← Directory tree and active files drawer
 │       ├── gui_tabs.c                   ← Document tab controls in status bar
-│       ├── gui_pdf.c                    ← PDF export (print pagination, draw, save dialog)
 │       ├── gui_shortcuts.c              ← Keyboard shortcuts table, keybindings window
 │       └── gui_sync.c                   ← Cloud credentials and sync event UI
 │   └── ui/
 │       ├── themes/
-│       │   ├── base.css                 ← Shared layout, spacing, widget styles (incl. compact-ui, paper card)
-│       │   ├── theme-dark.css
-│       │   ├── theme-midnight.css
+│       │   ├── base.css                 ← Shared layout, spacing, widget styles (incl. tab strip, paper card, desk outline, status pill)
 │       │   ├── theme-qirtas-light.css   ← Paper & Ink light (matches light logo)
-│       │   ├── theme-qirtas-dark.css    ← Paper & Ink dark (matches dark logo)
-│       │   ├── theme-sepia.css
-│       │   ├── theme-things.css
+│       │   ├── theme-qirtas-dark.css    ← Paper & Ink dark (matches dark logo, gold thread)
+│       │   ├── theme-qirtas-navy.css    ← Paper & Ink Navy (redesign light: white paper, #213A63 navy)
+│       │   ├── theme-sepia.css          ← Classic / Deep Sepia
 │       │   ├── theme-typewriter-dark.css
 │       │   ├── theme-typewriter-light.css
 │       │   └── README.md
 │       ├── icons/
 │       ├── qirtas_markdown.lang         ← GtkSourceView language definition
-│       └── qirtas*.style-scheme.xml     ← Editor colour schemes (qirtas = ink light, qirtas-night = ink dark)
+│       └── qirtas*.style-scheme.xml     ← Editor colour schemes (qirtas = ink light, qirtas-night = ink dark, qirtas-navy = navy light)
+│                                            qirtas/qirtas-night give each markdown h1-h6 + bold/italic/blockquote/
+│                                            inline-code/list-marker its own rubricated color (see As-Built §4d)
 ├── scratch/                             ← Developer profiling and test scripts
 │   └── profile_cursor_movement.py      ← Cursor movement profiling harness (SIGUSR1-based)
 ├── assets/
 │   └── style.css
 └── .agents/
 ```
-
 ## Build Graph
 
 `build.zig` currently builds:
@@ -63,7 +61,7 @@ Qirtas/
 
 `zig build test` — Zig test suite (token crypto round-trip + tamper rejection,
 ISO-8601 parsing, conflict filenames, syncable-file filter, XDG path shape,
-system_keys schema). Run it before pushing anything touching `sync.zig` or
+system_keys schema, active-file-path bounds check). Run it before pushing anything touching `sync.zig` or
 `main.zig` key handling. C side has no tests yet — see As-Built §8 for gaps.
 
 ## Security & Sync caveats
@@ -71,15 +69,28 @@ system_keys schema). Run it before pushing anything touching `sync.zig` or
 - Vault crypto threat model is honest-documented in `docs/SECURITY.md` —
   currently protects against casual browsing only (machine-id-anchored key).
   No "encrypted"/"privacy-first" user-facing claims until that roadmap is done.
-- Sync conflict behavior is unified (2026-06-12): all four backends do
+- Sync conflict behavior is unified (2026-06-12): all four backends do                                                                              
   3-way detection with per-file metadata and `_conflict` copies — no
   silent edit loss. Details in `docs/SYNC.md`.
+- `file_history` snapshots (`src/gui/gui_history.c`) are stored **plaintext**
+  in the vault DB — including for encrypted vaults. Must be encrypted with the
+  master key before any version-restore UI ships; users will assume history
+  inherits the vault's promises.
+- Sync status crosses the C/Zig FFI as the `QirtasSyncState` enum
+  (`gui_set_sync_state`), never as strings — string matching broke silently
+  once text passed through `qirtas_tr` for Arabic users.
+- Active file path goes through `setActiveFilePath` in `src/main.zig`
+  (bounds-checked, refuses over-long paths rather than truncating — Arabic
+  paths hit byte limits at half the character count).
 
 ## Where To Edit What
 
 | What you want to change | File to edit |
 |---|---|
 | App behaviour, file I/O, autosave, inotify | `src/main.zig` |
+| Debounced save-on-pause (2.5 s after typing stops) | `autosave_debounce_cb` in `src/gui.c` |
+| Crash-recovery snapshot history (`file_history` table, pruning tiers) | `src/gui/gui_history.c` |
+| Sync status dot states | `QirtasSyncState` enum in `src/gui_shared.h`, `gui_set_sync_state` in `src/gui.c` |
 | Undo stack (heap snapshots, capped at 64 MB total), save/restore, text edit APIs | `src/main.zig` |
 | Undo keybinding routing (GTK built-in undo is disabled — keep it that way) | `on_editor_key_pressed` in `src/gui/gui_editor.c`, `set_enable_undo(FALSE)` in `src/gui.c` |
 | BIP-39 recovery phrase helpers | `src/bip39.zig` |
@@ -90,8 +101,7 @@ system_keys schema). Run it before pushing anything touching `sync.zig` or
 | Formatting popovers and post-edit undo sealing | `src/gui/gui_popover.c` |
 | Markdown concealment, heading tags, buffer-generation guards | `src/gui/gui_conceal.c` |
 | Wiki-link parsing and idle guards | `src/gui/gui_wiki.c` |
-| Themed PDF export (متن etc.), theme chooser, block renderer | `src/gui/gui_export.c` (PrintTheme struct = one theme) |
-| Legacy "Editor look" PDF export (print compositor) | `src/gui/gui_pdf.c` |
+| Themed PDF export (متن etc., Editor — Plain), theme chooser, block renderer | `src/gui/gui_export.c` (PrintTheme struct = one theme) |
 | Keyboard shortcuts table and keybindings window | `src/gui/gui_shortcuts.c` |
 | UI-only shared state, window pointers, and module hooks | `src/gui_internal.h` |
 | Zig-facing FFI declarations | `src/gui_shared.h` |
@@ -100,7 +110,7 @@ system_keys schema). Run it before pushing anything touching `sync.zig` or
 | GtkSourceView language definition | `src/ui/qirtas_markdown.lang` |
 | Editor colour schemes | `src/ui/qirtas*.style-scheme.xml` |
 | Build configuration | `build.zig` |
-| UI string translations (English→Arabic) | `tr_table` in `src/gui.c` (`qirtas_tr`) |
+| UI string translations (English→Arabic) | `tr_table` in `src/gui.c` (`qirtas_tr`) |                           jjjjjjjj
 | Icon style sets (Classic/Modern) | `icon_table` in `src/gui.c` (`qirtas_icon`) |
 | Persisted editor/app preferences | `qirtas_pref_*` helpers in `src/gui/gui_cursor.c`, applied in `apply_editor_prefs` in `src/gui.c` |
 | Find & Replace | `src/gui/gui_search.c` |
@@ -132,10 +142,67 @@ system_keys schema). Run it before pushing anything touching `sync.zig` or
 | `gui_hr` | Custom horizontal line formatting renderer | `src/gui/gui_hr.c` |
 | `gui_search` | Editor inline query search bar overlay | `src/gui/gui_search.c` |
 | `gui_explorer` | Directory trees and active files drawer | `src/gui/gui_explorer.c` |
-| `gui_tabs` | Document tab controls (inside the status bar) and active buffer management | `src/gui/gui_tabs.c` |
-| `gui_pdf` | PDF export (print pagination, page drawing, save dialog) | `src/gui/gui_pdf.c` |
+| `gui_tabs` | Document tab controls (top tab strip, flat with active underline) and active buffer management | `src/gui/gui_tabs.c` |
+| `gui_export` | Themed PDF export (متن classical + 4 more, incl. "Editor — Plain"), theme chooser dialog, block renderer | `src/gui/gui_export.c` |
+| `gui_history` | Crash-recovery snapshots: `file_history` table in vault DB, written after autosave, tiered pruning | `src/gui/gui_history.c` |
+| `gui_switcher` | Quick Switcher (Ctrl+P) fuzzy file palette | `src/gui/gui_switcher.c` |
+| `gui_outline` | Outline panel content (heading TOC); the panel now lives on the desk left of the paper card as a GtkRevealer built in `gui.c` | `src/gui/gui_outline.c` |
 | `gui_shortcuts` | Keyboard shortcuts table, keybindings settings window | `src/gui/gui_shortcuts.c` |
 | `gui_sync` | Cloud credentials and synchronization event UI | `src/gui/gui_sync.c` |
+
+## UI Redesign (2026-06-13)
+
+The window chrome was reworked to close the polish gap with editors like Obsidian
+while keeping the floating-paper identity. All of this is built in `activate()` in
+`src/gui.c` and styled in `base.css`.
+
+- **Top tab strip.** The document tabs moved out of the bottom bar to a pinned 42px
+  strip at the very top of `main_vertical_box` (`gui->tab_strip`, LTR). Tabs are flat
+  with a 2px accent underline on the active tab and an accent unsaved dot.
+  `reorder_main_layout` keeps the strip anchored to the top regardless of status-bar
+  position.
+- **Paper card.** The editor is wrapped in a single `.editor-card` box
+  (`gui->editor_card`) that carries the border / radius / shadow / desk margins:
+  a 2px gradient **thread** (`gui->editor_thread`, gold on dark via `--thread-color`,
+  navy on the navy theme) → a 46px **header band** (`gui->editor_header`:
+  breadcrumb + reparented 🔍 search, ≡ outline toggle, ⋮ menu) → the scrolling
+  `GtkSourceView`. The inner `.editor-scroll` is borderless.
+- **Centred text column**, recomputed each tick by `paper_column_tick` from the
+  card's width: `text_w = clamp(card_width - QIRTAS_CARD_CHROME,
+  QIRTAS_TEXT_COLUMN_MIN=420, QIRTAS_TEXT_COLUMN_MAX=840)`, result cached in
+  `gui->text_column_width`. `GtkSourceView` has no max-width, so this drives
+  symmetric left/right text margins directly. GTK4 dropped `size-allocate`, so
+  steady state polls via a ~120ms `g_timeout_add` (no-op unless width/gutter
+  actually changed); a 60fps `gtk_widget_add_tick_callback` runs only while
+  dragging a column edge (`on_column_resize_begin`/`_end`). In focus mode the
+  card itself is centred with a capped width (`text_column_width + 160`) so the
+  paper floats in the middle of the desk.
+- **Text Width setting** (Editor section): "Centered (Fixed Width)" (default) vs
+  "Full Page Width" — `gui->text_width_full_page` / pref `text_width_full_page`,
+  toggled via `on_text_width_mode_changed`. "Full Page Width" skips the
+  `QIRTAS_TEXT_COLUMN_MAX` clamp above so the column always fills the card.
+- **Desk outline panel.** The heading TOC left the sidebar and now sits on the desk
+  (left of the paper under RTL) as a `GtkRevealer` (`gui->outline_panel`). Toggled by
+  the header ≡ button and a `×` close button; visibility persists in the
+  `outline_panel_visible` pref (default on). `gui_outline_refresh` still owns content.
+- **Sidebar brand header.** A `.sidebar-header` row (`qirtas-logo.png` feather+wordmark
+  logo + translatable "Library" label) sits above the workspace search.
+- **Floating status pill.** No bottom bar — the pill (`.status-pill`, sync dot +
+  word + char counts) is a `GtkOverlay` child on the paper card, pinned bottom-**end**
+  (`GTK_ALIGN_END`): bottom-left under Arabic, bottom-right under English. Search/menu
+  live in the card header; the path is the breadcrumb. The empty `bottom_bar` is kept
+  only so the layout/focus reorder code has a widget to move.
+- **Card-header toggles.** Book/sidebar icon → workspace+files sidebar
+  (`on_logo_clicked`); a separate list icon → desk outline panel.
+- **Line numbers** default off; when shown, `paper_column_tick` slides the gutter via
+  `gtk_widget_set_margin_start` so the digits hug the centred text column.
+- **Smart Arabic counts.** `arabic_count_phrase` (`gui_buffer.c`) applies تمييز العدد
+  for كلمة/حرف (1 singular, 2 dual, 3-10 spelled+plural, 11+ digits+singular).
+- **Themes.** `qirtas-dark` is dark + quill-gold `#C9A86B` (matches the handoff dark
+  mockup); `navy` is the white-paper navy light theme.
+- **Settings** regrouped Appearance / Editor / Sync / General, explicit header bar for
+  light-theme contrast; removed Status Bar Position, Layout Dividers, Scroll Past End,
+  Overview Map, Right Margin.
 
 ## Buffer Model
 
@@ -151,7 +218,7 @@ system_keys schema). Run it before pushing anything touching `sync.zig` or
 
 - `qirtas_tr(en)` in `gui.c` translates UI strings via an in-file English→Arabic table; wrap any new user-visible literal in it.
 - `qirtas_icon(key)` maps logical icon keys ("search", "folder", …) to Classic/Modern symbolic names.
-- Arabic mode flips the whole app RTL via `gtk_widget_set_default_direction`; the bottom status bar is pinned LTR.
+- Arabic mode flips the whole app RTL via `gtk_widget_set_default_direction`; the top tab strip, the card header, and the bottom status pill are pinned LTR (tabs, breadcrumb, numeric counts read left-to-right in both languages). The desk row order is `[card][outline panel]`, so the panel lands left of the paper under RTL and right of it under LTR — no extra direction code needed.
 - Markdown conceal must NEVER use the `invisible` tag property (GTK4 aborts on invisible + multi-byte lines); it uses 1% scale + transparent foreground at max tag priority instead.
 
 ## Buffer-Generation Guard Pattern
@@ -187,7 +254,7 @@ Default typography: `Inter` (premium writing experience). Tabs are consolidated 
 
 ### Adding A Theme
 
-1. Copy `src/ui/themes/theme-dark.css` to a new file.
+1. Copy `src/ui/themes/theme-sepia.css` to a new file.
 2. Update the color tokens.
 3. Add a branch in `apply_theme()` in `src/gui.c`.
 4. Add the theme to the settings dropdown.
@@ -201,7 +268,7 @@ Both C and Zig communicate via memory-mapped C linkage.
 
 - `void gui_set_text(const char *text, int len)`: Sets GtkTextBuffer content from Zig-owned text.
 - `void gui_set_title(const char *title)`: Updates window title and selects active tab.
-- `void gui_set_sync_status(const char *status)`: Updates the sync status text pill.
+- `void gui_set_sync_state(QirtasSyncState state)`: Updates the sync status dot (enum, never translated strings).
 - `void gui_show_editor(void)`: Switches workspace view stack to the editor page.
 - `void gui_show_recovery_dialog(void)`: Opens the recovery modal.
 - `void gui_get_cursor_position(int *line, int *col)`: Retrieves current cursor position. `col` is a **character** offset (`gtk_text_iter_get_line_offset`), matching `Position.col` everywhere else in the codebase.

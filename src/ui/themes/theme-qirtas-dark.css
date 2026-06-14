@@ -2,38 +2,41 @@
  *  Qirtas — Paper & Ink (Dark)
  *  theme-qirtas-dark.css
  *
- *  Black paper, white ink — matches the dark logo: a pale ink-wash
- *  splash on black. Warm near-black surfaces (charred paper, not
- *  blue-grey UI dark), with bone-white ink for text and caret.
+ *  Redesign dark direction (design_handoff_ui_redesign): neutral
+ *  near-black surfaces deepening desk → sidebar → paper, paper-white
+ *  ink, and a single quill-gold accent (#C9A86B). The gold carries the
+ *  card thread, the active tab underline, the unsaved dot, and links.
  * ============================================================ */
 
 :root {
   --ui-font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
   --editor-font-family: 'Lora', 'Inter', 'Noto Naskh Arabic', 'Segoe UI', serif;
 
-  --bg-window: #0c0b0a;
-  --bg-sidebar: #121110;
-  --bg-card: #171513;
-  --bg-hover: #1f1c19;
-  --bg-active: #2a261f;
-  --border: #2e2a25;
-  --border-focus: #d8d2c4;
-  --accent: #d8d2c4;
-  --accent-light: #f4efe4;
+  /* desk → sidebar → paper */
+  --bg-window: #101218;        /* desk */
+  --bg-sidebar: #14161c;       /* sidebar + tab strip */
+  --bg-card: #1d1f27;          /* the paper */
+  --bg-hover: #1b1e26;         /* hovered tree/tab row */
+  --bg-active: #232734;        /* active note row */
+  --border: #2a2e3a;           /* paper / chrome borders */
+  --border-focus: #c9a86b;
+  --accent: #c9a86b;           /* quill gold */
+  --accent-light: #d9b577;     /* lifted gold for hover/links */
 
-  --text-primary: #ece7db;
-  --text-muted: #b3aa9b;
-  --text-dim: #8a8174;
-  --cyan: #9db8d6;
+  --text-primary: #d6d2c6;     /* body ink */
+  --text-muted: #9aa0ac;       /* secondary / inactive tabs */
+  --text-dim: #6d7385;         /* section labels / placeholders */
+  --cyan: #9aa0ac;             /* secondary info */
 
-  --folder-icon: #c2a878;
-  --file-icon: #8a8174;
-  --md-icon: #d8d2c4;
+  --folder-icon: #c9a86b;      /* quill gold */
+  --file-icon: #6d7385;
+  --md-icon: #c9a86b;
 
-  --status-saved: #9cba8f;
-  --status-saving: #9db8d6;
+  --status-saved: #79b37a;
+  --status-saving: #8fb4d9;
   --status-failed: #d98a8a;
-  --dirty-dot-color: #ece7db;
+  --dirty-dot-color: #c9a86b;
 
-  --caret-color: #f2ede1;
+  --thread-color: #c9a86b;     /* gold thread along the card top edge */
+  --caret-color: #ece8da;      /* bone-paper white caret */
 }

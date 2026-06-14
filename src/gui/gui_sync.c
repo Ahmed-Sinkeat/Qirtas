@@ -9,9 +9,10 @@
 #include <stdlib.h>
 #include <stdio.h>
 
-#define GITHUB_CLIENT_ID "Iv23liwHRYsb5RjFKoTV"
+#define GITHUB_CLIENT_ID "Iv23lipYNklHlDKatIw0"
 #define DROPBOX_APP_KEY "YOUR_PUBLIC_DROPBOX_KEY"
 #define GOOGLE_CLIENT_ID "YOUR_PUBLIC_GOOGLE_ID"
+#define GITHUB_DEFAULT_REPO "qirtas-notes"
 
 static gboolean provider_id_configured(const char *value, const char *placeholder) {
     return value && value[0] != '\0' && strcmp(value, placeholder) != 0;
@@ -19,7 +20,7 @@ static gboolean provider_id_configured(const char *value, const char *placeholde
 
 /* Provider app IDs can be overridden at runtime so users don't have to
  * rebuild to plug in their own OAuth app:
- *   QIRTAS_GOOGLE_CLIENT_ID, QIRTAS_DROPBOX_APP_KEY */
+ *   QIRTAS_GOOGLE_CLIENT_ID, QIRTAS_DROPBOX_APP_KEY, QIRTAS_GITHUB_CLIENT_ID */
 static const char *google_client_id(void) {
     const char *env = g_getenv("QIRTAS_GOOGLE_CLIENT_ID");
     return (env && env[0]) ? env : GOOGLE_CLIENT_ID;
@@ -28,6 +29,11 @@ static const char *google_client_id(void) {
 static const char *dropbox_app_key(void) {
     const char *env = g_getenv("QIRTAS_DROPBOX_APP_KEY");
     return (env && env[0]) ? env : DROPBOX_APP_KEY;
+}
+
+static const char *github_client_id(void) {
+    const char *env = g_getenv("QIRTAS_GITHUB_CLIENT_ID");
+    return (env && env[0]) ? env : GITHUB_CLIENT_ID;
 }
 
 /* Helper: parse simple JSON string value */
@@ -122,7 +128,12 @@ typedef struct {
 static gboolean update_github_ui_idle(gpointer user_data) {
     UIUpdateData *ud = (UIUpdateData *)user_data;
     if (ud->success) {
-        zig_save_github_credentials(ud->token, "lawh-notes");
+        const char *repo = GITHUB_DEFAULT_REPO;
+        if (ud->gui->github_repo_entry) {
+            const char *entered = gtk_editable_get_text(GTK_EDITABLE(ud->gui->github_repo_entry));
+            if (entered && entered[0] != '\0') repo = entered;
+        }
+        zig_save_github_credentials(ud->token, repo);
         gui_update_github_status(1, "Connected");
     } else {
         gui_update_github_status(0, "Disconnected");
@@ -152,7 +163,7 @@ static gpointer github_poll_thread_func(gpointer user_data) {
         
         char response[2048];
         char *body = g_strdup_printf("client_id=%s&device_code=%s&grant_type=urn:ietf:params:oauth:grant-type:device_code",
-                                    GITHUB_CLIENT_ID, pd->device_code);
+                                    github_client_id(), pd->device_code);
         int len = run_curl_post("https://github.com/login/oauth/access_token", body, response, sizeof(response));
         g_free(body);
         
@@ -289,9 +300,9 @@ static gboolean show_github_dialog_idle(gpointer user_data) {
 static gpointer github_device_flow_thread(gpointer user_data) {
     AppGui *gui = (AppGui *)user_data;
     char response[2048];
-    int len = run_curl_post("https://github.com/login/device/code",
-                            "client_id=" GITHUB_CLIENT_ID "&scope=repo",
-                            response, sizeof(response));
+    char *body = g_strdup_printf("client_id=%s&scope=repo", github_client_id());
+    int len = run_curl_post("https://github.com/login/device/code", body, response, sizeof(response));
+    g_free(body);
     if (len > 0) {
         char *device_code = parse_json_value(response, "device_code");
         char *user_code = parse_json_value(response, "user_code");

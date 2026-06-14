@@ -65,6 +65,7 @@ typedef struct {
     GtkWidget     *popover;
     gint           saved_start;
     gint           saved_end;
+    GtkWidget     *open_submenu; /* currently-open Format/Paragraph flyout, or NULL */
 } PopoverData;
 
 typedef struct {
@@ -83,55 +84,6 @@ typedef struct {
     GtkWidget *entry_name;
     AppGui *gui;
 } AddPopoverWidgets;
-
-static Position iter_to_position(GtkTextIter *iter) {
-    Position pos = { 0, 0 };
-    if (!global_gui || !iter) return pos;
-    pos.line = gtk_text_iter_get_line(iter);
-    pos.col = gtk_text_iter_get_line_offset(iter);
-    return pos;
-}
-
-static Position advance_position(Position pos, const char *text) {
-    if (!text) return pos;
-    const char *p = text;
-    while (*p) {
-        gunichar c = g_utf8_get_char(p);
-        if (c == '\n') {
-            pos.line += 1;
-            pos.col = 0;
-        } else {
-            pos.col += 1;
-        }
-        p = g_utf8_next_char(p);
-    }
-    return pos;
-}
-
-static void select_position_range(AppGui *gui, Position start, Position end) {
-    if (!gui || !gui->source_view) return;
-    GtkTextBuffer *buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(gui->source_view));
-    GtkTextIter start_iter, end_iter;
-
-    int rel_start_line = start.line;
-    int rel_end_line = end.line;
-    if (rel_start_line < 0) rel_start_line = 0;
-    if (rel_end_line < 0) rel_end_line = 0;
-
-    gtk_text_buffer_get_iter_at_line(buf, &start_iter, rel_start_line);
-    gtk_text_buffer_get_iter_at_line(buf, &end_iter, rel_end_line);
-
-    for (int i = 0; i < start.col; i++) {
-        if (gtk_text_iter_ends_line(&start_iter) || gtk_text_iter_is_end(&start_iter)) break;
-        gtk_text_iter_forward_char(&start_iter);
-    }
-    for (int i = 0; i < end.col; i++) {
-        if (gtk_text_iter_ends_line(&end_iter) || gtk_text_iter_is_end(&end_iter)) break;
-        gtk_text_iter_forward_char(&end_iter);
-    }
-
-    gtk_text_buffer_select_range(buf, &start_iter, &end_iter);
-}
 
 static char *transform_paragraph_block(const char *block, const char *prefix, gint start_line) {
     if (!block) return g_strdup("");
@@ -259,7 +211,55 @@ static void apply_format_with_saved(GtkTextBuffer *buf, const char *prefix, cons
         GtkTextIter start, end;
         gtk_text_buffer_get_iter_at_offset(buf, &start, saved_start);
         gtk_text_buffer_get_iter_at_offset(buf, &end,   saved_end);
-        gchar *text     = gtk_text_buffer_get_text(buf, &start, &end, TRUE);
+        gchar *text  = gtk_text_buffer_get_text(buf, &start, &end, TRUE);
+        size_t tlen  = strlen(text);
+        size_t plen  = strlen(prefix);
+        size_t slen  = strlen(suffix);
+
+        /* Toggle off: same marker already wraps the text — strip it instead
+         * of nesting (no more ****word**** or **`word`** from a re-apply). */
+
+        /* (a) markers sit inside the selection. */
+        if (tlen >= plen + slen &&
+            strncmp(text, prefix, plen) == 0 &&
+            strcmp(text + tlen - slen, suffix) == 0) {
+            gchar *inner = g_strndup(text + plen, tlen - plen - slen);
+            Position sp = iter_to_position(&start);
+            Position ep = iter_to_position(&end);
+            zig_replace_range(sp, ep, inner);
+            gui_reload_full_buffer();
+            select_position_range(gui, sp, advance_position(sp, inner));
+            zig_undo_commit();
+            g_free(inner);
+            g_free(text);
+            return;
+        }
+
+        /* (b) markers sit immediately OUTSIDE the selection (user selected
+         * just the inner word). Strip those surrounding markers. */
+        GtkTextIter bstart = start;
+        GtkTextIter aend   = end;
+        if (gtk_text_iter_backward_chars(&bstart, (int)plen) &&
+            gtk_text_iter_forward_chars(&aend, (int)slen)) {
+            gchar *before = gtk_text_buffer_get_text(buf, &bstart, &start, TRUE);
+            gchar *after  = gtk_text_buffer_get_text(buf, &end, &aend, TRUE);
+            if (strcmp(before, prefix) == 0 && strcmp(after, suffix) == 0) {
+                Position sp = iter_to_position(&bstart);
+                Position ep = iter_to_position(&aend);
+                zig_replace_range(sp, ep, text);
+                gui_reload_full_buffer();
+                select_position_range(gui, sp, advance_position(sp, text));
+                zig_undo_commit();
+                g_free(before);
+                g_free(after);
+                g_free(text);
+                return;
+            }
+            g_free(before);
+            g_free(after);
+        }
+
+        /* (c) default: wrap. */
         gchar *new_text = g_strconcat(prefix, text, suffix, NULL);
         Position start_pos = iter_to_position(&start);
         Position end_pos = iter_to_position(&end);
@@ -370,10 +370,96 @@ static gboolean do_idle_format(gpointer user_data) {
     return G_SOURCE_REMOVE;
 }
 
+/* Generic "native menu row": icon + left-aligned label, reuses the
+ * .pop-btn/.menu-item-btn styling already used by the status-bar action
+ * menu (gui.c status_menu_item) for the long/thin native look. */
+static GtkWidget *ctx_menu_item(const char *icon, const char *label, GCallback cb, gpointer user_data) {
+    GtkWidget *btn = gtk_button_new();
+    gtk_widget_add_css_class(btn, "pop-btn");
+    gtk_widget_add_css_class(btn, "menu-item-btn");
+    gtk_widget_add_css_class(btn, "ctx-item");
+    GtkWidget *hbox = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+    gtk_box_append(GTK_BOX(hbox), gtk_image_new_from_icon_name(icon));
+    GtkWidget *lbl = gtk_label_new(label);
+    gtk_widget_set_halign(lbl, GTK_ALIGN_START);
+    gtk_widget_set_hexpand(lbl, TRUE);
+    gtk_box_append(GTK_BOX(hbox), lbl);
+    gtk_button_set_child(GTK_BUTTON(btn), hbox);
+    if (cb) g_signal_connect(btn, "clicked", cb, user_data);
+    return btn;
+}
+
+/* Same as ctx_menu_item but with a trailing "go-next" arrow, marking the
+ * row as one that opens a flyout submenu. */
+static GtkWidget *ctx_submenu_row(const char *icon, const char *label) {
+    GtkWidget *btn = gtk_button_new();
+    gtk_widget_add_css_class(btn, "pop-btn");
+    gtk_widget_add_css_class(btn, "menu-item-btn");
+    gtk_widget_add_css_class(btn, "ctx-item");
+    GtkWidget *hbox = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+    gtk_box_append(GTK_BOX(hbox), gtk_image_new_from_icon_name(icon));
+    GtkWidget *lbl = gtk_label_new(label);
+    gtk_widget_set_halign(lbl, GTK_ALIGN_START);
+    gtk_widget_set_hexpand(lbl, TRUE);
+    gtk_box_append(GTK_BOX(hbox), lbl);
+    gtk_box_append(GTK_BOX(hbox), gtk_image_new_from_icon_name("go-next-symbolic"));
+    gtk_button_set_child(GTK_BUTTON(btn), hbox);
+    return btn;
+}
+
+/* Plain text menu row used inside the Format/Paragraph flyouts, with
+ * "prefix"/"suffix" object data for on_format_clicked/on_para_clicked. */
+static GtkWidget *flyout_item(const char *label, const char *prefix, const char *suffix,
+                              GCallback cb, gpointer user_data) {
+    GtkWidget *btn = gtk_button_new_with_label(label);
+    gtk_widget_add_css_class(btn, "pop-btn");
+    gtk_widget_add_css_class(btn, "menu-item-btn");
+    gtk_widget_set_halign(gtk_button_get_child(GTK_BUTTON(btn)), GTK_ALIGN_START);
+    if (prefix) g_object_set_data(G_OBJECT(btn), "prefix", (gpointer)prefix);
+    if (suffix) g_object_set_data(G_OBJECT(btn), "suffix", (gpointer)suffix);
+    g_signal_connect(btn, "clicked", cb, user_data);
+    return btn;
+}
+
+/* Closes/unparents the currently-open Format/Paragraph flyout, if any. */
+static void on_submenu_closed(GtkPopover *sub, gpointer user_data) {
+    PopoverData *pd = (PopoverData *)user_data;
+    if (pd->open_submenu == GTK_WIDGET(sub)) pd->open_submenu = NULL;
+    gtk_widget_unparent(GTK_WIDGET(sub));
+}
+
+static void close_open_submenu(PopoverData *pd) {
+    if (!pd->open_submenu) return;
+    GtkWidget *sub = pd->open_submenu;
+    pd->open_submenu = NULL;
+    g_signal_handlers_disconnect_by_func(sub, on_submenu_closed, pd);
+    gtk_popover_popdown(GTK_POPOVER(sub));
+    gtk_widget_unparent(sub);
+}
+
+/* Opens `content` as a right-pointing flyout anchored to `anchor`, closing
+ * any previously-open flyout first. */
+static void open_submenu(PopoverData *pd, GtkWidget *anchor, GtkWidget *content) {
+    if (pd->open_submenu) {
+        if (gtk_widget_get_parent(pd->open_submenu) == anchor) return;
+        close_open_submenu(pd);
+    }
+    GtkWidget *sub = gtk_popover_new();
+    gtk_widget_add_css_class(sub, "context-submenu");
+    gtk_popover_set_has_arrow(GTK_POPOVER(sub), FALSE);
+    gtk_popover_set_position(GTK_POPOVER(sub), GTK_POS_RIGHT);
+    gtk_widget_set_parent(sub, anchor);
+    gtk_popover_set_child(GTK_POPOVER(sub), content);
+    g_signal_connect(sub, "closed", G_CALLBACK(on_submenu_closed), pd);
+    pd->open_submenu = sub;
+    gtk_popover_popup(GTK_POPOVER(sub));
+}
+
 static void on_format_clicked(GtkButton *btn, gpointer user_data) {
     PopoverData *pd = (PopoverData *)user_data;
     const char *prefix = g_object_get_data(G_OBJECT(btn), "prefix");
     const char *suffix = g_object_get_data(G_OBJECT(btn), "suffix");
+    close_open_submenu(pd);
     gtk_popover_popdown(GTK_POPOVER(pd->popover));
     if (global_source_view) gtk_widget_grab_focus(global_source_view);
     IdleFormatData *ifd = g_new(IdleFormatData, 1);
@@ -389,6 +475,7 @@ static void on_format_clicked(GtkButton *btn, gpointer user_data) {
 static void on_para_clicked(GtkButton *btn, gpointer user_data) {
     PopoverData *pd = (PopoverData *)user_data;
     const char *prefix = g_object_get_data(G_OBJECT(btn), "prefix");
+    close_open_submenu(pd);
     gtk_popover_popdown(GTK_POPOVER(pd->popover));
     if (global_source_view) gtk_widget_grab_focus(global_source_view);
     IdleFormatData *ifd = g_new(IdleFormatData, 1);
@@ -405,6 +492,7 @@ static void on_insert_hr_clicked(GtkButton *btn, gpointer user_data) {
     (void)btn;
     PopoverData *pd = (PopoverData *)user_data;
     GtkTextBuffer *buf = pd->buf;
+    close_open_submenu(pd);
     gtk_popover_popdown(GTK_POPOVER(pd->popover));
     if (global_source_view) gtk_widget_grab_focus(global_source_view);
 
@@ -415,6 +503,117 @@ static void on_insert_hr_clicked(GtkButton *btn, gpointer user_data) {
     insert_horizontal_rule(buf);
 }
 
+static GtkWidget *build_format_submenu_box(PopoverData *pd) {
+    GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 2);
+    gtk_widget_set_margin_start(box, 4);
+    gtk_widget_set_margin_end(box, 4);
+    gtk_widget_set_margin_top(box, 4);
+    gtk_widget_set_margin_bottom(box, 4);
+
+    char *f_labels[]   = { "Bold", "Italic", "Strikethrough", "Highlight", "Code", "Comment", "Math", "Quote" };
+    char *f_prefixes[] = { "**", "*", "~~", "==", "`", "<!-- ", "$", "> " };
+    char *f_suffixes[] = { "**", "*", "~~", "==", "`", " -->", "$", "" };
+    for (int i = 0; i < 8; i++) {
+        GtkWidget *btn;
+        if (i == 7) {
+            btn = flyout_item(f_labels[i], "> ", NULL, G_CALLBACK(on_para_clicked), pd);
+        } else {
+            btn = flyout_item(f_labels[i], f_prefixes[i], f_suffixes[i], G_CALLBACK(on_format_clicked), pd);
+        }
+        gtk_box_append(GTK_BOX(box), btn);
+    }
+    return box;
+}
+
+static GtkWidget *build_paragraph_submenu_box(PopoverData *pd) {
+    GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 2);
+    gtk_widget_set_margin_start(box, 4);
+    gtk_widget_set_margin_end(box, 4);
+    gtk_widget_set_margin_top(box, 4);
+    gtk_widget_set_margin_bottom(box, 4);
+
+    GtkWidget *h_box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 2);
+    gtk_box_set_homogeneous(GTK_BOX(h_box), TRUE);
+    char *h_labels[]   = { "H1", "H2", "H3", "H4", "H5", "H6" };
+    char *h_prefixes[] = { "# ", "## ", "### ", "#### ", "##### ", "###### " };
+    for (int i = 0; i < 6; i++) {
+        GtkWidget *h_btn = gtk_button_new_with_label(h_labels[i]);
+        gtk_widget_add_css_class(h_btn, "pop-btn");
+        g_object_set_data(G_OBJECT(h_btn), "prefix", h_prefixes[i]);
+        g_signal_connect(h_btn, "clicked", G_CALLBACK(on_para_clicked), pd);
+        gtk_box_append(GTK_BOX(h_box), h_btn);
+    }
+    gtk_box_append(GTK_BOX(box), h_box);
+
+    char *p_labels[]   = { "Body", "Bullet List", "Task List", "Numbered List" };
+    char *p_prefixes[] = { "", "- ", "- [ ] ", "1. " };
+    for (int i = 0; i < 4; i++) {
+        gtk_box_append(GTK_BOX(box), flyout_item(p_labels[i], p_prefixes[i], NULL, G_CALLBACK(on_para_clicked), pd));
+    }
+
+    gtk_box_append(GTK_BOX(box), flyout_item(qirtas_tr("Horizontal Rule"), NULL, NULL, G_CALLBACK(on_insert_hr_clicked), pd));
+    return box;
+}
+
+static void on_format_row_enter(GtkEventControllerMotion *ctrl, gdouble x, gdouble y, gpointer user_data) {
+    (void)x; (void)y;
+    PopoverData *pd = (PopoverData *)user_data;
+    GtkWidget *anchor = gtk_event_controller_get_widget(GTK_EVENT_CONTROLLER(ctrl));
+    open_submenu(pd, anchor, build_format_submenu_box(pd));
+}
+
+static void on_format_row_clicked(GtkButton *btn, gpointer user_data) {
+    PopoverData *pd = (PopoverData *)user_data;
+    open_submenu(pd, GTK_WIDGET(btn), build_format_submenu_box(pd));
+}
+
+static void on_paragraph_row_enter(GtkEventControllerMotion *ctrl, gdouble x, gdouble y, gpointer user_data) {
+    (void)x; (void)y;
+    PopoverData *pd = (PopoverData *)user_data;
+    GtkWidget *anchor = gtk_event_controller_get_widget(GTK_EVENT_CONTROLLER(ctrl));
+    open_submenu(pd, anchor, build_paragraph_submenu_box(pd));
+}
+
+static void on_paragraph_row_clicked(GtkButton *btn, gpointer user_data) {
+    PopoverData *pd = (PopoverData *)user_data;
+    open_submenu(pd, GTK_WIDGET(btn), build_paragraph_submenu_box(pd));
+}
+
+static void on_ctx_cut_clicked(GtkButton *btn, gpointer user_data) {
+    (void)btn;
+    PopoverData *pd = (PopoverData *)user_data;
+    close_open_submenu(pd);
+    gtk_popover_popdown(GTK_POPOVER(pd->popover));
+    if (global_source_view) gtk_widget_grab_focus(global_source_view);
+    GdkClipboard *clipboard = gtk_widget_get_clipboard(global_source_view);
+    gtk_text_buffer_cut_clipboard(pd->buf, clipboard, TRUE);
+}
+
+static void on_ctx_copy_clicked(GtkButton *btn, gpointer user_data) {
+    (void)btn;
+    PopoverData *pd = (PopoverData *)user_data;
+    close_open_submenu(pd);
+    gtk_popover_popdown(GTK_POPOVER(pd->popover));
+    if (global_source_view) gtk_widget_grab_focus(global_source_view);
+    GdkClipboard *clipboard = gtk_widget_get_clipboard(global_source_view);
+    gtk_text_buffer_copy_clipboard(pd->buf, clipboard);
+}
+
+static void on_ctx_paste_clicked(GtkButton *btn, gpointer user_data) {
+    (void)btn;
+    PopoverData *pd = (PopoverData *)user_data;
+    close_open_submenu(pd);
+    gtk_popover_popdown(GTK_POPOVER(pd->popover));
+    if (global_source_view) gtk_widget_grab_focus(global_source_view);
+    if (pd->saved_start == pd->saved_end) {
+        GtkTextIter it;
+        gtk_text_buffer_get_iter_at_offset(pd->buf, &it, pd->saved_start);
+        gtk_text_buffer_place_cursor(pd->buf, &it);
+    }
+    GdkClipboard *clipboard = gtk_widget_get_clipboard(global_source_view);
+    gtk_text_buffer_paste_clipboard(pd->buf, clipboard, NULL, TRUE);
+}
+
 static void on_popover_destroy(GtkWidget *widget, gpointer user_data) {
     AppGui *gui = (AppGui *)user_data;
     if (gui && gui->active_popover == widget) {
@@ -422,9 +621,27 @@ static void on_popover_destroy(GtkWidget *widget, gpointer user_data) {
     }
 }
 
+/* Make sure an open Format/Paragraph flyout doesn't outlive the main
+ * popover (e.g. user clicks outside / presses Escape without picking
+ * an item). Must run before the g_free(pd) destroy handler below. */
+static void on_main_popover_destroy_submenu(GtkWidget *popover, gpointer user_data) {
+    (void)popover;
+    close_open_submenu((PopoverData *)user_data);
+}
+
 static void on_editor_popover_closed(GtkPopover *popover, gpointer user_data) {
     (void)user_data;
     (void)popover;
+}
+
+/* Opens the Settings window from the context menu — the only reliable way
+ * in focus mode, where the card header (and its ⋮ menu) are hidden. */
+static void on_ctx_settings_clicked(GtkButton *btn, gpointer user_data) {
+    (void)btn;
+    PopoverData *pd = (PopoverData *)user_data;
+    if (pd && pd->popover) gtk_popover_popdown(GTK_POPOVER(pd->popover));
+    if (global_gui && global_gui->settings_window)
+        gtk_window_present(GTK_WINDOW(global_gui->settings_window));
 }
 
 void on_editor_right_click(GtkGestureClick *gesture, gint n_press, gdouble x, gdouble y, gpointer user_data) {
@@ -441,7 +658,7 @@ void on_editor_right_click(GtkGestureClick *gesture, gint n_press, gdouble x, gd
     g_signal_connect(popover, "closed", G_CALLBACK(on_editor_popover_closed), NULL);
     GdkRectangle rect = { (int)x, (int)y, 1, 1 };
     gtk_popover_set_pointing_to(GTK_POPOVER(popover), &rect);
-    PopoverData *pd = g_new(PopoverData, 1);
+    PopoverData *pd = g_new0(PopoverData, 1);
     pd->buf = buf;
     pd->popover = popover;
     {
@@ -458,71 +675,39 @@ void on_editor_right_click(GtkGestureClick *gesture, gint n_press, gdouble x, gd
             pd->saved_start = pd->saved_end = gtk_text_iter_get_offset(&cursor);
         }
     }
+    g_signal_connect(popover, "destroy", G_CALLBACK(on_main_popover_destroy_submenu), pd);
     g_signal_connect_swapped(popover, "destroy", G_CALLBACK(g_free), pd);
-    GtkWidget *main_box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
-    gtk_widget_set_margin_start(main_box, 8);
-    gtk_widget_set_margin_end(main_box, 8);
-    gtk_widget_set_margin_top(main_box, 8);
-    gtk_widget_set_margin_bottom(main_box, 8);
-    GtkWidget *format_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 4);
-    GtkWidget *lbl_format = gtk_label_new(qirtas_tr("FORMAT"));
-    gtk_widget_add_css_class(lbl_format, "pop-section-label");
-    gtk_widget_set_halign(lbl_format, GTK_ALIGN_START);
-    gtk_box_append(GTK_BOX(format_box), lbl_format);
-    char *f_labels[] = { "Bold", "Italic", "Strikethrough", "Highlight", "Code", "Comment", "Math", "Quote" };
-    char *f_prefixes[] = { "**", "*", "~~", "==", "`", "<!-- ", "$", "> " };
-    char *f_suffixes[] = { "**", "*", "~~", "==", "`", " -->", "$", "" };
-    for (int i = 0; i < 8; i++) {
-        GtkWidget *btn = gtk_button_new_with_label(f_labels[i]);
-        gtk_widget_add_css_class(btn, "pop-btn");
-        gtk_widget_set_halign(btn, GTK_ALIGN_FILL);
-        if (i == 7) {
-            g_object_set_data(G_OBJECT(btn), "prefix", "> ");
-            g_signal_connect(btn, "clicked", G_CALLBACK(on_para_clicked), pd);
-        } else {
-            g_object_set_data(G_OBJECT(btn), "prefix", f_prefixes[i]);
-            g_object_set_data(G_OBJECT(btn), "suffix", f_suffixes[i]);
-            g_signal_connect(btn, "clicked", G_CALLBACK(on_format_clicked), pd);
-        }
-        gtk_box_append(GTK_BOX(format_box), btn);
-    }
-    GtkWidget *para_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 4);
-    GtkWidget *lbl_para = gtk_label_new(qirtas_tr("PARAGRAPH"));
-    gtk_widget_add_css_class(lbl_para, "pop-section-label");
-    gtk_widget_set_halign(lbl_para, GTK_ALIGN_START);
-    gtk_box_append(GTK_BOX(para_box), lbl_para);
-    GtkWidget *h_box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 2);
-    gtk_box_set_homogeneous(GTK_BOX(h_box), TRUE);
-    char *h_labels[] = { "H1", "H2", "H3", "H4", "H5", "H6" };
-    char *h_prefixes[] = { "# ", "## ", "### ", "#### ", "##### ", "###### " };
-    for (int i = 0; i < 6; i++) {
-        GtkWidget *h_btn = gtk_button_new_with_label(h_labels[i]);
-        gtk_widget_add_css_class(h_btn, "pop-btn");
-        g_object_set_data(G_OBJECT(h_btn), "prefix", h_prefixes[i]);
-        g_signal_connect(h_btn, "clicked", G_CALLBACK(on_para_clicked), pd);
-        gtk_box_append(GTK_BOX(h_box), h_btn);
-    }
-    gtk_box_append(GTK_BOX(para_box), h_box);
-    char *p_labels[] = { "Body", "Bullet List", "Task List", "Numbered List" };
-    char *p_prefixes[] = { "", "- ", "- [ ] ", "1. " };
-    for (int i = 0; i < 4; i++) {
-        GtkWidget *btn = gtk_button_new_with_label(p_labels[i]);
-        gtk_widget_add_css_class(btn, "pop-btn");
-        gtk_widget_set_halign(btn, GTK_ALIGN_FILL);
-        g_object_set_data(G_OBJECT(btn), "prefix", p_prefixes[i]);
-        g_signal_connect(btn, "clicked", G_CALLBACK(on_para_clicked), pd);
-        gtk_box_append(GTK_BOX(para_box), btn);
-    }
-    {
-        GtkWidget *hr_btn = gtk_button_new_with_label(qirtas_tr("Horizontal Rule"));
-        gtk_widget_add_css_class(hr_btn, "pop-btn");
-        gtk_widget_set_halign(hr_btn, GTK_ALIGN_FILL);
-        g_signal_connect(hr_btn, "clicked", G_CALLBACK(on_insert_hr_clicked), pd);
-        gtk_box_append(GTK_BOX(para_box), hr_btn);
-    }
-    gtk_box_append(GTK_BOX(main_box), format_box);
-    gtk_box_append(GTK_BOX(main_box), gtk_separator_new(GTK_ORIENTATION_VERTICAL));
-    gtk_box_append(GTK_BOX(main_box), para_box);
+
+    /* Single narrow vertical column — long/thin like a native OS context
+     * menu. Cut/Copy/Paste first, then Format/Paragraph rows that open
+     * flyout submenus on hover or click. */
+    GtkWidget *main_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 2);
+    gtk_widget_set_margin_start(main_box, 4);
+    gtk_widget_set_margin_end(main_box, 4);
+    gtk_widget_set_margin_top(main_box, 4);
+    gtk_widget_set_margin_bottom(main_box, 4);
+
+    gtk_box_append(GTK_BOX(main_box), ctx_menu_item("edit-cut-symbolic", qirtas_tr("Cut"), G_CALLBACK(on_ctx_cut_clicked), pd));
+    gtk_box_append(GTK_BOX(main_box), ctx_menu_item("edit-copy-symbolic", qirtas_tr("Copy"), G_CALLBACK(on_ctx_copy_clicked), pd));
+    gtk_box_append(GTK_BOX(main_box), ctx_menu_item("edit-paste-symbolic", qirtas_tr("Paste"), G_CALLBACK(on_ctx_paste_clicked), pd));
+
+    gtk_box_append(GTK_BOX(main_box), gtk_separator_new(GTK_ORIENTATION_HORIZONTAL));
+
+    /* Format / Paragraph open their flyout only on CLICK — no hover-enter
+     * auto-open (it fired the instant the menu popped under the cursor). */
+    GtkWidget *format_row = ctx_submenu_row("format-text-bold-symbolic", qirtas_tr("Format"));
+    g_signal_connect(format_row, "clicked", G_CALLBACK(on_format_row_clicked), pd);
+    gtk_box_append(GTK_BOX(main_box), format_row);
+
+    GtkWidget *paragraph_row = ctx_submenu_row("format-justify-fill-symbolic", qirtas_tr("Paragraph"));
+    g_signal_connect(paragraph_row, "clicked", G_CALLBACK(on_paragraph_row_clicked), pd);
+    gtk_box_append(GTK_BOX(main_box), paragraph_row);
+
+    gtk_box_append(GTK_BOX(main_box), gtk_separator_new(GTK_ORIENTATION_HORIZONTAL));
+    gtk_box_append(GTK_BOX(main_box),
+        ctx_menu_item("preferences-system-symbolic", qirtas_tr("Settings"),
+                      G_CALLBACK(on_ctx_settings_clicked), pd));
+
     gtk_popover_set_child(GTK_POPOVER(popover), main_box);
     gtk_popover_popup(GTK_POPOVER(popover));
     gtk_gesture_set_state(GTK_GESTURE(gesture), GTK_EVENT_SEQUENCE_CLAIMED);

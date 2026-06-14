@@ -6,34 +6,9 @@
 #include "gui_internal.h"
 
 /* Forward declare externally defined helper functions from other modules if needed */
-extern void gui_set_sync_status(const char *status);
 extern void gui_set_text(const char *text, int len);
 extern void gui_set_title(const char *title);
 extern void gui_trigger_autosave(void);
-
-static Position iter_to_position(GtkTextIter *iter) {
-    Position pos = { 0, 0 };
-    if (!global_gui || !iter) return pos;
-    pos.line = gtk_text_iter_get_line(iter);
-    pos.col = gtk_text_iter_get_line_offset(iter);
-    return pos;
-}
-
-static Position advance_position(Position pos, const char *text) {
-    if (!text) return pos;
-    const char *p = text;
-    while (*p) {
-        gunichar c = g_utf8_get_char(p);
-        if (c == '\n') {
-            pos.line += 1;
-            pos.col = 0;
-        } else {
-            pos.col += 1;
-        }
-        p = g_utf8_next_char(p);
-    }
-    return pos;
-}
 
 void duplicate_current_line(GtkTextBuffer *buf) {
     (void)buf;
@@ -194,6 +169,11 @@ gboolean on_editor_key_pressed(GtkEventControllerKey *ctrl,
     gboolean ctrl_held  = (state & GDK_CONTROL_MASK) != 0;
     gboolean shift_held = (state & GDK_SHIFT_MASK)   != 0;
 
+    /* ── Toggle read mode ── */
+    if (match_app_shortcut("toggle_read_mode", keyval, keycode, state)) {
+        toggle_read_mode(gui);
+        return TRUE;
+    }
     /* ── Bold ── */
     if (match_app_shortcut("bold", keyval, keycode, state)) {
         apply_format(buf, "**", "**");

@@ -14,6 +14,14 @@ static void update_search_match_count(AppGui *gui) {
     gtk_label_set_text(GTK_LABEL(gui->search_match_label), buf);
 }
 
+/* Scroll so the match sits clear of the bottom search bar and the
+ * side overlays (minimap, status pill) instead of right at an edge. */
+static void scroll_to_match(AppGui *gui, GtkTextBuffer *buf) {
+    gtk_text_view_scroll_to_mark(GTK_TEXT_VIEW(gui->source_view),
+                                 gtk_text_buffer_get_insert(buf),
+                                 0.0, TRUE, 0.5, 0.3);
+}
+
 static void do_search_forward(AppGui *gui) {
     if (!gui->search_ctx) return;
     GtkTextBuffer *buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(gui->source_view));
@@ -23,9 +31,7 @@ static void do_search_forward(AppGui *gui) {
     gboolean wrapped;
     if (gtk_source_search_context_forward(gui->search_ctx, &end, &ms, &me, &wrapped)) {
         gtk_text_buffer_select_range(buf, &ms, &me);
-        gtk_text_view_scroll_to_mark(GTK_TEXT_VIEW(gui->source_view),
-                                     gtk_text_buffer_get_insert(buf),
-                                     0.15, FALSE, 0.0, 0.5);
+        scroll_to_match(gui, buf);
     }
     update_search_match_count(gui);
 }
@@ -38,15 +44,34 @@ static void do_search_backward(AppGui *gui) {
     gboolean wrapped;
     if (gtk_source_search_context_backward(gui->search_ctx, &start, &ms, &me, &wrapped)) {
         gtk_text_buffer_select_range(buf, &ms, &me);
-        gtk_text_view_scroll_to_mark(GTK_TEXT_VIEW(gui->source_view),
-                                     gtk_text_buffer_get_insert(buf),
-                                     0.15, FALSE, 0.0, 0.5);
+        scroll_to_match(gui, buf);
     }
     update_search_match_count(gui);
 }
 
-static char *create_arabic_search_regex(const char *input) {
-    if (!input || strlen(input) == 0) return g_strdup("");
+/* Find the match nearest the cursor without skipping past it, so the
+ * selection stays anchored on the same hit as the user keeps typing,
+ * and jumps to it immediately instead of waiting for the next/prev press. */
+static void do_search_from_cursor(AppGui *gui) {
+    if (!gui->search_ctx) return;
+    GtkTextBuffer *buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(gui->source_view));
+    GtkTextIter start, end, ms, me;
+    gtk_text_buffer_get_selection_bounds(buf, &start, &end);
+    gboolean wrapped;
+    if (gtk_source_search_context_forward(gui->search_ctx, &start, &ms, &me, &wrapped)) {
+        gtk_text_buffer_select_range(buf, &ms, &me);
+        scroll_to_match(gui, buf);
+    }
+}
+
+static char *create_arabic_search_regex(const char *raw_input) {
+    if (!raw_input || strlen(raw_input) == 0) return g_strdup("");
+
+    /* NFKC: Arabic presentation-form ligatures (e.g. from IME composition or
+     * pasted PDF text) decompose into plain letter sequences, so a search
+     * for a word ending in a ligature-forming pair still matches plain text. */
+    gchar *input_norm = g_utf8_normalize(raw_input, -1, G_NORMALIZE_NFKC);
+    const char *input = input_norm ? input_norm : raw_input;
 
     GString *pattern = g_string_new("");
     const char *p = input;
@@ -83,6 +108,7 @@ static char *create_arabic_search_regex(const char *input) {
 
     char *result = pattern->str;
     g_string_free(pattern, FALSE);
+    g_free(input_norm);
     return result;
 }
 
@@ -115,7 +141,18 @@ void on_search_text_changed(GtkSearchEntry *entry, gpointer user_data) {
     gtk_source_search_settings_set_search_text(gui->search_settings, regex_text);
     g_free(regex_text);
 
+    if (text && *text)
+        do_search_from_cursor(gui);
+
     update_search_match_count(gui);
+}
+
+/* GtkSourceSearchContext computes occurrences-count asynchronously, so the
+ * initial value right after set_search_text() is often still -1. Refresh
+ * the label once the background scan reports the real count. */
+void on_search_occurrences_changed(GObject *obj, GParamSpec *pspec, gpointer user_data) {
+    (void)obj; (void)pspec;
+    update_search_match_count((AppGui *)user_data);
 }
 
 void on_search_next_clicked(GtkButton *btn, gpointer user_data) {

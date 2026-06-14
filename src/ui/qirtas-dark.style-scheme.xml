@@ -4,30 +4,30 @@
   <description>Custom dark style scheme for Qirtas Markdown Editor</description>
 
   <!-- ── Palette ── -->
-  <color name="pink"       value="#ff79c6"/>
-  <color name="cyan"       value="#75d4e8"/>
-  <color name="gray"       value="#6b6e7a"/>
-  <color name="white"      value="#e8e8f0"/>
-  <color name="bg"         value="#111318"/>
-  <color name="bg-line"    value="#ff79c60d"/>
-  <color name="search-bg"  value="#ff79c6"/>
-  <color name="h1"         value="#ff79c6"/>
-  <color name="h2"         value="#8be9fd"/>
-  <color name="h3"         value="#50fa7b"/>
-  <color name="h4"         value="#ffb86c"/>
-  <color name="h5"         value="#bd93f9"/>
-  <color name="h6"         value="#ff5555"/>
-  <color name="orange"     value="#ffb86c"/>
-  <color name="green"      value="#50fa7b"/>
-  <color name="purple"     value="#bd93f9"/>
-  <color name="yellow"     value="#f1fa8c"/>
-  <color name="comment-fg" value="#5a5f72"/>
-  <color name="gold"       value="#dfb15b"/>
-  <color name="calm-purple" value="#a9a0fc"/>
+  <color name="pink"       value="#cdd8f1"/>
+  <color name="cyan"       value="#8fb4d9"/>
+  <color name="gray"       value="#6f789a"/>
+  <color name="white"      value="#e9ecf5"/>
+  <color name="bg"         value="#0c1330"/>
+  <color name="bg-line"    value="#cdd8f10d"/>
+  <color name="search-bg"  value="#cdd8f1"/>
+  <color name="h1"         value="#cdd8f1"/>
+  <color name="h2"         value="#bccdf0"/>
+  <color name="h3"         value="#a8bce8"/>
+  <color name="h4"         value="#d6c39a"/>
+  <color name="h5"         value="#9aaedd"/>
+  <color name="h6"         value="#8e9ec9"/>
+  <color name="orange"     value="#d6c39a"/>
+  <color name="green"      value="#a8bce8"/>
+  <color name="purple"     value="#9aaedd"/>
+  <color name="yellow"     value="#e8dba8"/>
+  <color name="comment-fg" value="#5c6587"/>
+  <color name="gold"       value="#c2a878"/>
+  <color name="calm-purple" value="#aebde8"/>
 
   <!-- ── Editor base ── -->
   <style name="text"               foreground="white"     background="bg"/>
-  <style name="selection"          background="#3a3d5c"/>
+  <style name="selection"          background="#1b2750"/>
   <style name="current-line"       background="bg-line"/>
   <style name="line-numbers"       foreground="gray"      background="bg"/>
   <style name="current-line-number" foreground="pink"     bold="true"/>
@@ -51,12 +51,12 @@
   <style name="def:special-char"        foreground="purple"/>
 
   <!-- ── Headings by level (qirtas_markdown: prefix → our lang file) ── -->
-  <style name="qirtas_markdown:h1"         foreground="h1"    bold="true" weight="bold" scale="1.8"/>
-  <style name="qirtas_markdown:h2"         foreground="h2"    bold="true" weight="bold" scale="1.5"/>
-  <style name="qirtas_markdown:h3"         foreground="h3"    bold="true" weight="bold" scale="1.3"/>
-  <style name="qirtas_markdown:h4"         foreground="h4"    bold="true" weight="bold" scale="1.15"/>
+  <style name="qirtas_markdown:h1"         foreground="h1"    bold="true" weight="bold" scale="1.5"/>
+  <style name="qirtas_markdown:h2"         foreground="h2"    bold="true" weight="bold" scale="1.3"/>
+  <style name="qirtas_markdown:h3"         foreground="h3"    bold="true" weight="bold" scale="1.15"/>
+  <style name="qirtas_markdown:h4"         foreground="h4"    bold="true" weight="bold" scale="1.0"/>
   <style name="qirtas_markdown:h5"         foreground="h5"    bold="true" weight="bold" scale="1.0"/>
-  <style name="qirtas_markdown:h6"         foreground="h6"    bold="true" weight="bold" scale="0.85"/>
+  <style name="qirtas_markdown:h6"         foreground="h6"    bold="true" weight="bold" scale="1.0"/>
 
   <!-- ── Inline formatting ── -->
   <style name="qirtas_markdown:bold"        foreground="gold"  bold="true" weight="bold"/>
@@ -75,7 +75,7 @@
   <style name="qirtas_markdown:wiki-link"   foreground="#00E5FF" underline="true"/>
 
   <!-- ── Special ── -->
-  <style name="qirtas_markdown:highlight"   background="#ffb86c" foreground="#111318"/>
+  <style name="qirtas_markdown:highlight"   background="#d6c39a" foreground="#0c1330"/>
   <style name="qirtas_markdown:math"        foreground="green"/>
   <style name="qirtas_markdown:comment"     foreground="comment-fg" italic="true"/>
 
