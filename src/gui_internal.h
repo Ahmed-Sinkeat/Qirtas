@@ -193,6 +193,12 @@ typedef struct {
     int conceal_dirty_start;
     int conceal_dirty_end;
 
+    /* TRUE when an edit since the last debounce may have changed the heading
+     * outline (line added/removed, or a heading line touched). The stats
+     * debounce rebuilds gui_outline_refresh only when set — a plain keystroke
+     * inside a paragraph leaves it FALSE and skips the O(document) scan. */
+    gboolean outline_dirty;
+
     /* Editor preferences */
     gboolean  wrap_lines;
     gboolean  show_line_numbers;
