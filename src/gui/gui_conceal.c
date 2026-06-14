@@ -259,7 +259,8 @@ static void update_conceal_markdown_all_impl(GtkTextBuffer *buf) {
     GtkTextTag *conceal_tag = gtk_text_tag_table_lookup(table, "conceal");
     if (!conceal_tag) {
         conceal_tag = gtk_text_buffer_create_tag(buf, "conceal",
-                                                 "invisible", TRUE,
+                                                 "scale", 0.01,
+                                                 "foreground", "rgba(0,0,0,0)",
                                                  NULL);
     }
     /* Conceal must outrank heading/syntax tags or their scale wins. Only
@@ -439,7 +440,8 @@ static void update_conceal_markdown_range_impl(GtkTextBuffer *buf, int first_lin
     GtkTextTag *conceal_tag = gtk_text_tag_table_lookup(table, "conceal");
     if (!conceal_tag) {
         conceal_tag = gtk_text_buffer_create_tag(buf, "conceal",
-                                                 "invisible", TRUE,
+                                                 "scale", 0.01,
+                                                 "foreground", "rgba(0,0,0,0)",
                                                  NULL);
     }
     /* Conceal must outrank heading/syntax tags or their scale wins. Only
