@@ -4972,8 +4972,20 @@ void gui_set_title(const char *title) {
         char *sfx = strstr(fname, " - Qirtas");
         if (sfx) *sfx = '\0';
         gtk_label_set_text(GTK_LABEL(global_path_label), fname);
-        if (global_gui && global_gui->stats_file_val)
-            gtk_label_set_text(GTK_LABEL(global_gui->stats_file_val), fname);
+        if (global_gui) {
+            gui_tabs_add_or_select(global_gui, fname);
+            if (global_gui->stats_file_val)
+                gtk_label_set_text(GTK_LABEL(global_gui->stats_file_val), fname);
+            /* Card-header breadcrumb: render the vault-relative path as
+             * folder / sub / file. */
+            if (global_gui->breadcrumb_label) {
+                gchar **parts = g_strsplit(fname, "/", -1);
+                gchar *crumb = g_strjoinv(" / ", parts);
+                gtk_label_set_text(GTK_LABEL(global_gui->breadcrumb_label), crumb);
+                g_free(crumb);
+                g_strfreev(parts);
+            }
+        }
     }
 }
 

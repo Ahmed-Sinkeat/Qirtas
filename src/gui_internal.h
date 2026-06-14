@@ -297,6 +297,7 @@ void gui_history_record(const char *path);
 void draw_cursor_trail(GtkDrawingArea *area, cairo_t *cr, int width, int height, gpointer user_data);
 gboolean on_cursor_tick(GtkWidget *widget, GdkFrameClock *frame_clock, gpointer user_data);
 void gui_tabs_refresh(AppGui *gui);
+void gui_tabs_add_or_select(AppGui *gui, const char *filepath);
 void gui_tabs_setup_viewport(AppGui *gui);
 void qirtas_export_to_pdf(AppGui *gui);          /* themed chooser (gui_export.c) */
 void arabize_digits(const char *in, char *out, size_t out_size);
