@@ -59,6 +59,67 @@ int qirtas_perf_enabled = 0;
 /* Icon style (0 = Classic, 1 = Modern); drives qirtas_icon() lookup. */
 int qirtas_icon_style = 0;
 
+/* Offline measurement of the per-pause buffer_stats_timeout_cb work, minus the
+ * GUI plumbing. Builds a headless GtkTextBuffer (no window) from `text` and
+ * times the three O(document) passes that run on every typing pause:
+ *   word-count  : gtk_text_buffer_get_text() + full UTF-8 walk (capped >500k)
+ *   outline scan: the gui_outline_refresh per-line loop (get_iter_at_line +
+ *                 get_text per line), without creating widgets
+ *   counts      : get_char_count / get_line_count (expected ~free)
+ * Prints ms to stderr. Called from the QIRTAS_BENCH harness. */
+void qirtas_bench_stats(const char *text, int len) {
+    if (!gtk_is_initialized() && !gtk_init_check()) {
+        g_printerr("[bench] gtk_init_check failed (no display?) — skipping stats bench\n");
+        return;
+    }
+    GtkTextBuffer *buf = gtk_text_buffer_new(NULL);
+    gtk_text_buffer_set_text(buf, text, len);
+
+    gint64 t0 = g_get_monotonic_time();
+    glong char_count = (glong)gtk_text_buffer_get_char_count(buf);
+    glong line_count = (glong)gtk_text_buffer_get_line_count(buf);
+    gint64 t1 = g_get_monotonic_time();
+
+    /* word count (same cap + walk as the real callback) */
+    glong word_count = -1;
+    if (char_count <= 500000) {
+        GtkTextIter s, e;
+        gtk_text_buffer_get_bounds(buf, &s, &e);
+        gchar *t = gtk_text_buffer_get_text(buf, &s, &e, TRUE);
+        word_count = 0;
+        gboolean in_word = FALSE;
+        for (char *p = t; *p; p = g_utf8_next_char(p)) {
+            gunichar ch = g_utf8_get_char(p);
+            if (g_unichar_isspace(ch) || g_unichar_ispunct(ch)) in_word = FALSE;
+            else if (!in_word) { word_count++; in_word = TRUE; }
+        }
+        g_free(t);
+    }
+    gint64 t2 = g_get_monotonic_time();
+
+    /* outline scan: the gui_outline_refresh loop, no widget creation */
+    int headings = 0, lc = (int)line_count;
+    for (int i = 0; i < lc && headings < 200; i++) {
+        GtkTextIter ls, le;
+        gtk_text_buffer_get_iter_at_line(buf, &ls, i);
+        le = ls;
+        if (!gtk_text_iter_ends_line(&le)) gtk_text_iter_forward_to_line_end(&le);
+        gchar *lt = gtk_text_buffer_get_text(buf, &ls, &le, TRUE);
+        int level = 0;
+        while (lt[level] == '#') level++;
+        if (level >= 1 && level <= 6 && lt[level] == ' ' && lt[level + 1] != '\0') headings++;
+        g_free(lt);
+    }
+    gint64 t3 = g_get_monotonic_time();
+
+    g_printerr("[bench] stats-pass (per typing pause) on %ld chars / %ld lines:\n", char_count, line_count);
+    g_printerr("[bench]   counts (char+line)        %.3f ms\n", (t1 - t0) / 1000.0);
+    g_printerr("[bench]   word-count walk           %.3f ms%s\n", (t2 - t1) / 1000.0, word_count < 0 ? " (SKIPPED: >500k cap)" : "");
+    g_printerr("[bench]   outline scan (%d headings) %.3f ms\n", headings, (t3 - t2) / 1000.0);
+
+    g_object_unref(buf);
+}
+
 /* EN→AR translation table + lookup. Active when app language == Arabic (1);
  * English passthrough otherwise. */
 typedef struct { const char *en; const char *ar; } TrPair;
