@@ -1026,6 +1026,32 @@ pub export fn zig_create_folder(name_ptr: [*:0]const u8) callconv(.c) void {
     gui_refresh_explorer();
 }
 
+// Exported FFI: Move a file or folder into a destination directory (drag &
+// drop in the explorer). dest_dir == "" means the vault root. Uses rename(2)
+// (atomic on the same filesystem, works for both files and directories).
+pub export fn zig_move_path(src_ptr: [*:0]const u8, dest_dir_ptr: [*:0]const u8) callconv(.c) void {
+    const src = std.mem.span(src_ptr);
+    const dest_dir = std.mem.span(dest_dir_ptr);
+    if (src.len == 0) return;
+    const gpa = std.heap.page_allocator;
+    const base = std.fs.path.basename(src);
+    const dest = if (dest_dir.len == 0)
+        gpa.dupe(u8, base) catch return
+    else
+        std.fmt.allocPrint(gpa, "{s}/{s}", .{ dest_dir, base }) catch return;
+    defer gpa.free(dest);
+    if (std.mem.eql(u8, src, dest)) return; // dropped onto its own folder
+    const src_z = gpa.dupeZ(u8, src) catch return;
+    defer gpa.free(src_z);
+    const dest_z = gpa.dupeZ(u8, dest) catch return;
+    defer gpa.free(dest_z);
+    if (c.rename(src_z.ptr, dest_z.ptr) != 0) {
+        std.debug.print("Failed to move {s} -> {s}\n", .{ src_z, dest_z });
+        return;
+    }
+    gui_refresh_explorer();
+}
+
 // Exported FFI: Resolve and open wiki-link
 pub export fn zig_open_wiki_link(note_name_ptr: [*:0]const u8) callconv(.c) void {
     const note_name = std.mem.span(note_name_ptr);
