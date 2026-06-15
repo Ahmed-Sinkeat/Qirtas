@@ -54,3 +54,4 @@ A decision is never deleted. If it changes, add a new ADR and mark the old one
 | [0003](0003-single-undo-system-gtk-disabled.md) | Single undo system — GTK undo disabled | Accepted |
 | [0004](0004-gui-modularization.md) | Split `gui.c` into per-concern modules | Accepted |
 | [0005](0005-deferred-patterns.md) | Deferred patterns: Command / Plugin / DI | Accepted |
+| [0006](0006-appgui-substructs.md) | Group AppGui fields into per-domain sub-structs | Accepted |
