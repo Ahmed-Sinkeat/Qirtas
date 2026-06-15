@@ -69,6 +69,16 @@ duplicate of a function that already lives in a module. See
 - Shared types/macros used by 2+ modules belong in `gui_internal.h`, not copied
   into each `.c`.
 
+### AppGui field grouping
+
+`AppGui` is the shared app-context struct. Its fields are organized into nested
+per-domain sub-structs named after the owning module (`gui->cursor.*`,
+`gui->tabs.*`, …). **New state goes into its owning domain's sub-struct**, not the
+top level — unless it is genuinely shell-wide (the main window, sidebar,
+top-level buttons stay top-level). See
+[ADR-0006](adr/0006-appgui-substructs.md). This is organization, not access
+control; C doesn't stop other modules reaching in.
+
 ---
 
 ## Adding / moving a module — checklist
