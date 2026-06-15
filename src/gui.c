@@ -162,9 +162,6 @@ void on_insert_text_after(GtkTextBuffer *buf, GtkTextIter *location, gchar *text
 void on_delete_range_after(GtkTextBuffer *buf, GtkTextIter *start, GtkTextIter *end, gpointer user_data);
 gboolean on_editor_key_pressed(GtkEventControllerKey *ctrl, guint keyval, guint keycode, GdkModifierType state, gpointer user_data);
 void on_editor_right_click(GtkGestureClick *gesture, gint n_press, gdouble x, gdouble y, gpointer user_data);
-static gboolean editor_get_iter_at_widget_point(AppGui *gui, gdouble x, gdouble y, GtkTextIter *iter);
-static void apply_regex_conceal(GtkTextBuffer *buf, const gchar *text, const gchar *pattern, gint cursor_char, gint delim_len, GtkTextTag *conceal_tag);
-static void apply_regex_conceal_local(GtkTextBuffer *buf, const gchar *text, gint range_start_offset, const gchar *pattern, gint cursor_char, gint delim_len, GtkTextTag *conceal_tag);
 void update_conceal_markdown(GtkTextBuffer *buf);
 void update_conceal_markdown_all(GtkTextBuffer *buf);
 void on_buffer_changed(GtkTextBuffer *buf, gpointer user_data);
@@ -187,7 +184,6 @@ void check_and_insert_hr(GtkTextBuffer *buf, AppGui *gui);
 void parse_and_render_hrs(GtkTextBuffer *buf, AppGui *gui);
 static char *replace_anchors_with_hrs(const char *src);
 void apply_paragraph_alignment(GtkTextBuffer *buf, GtkJustification justification);
-static void on_paste_plain_text_received(GObject *source_object, GAsyncResult *res, gpointer user_data);
 static void on_save_as_dialog_response(GObject *source_object, GAsyncResult *res, gpointer user_data);
 void trigger_save_as(AppGui *gui);
 void move_current_line(GtkTextBuffer *buf, gboolean up);
@@ -211,11 +207,8 @@ void on_local_sync_clicked(GtkButton *btn, gpointer user_data);
 /* ScrollToCursorData + AppShortcut: canonical defs in gui_internal.h. */
 gboolean idle_scroll_to_cursor(gpointer user_data);
 
-static gboolean parse_shortcut_string(const char *str, guint *out_keyval, GdkModifierType *out_state);
 void init_app_shortcuts(void);
 gboolean match_app_shortcut(const char *action_id, guint keyval, guint keycode, GdkModifierType state);
-static gboolean on_settings_key_pressed(GtkEventControllerKey *ctrl, guint keyval, guint keycode, GdkModifierType state, gpointer user_data);
-static void on_edit_shortcut_clicked(GtkButton *btn, gpointer user_data);
 
 
 /* FFI — Called from Zig */
@@ -302,92 +295,10 @@ void on_theme_dropdown_changed(GObject *gobject, GParamSpec *pspec, gpointer use
 
 
 /* ── Draw a single ghost caret (rounded-rect pill) at (gx, gy) with given alpha ── */
-static void draw_ghost_caret(cairo_t *cr,
-                             double gx, double gy,
-                             double caret_w, double caret_h,
-                             double r, double g_col, double b,
-                             double alpha)
-{
-    if (alpha <= 0.01) return;
-
-    /* Caret width: keep it narrow like a real I-beam (2–3 px) */
-    double w      = caret_w < 2.5 ? 2.5 : caret_w;
-    double h      = caret_h;
-    double radius = w / 2.0;
-    if (radius < 1.0) radius = 1.0;
-    if (radius > h / 2.0) radius = h / 2.0;
-
-    cairo_new_sub_path(cr);
-    /* top-right arc */
-    cairo_arc(cr, gx + w - radius, gy + radius, radius, -G_PI_2, 0);
-    /* bottom-right arc */
-    cairo_arc(cr, gx + w - radius, gy + h - radius, radius, 0, G_PI_2);
-    /* bottom-left arc */
-    cairo_arc(cr, gx + radius, gy + h - radius, radius, G_PI_2, G_PI);
-    /* top-left arc */
-    cairo_arc(cr, gx + radius, gy + radius, radius, G_PI, 3.0 * G_PI_2);
-    cairo_close_path(cr);
-
-    cairo_set_source_rgba(cr, r, g_col, b, alpha);
-    cairo_fill(cr);
-}
 
 
-static char *resolve_resource_path(const char *rel_path) {
-    static char abs_path[2048];
-    char exe_path[1024] = {0};
-    ssize_t exe_len = readlink("/proc/self/exe", exe_path, sizeof(exe_path) - 1);
-    if (exe_len > 0) {
-        exe_path[exe_len] = '\0';
-        char *last_slash = strrchr(exe_path, '/');
-        if (last_slash) *last_slash = '\0'; /* e.g. /home/.../Qirtas/zig-out/bin */
-        
-        snprintf(abs_path, sizeof(abs_path), "%s/../../%s", exe_path, rel_path);
-        
-        if (access(abs_path, F_OK) != 0) {
-            snprintf(abs_path, sizeof(abs_path), "%s/%s", exe_path, rel_path);
-        }
-        return abs_path;
-    }
-    strncpy(abs_path, rel_path, sizeof(abs_path) - 1);
-    abs_path[sizeof(abs_path) - 1] = '\0';
-    return abs_path;
-}
 
 
-static void on_custom_theme_dialog_response(GObject *source_object, GAsyncResult *res, gpointer user_data) {
-    GtkFileDialog *dialog = GTK_FILE_DIALOG(source_object);
-    GError *error = NULL;
-    GFile *file = gtk_file_dialog_open_finish(dialog, res, &error);
-    AppGui *gui = (AppGui *)user_data;
-    GtkDropDown *dropdown = g_object_get_data(G_OBJECT(dialog), "theme-dropdown");
-    
-    if (file) {
-        char *path = g_file_get_path(file);
-        if (path) {
-            strncpy(custom_theme_path, path, sizeof(custom_theme_path) - 1);
-            custom_theme_path[sizeof(custom_theme_path) - 1] = '\0';
-            apply_theme(gui, "custom");
-            g_free(path);
-        }
-        g_object_unref(file);
-    } else {
-        g_clear_error(&error);
-        if (dropdown) {
-            int idx = 0;
-            if (strcmp(current_theme, "sepia") == 0) idx = 1;
-            else if (strcmp(current_theme, "midnight") == 0) idx = 2;
-            else if (strcmp(current_theme, "things") == 0) idx = 3;
-            else if (strcmp(current_theme, "typewriter-light") == 0) idx = 4;
-            else if (strcmp(current_theme, "typewriter-dark") == 0) idx = 5;
-            else if (strcmp(current_theme, "qirtas") == 0) idx = 6;
-            else if (strcmp(current_theme, "custom") == 0) idx = 7;
-            g_signal_handlers_block_by_func(dropdown, G_CALLBACK(on_theme_dropdown_changed), gui);
-            gtk_drop_down_set_selected(dropdown, idx);
-            g_signal_handlers_unblock_by_func(dropdown, G_CALLBACK(on_theme_dropdown_changed), gui);
-        }
-    }
-}
 
 /* ============================================================
  * UNIFIED ADD / OPEN POPOVER & SHUTDOWN CONTROLS
@@ -592,30 +503,9 @@ static gboolean on_window_close_request(GtkWindow *window, gpointer user_data) {
     return FALSE;       /* clean → allow close, shutdown signal does cleanup */
 }
 
-static void on_popover_destroy(GtkWidget *widget, gpointer user_data) {
-    AppGui *gui = (AppGui *)user_data;
-    if (gui && gui->active_popover == widget) {
-        gui->active_popover = NULL;
-    }
-}
-
-static void on_editor_popover_closed(GtkPopover *popover, gpointer user_data) {
-    (void)user_data;
-    (void)popover;
-    /* GTK4 popdown() already hides the popover; unparenting is handled by
-     * the "destroy" signal connected to on_popover_destroy. Do nothing here. */
-}
 
 
-static gboolean editor_get_iter_at_widget_point(AppGui *gui, gdouble x, gdouble y, GtkTextIter *iter) {
-    if (!gui || !gui->source_view || !iter) return FALSE;
 
-    int bx, by;
-    gtk_text_view_window_to_buffer_coords(GTK_TEXT_VIEW(gui->source_view),
-                                         GTK_TEXT_WINDOW_TEXT,
-                                         (int)x, (int)y, &bx, &by);
-    return gtk_text_view_get_iter_at_location(GTK_TEXT_VIEW(gui->source_view), iter, bx, by);
-}
 
 
 static gboolean on_editor_mouse_event(GtkEventControllerLegacy *controller,
@@ -733,114 +623,7 @@ static void on_workspace_click(GtkGestureClick *gesture, gint n_press, gdouble x
     }
 }
 
-static void apply_regex_conceal(GtkTextBuffer *buf, const gchar *text, const gchar *pattern, gint cursor_char, gint delim_len, GtkTextTag *conceal_tag) {
-    GError *error = NULL;
-    static GRegex *regex_bold = NULL;
-    static GRegex *regex_highlight = NULL;
-    static GRegex *regex_italic = NULL;
-    
-    GRegex *regex = NULL;
-    if (strcmp(pattern, "\\*\\*([^\\n]+?)\\*\\*") == 0) {
-        if (!regex_bold) regex_bold = g_regex_new(pattern, G_REGEX_DEFAULT, 0, NULL);
-        regex = regex_bold;
-    } else if (strcmp(pattern, "==([^\\n]+?)==") == 0) {
-        if (!regex_highlight) regex_highlight = g_regex_new(pattern, G_REGEX_DEFAULT, 0, NULL);
-        regex = regex_highlight;
-    } else if (strcmp(pattern, "(?<!\\*)\\*([^\\n\\*]+?)\\*(?!\\*)") == 0) {
-        if (!regex_italic) regex_italic = g_regex_new(pattern, G_REGEX_DEFAULT, 0, NULL);
-        regex = regex_italic;
-    } else {
-        regex = g_regex_new(pattern, G_REGEX_DEFAULT, 0, NULL);
-    }
-    
-    if (!regex) return;
 
-    GMatchInfo *match_info = NULL;
-    gboolean has_match = g_regex_match(regex, text, 0, &match_info);
-    while (has_match) {
-        gint start_byte = 0;
-        gint end_byte = 0;
-        if (g_match_info_fetch_pos(match_info, 0, &start_byte, &end_byte)) {
-            gint start_char = g_utf8_pointer_to_offset(text, text + start_byte);
-            gint end_char = g_utf8_pointer_to_offset(text, text + end_byte);
-            
-            gboolean cursor_inside = (cursor_char >= start_char && cursor_char <= end_char);
-            
-            if (!cursor_inside) {
-                GtkTextIter start_iter, end_iter;
-                gtk_text_buffer_get_iter_at_offset(buf, &start_iter, start_char);
-                gtk_text_buffer_get_iter_at_offset(buf, &end_iter, start_char + delim_len);
-                gtk_text_buffer_apply_tag(buf, conceal_tag, &start_iter, &end_iter);
-                
-                gtk_text_buffer_get_iter_at_offset(buf, &start_iter, end_char - delim_len);
-                gtk_text_buffer_get_iter_at_offset(buf, &end_iter, end_char);
-                gtk_text_buffer_apply_tag(buf, conceal_tag, &start_iter, &end_iter);
-            }
-        }
-        has_match = g_match_info_next(match_info, &error);
-    }
-    g_clear_error(&error);
-    g_match_info_free(match_info);
-    if (regex != regex_bold && regex != regex_highlight && regex != regex_italic) {
-        g_regex_unref(regex);
-    }
-}
-
-static void apply_regex_conceal_local(GtkTextBuffer *buf, const gchar *text, gint range_start_offset, const gchar *pattern, gint cursor_char, gint delim_len, GtkTextTag *conceal_tag) {
-    GError *error = NULL;
-    static GRegex *regex_bold = NULL;
-    static GRegex *regex_highlight = NULL;
-    static GRegex *regex_italic = NULL;
-    
-    GRegex *regex = NULL;
-    if (strcmp(pattern, "\\*\\*([^\\n]+?)\\*\\*") == 0) {
-        if (!regex_bold) regex_bold = g_regex_new(pattern, G_REGEX_DEFAULT, 0, NULL);
-        regex = regex_bold;
-    } else if (strcmp(pattern, "==([^\\n]+?)==") == 0) {
-        if (!regex_highlight) regex_highlight = g_regex_new(pattern, G_REGEX_DEFAULT, 0, NULL);
-        regex = regex_highlight;
-    } else if (strcmp(pattern, "(?<!\\*)\\*([^\\n\\*]+?)\\*(?!\\*)") == 0) {
-        if (!regex_italic) regex_italic = g_regex_new(pattern, G_REGEX_DEFAULT, 0, NULL);
-        regex = regex_italic;
-    } else {
-        regex = g_regex_new(pattern, G_REGEX_DEFAULT, 0, NULL);
-    }
-    
-    if (!regex) return;
-
-    GMatchInfo *match_info = NULL;
-    gboolean has_match = g_regex_match(regex, text, 0, &match_info);
-    while (has_match) {
-        gint start_byte = 0;
-        gint end_byte = 0;
-        if (g_match_info_fetch_pos(match_info, 0, &start_byte, &end_byte)) {
-            gint start_char_local = g_utf8_pointer_to_offset(text, text + start_byte);
-            gint end_char_local = g_utf8_pointer_to_offset(text, text + end_byte);
-            
-            gint start_char = range_start_offset + start_char_local;
-            gint end_char = range_start_offset + end_char_local;
-            
-            gboolean cursor_inside = (cursor_char >= start_char && cursor_char <= end_char);
-            
-            if (!cursor_inside) {
-                GtkTextIter start_iter, end_iter;
-                gtk_text_buffer_get_iter_at_offset(buf, &start_iter, start_char);
-                gtk_text_buffer_get_iter_at_offset(buf, &end_iter, start_char + delim_len);
-                gtk_text_buffer_apply_tag(buf, conceal_tag, &start_iter, &end_iter);
-                
-                gtk_text_buffer_get_iter_at_offset(buf, &start_iter, end_char - delim_len);
-                gtk_text_buffer_get_iter_at_offset(buf, &end_iter, end_char);
-                gtk_text_buffer_apply_tag(buf, conceal_tag, &start_iter, &end_iter);
-            }
-        }
-        has_match = g_match_info_next(match_info, &error);
-    }
-    g_clear_error(&error);
-    g_match_info_free(match_info);
-    if (regex != regex_bold && regex != regex_highlight && regex != regex_italic) {
-        g_regex_unref(regex);
-    }
-}
 
 
 static char *replace_anchors_with_hrs(const char *src) {
@@ -873,28 +656,6 @@ static void on_cursor_position_changed(GObject *object, GParamSpec *pspec, gpoin
 }
 
 
-static void on_paste_plain_text_received(GObject *source_object, GAsyncResult *res, gpointer user_data) {
-    GdkClipboard *clipboard = GDK_CLIPBOARD(source_object);
-    GError *error = NULL;
-    char *text = gdk_clipboard_read_text_finish(clipboard, res, &error);
-    if (error) {
-        g_warning("Failed to read text from clipboard: %s", error->message);
-        g_clear_error(&error);
-        return;
-    }
-    if (text) {
-        AppGui *gui = (AppGui *)user_data;
-        GtkTextBuffer *buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(gui->source_view));
-        GtkTextIter start, end;
-        gtk_text_buffer_begin_user_action(buf);
-        if (gtk_text_buffer_get_selection_bounds(buf, &start, &end)) {
-            gtk_text_buffer_delete(buf, &start, &end);
-        }
-        gtk_text_buffer_insert_at_cursor(buf, text, -1);
-        gtk_text_buffer_end_user_action(buf);
-        g_free(text);
-    }
-}
 
 static void on_save_as_dialog_response(GObject *source_object, GAsyncResult *res, gpointer user_data) {
     GtkFileDialog *dialog = GTK_FILE_DIALOG(source_object);
@@ -1007,172 +768,14 @@ static AppShortcut app_shortcuts[] = {
 #define NUM_APP_SHORTCUTS (sizeof(app_shortcuts)/sizeof(app_shortcuts[0]))
 
 static int shortcut_listening_index = -1;
-static GtkWidget *shortcut_value_labels[NUM_APP_SHORTCUTS] = { NULL };
 static GtkWidget *shortcut_edit_buttons[NUM_APP_SHORTCUTS] = { NULL };
 
-static gboolean parse_shortcut_string(const char *str, guint *out_keyval, GdkModifierType *out_state) {
-    if (!str || strlen(str) == 0) return FALSE;
-
-    GdkModifierType state = 0;
-    const char *p = str;
-
-    while (*p == '<') {
-        const char *end = strchr(p, '>');
-        if (!end) break;
-        
-        size_t len = end - p - 1;
-        if (g_ascii_strncasecmp(p + 1, "Control", len) == 0) {
-            state |= GDK_CONTROL_MASK;
-        } else if (g_ascii_strncasecmp(p + 1, "Shift", len) == 0) {
-            state |= GDK_SHIFT_MASK;
-        } else if (g_ascii_strncasecmp(p + 1, "Alt", len) == 0) {
-            state |= GDK_ALT_MASK;
-        } else if (g_ascii_strncasecmp(p + 1, "Meta", len) == 0 || g_ascii_strncasecmp(p + 1, "Super", len) == 0) {
-            state |= GDK_SUPER_MASK;
-        }
-        p = end + 1;
-    }
-
-    guint keyval = gdk_keyval_from_name(p);
-    if (keyval == GDK_KEY_VoidSymbol) {
-        if (strcmp(p, "+") == 0) keyval = GDK_KEY_plus;
-        else if (strcmp(p, "=") == 0) keyval = GDK_KEY_equal;
-        else if (strcmp(p, "-") == 0) keyval = GDK_KEY_minus;
-        else if (strcmp(p, "\\") == 0) keyval = GDK_KEY_backslash;
-        else return FALSE;
-    }
-
-    *out_keyval = keyval;
-    *out_state = state;
-    return TRUE;
-}
 
 
-static gboolean is_modifier_key(guint keyval) {
-    return (keyval == GDK_KEY_Shift_L || keyval == GDK_KEY_Shift_R ||
-            keyval == GDK_KEY_Control_L || keyval == GDK_KEY_Control_R ||
-            keyval == GDK_KEY_Alt_L || keyval == GDK_KEY_Alt_R ||
-            keyval == GDK_KEY_Meta_L || keyval == GDK_KEY_Meta_R ||
-            keyval == GDK_KEY_Super_L || keyval == GDK_KEY_Super_R ||
-            keyval == GDK_KEY_Hyper_L || keyval == GDK_KEY_Hyper_R ||
-            keyval == GDK_KEY_Caps_Lock || keyval == GDK_KEY_Num_Lock ||
-            keyval == GDK_KEY_Scroll_Lock);
-}
 
-static gchar* get_pretty_shortcut_string(const char *shortcut_str) {
-    GString *pretty = g_string_new("");
-    const char *p = shortcut_str;
-    while (*p) {
-        if (strncmp(p, "<Control>", 9) == 0) {
-            g_string_append(pretty, "Ctrl + ");
-            p += 9;
-        } else if (strncmp(p, "<Shift>", 7) == 0) {
-            g_string_append(pretty, "Shift + ");
-            p += 7;
-        } else if (strncmp(p, "<Alt>", 5) == 0) {
-            g_string_append(pretty, "Alt + ");
-            p += 5;
-        } else if (strncmp(p, "<Super>", 7) == 0) {
-            g_string_append(pretty, "Super + ");
-            p += 7;
-        } else {
-            if (strlen(p) == 1 && *p >= 'a' && *p <= 'z') {
-                g_string_append_c(pretty, *p - 32);
-            } else {
-                g_string_append(pretty, p);
-            }
-            break;
-        }
-    }
-    return g_string_free(pretty, FALSE);
-}
 
-static gboolean on_settings_key_pressed(GtkEventControllerKey *ctrl,
-                                        guint keyval, guint keycode,
-                                        GdkModifierType state, gpointer user_data) {
-    (void)ctrl;
-    (void)keycode;
-    (void)user_data;
 
-    if (shortcut_listening_index < 0) return FALSE;
 
-    if (is_modifier_key(keyval)) {
-        return TRUE;
-    }
-
-    int idx = shortcut_listening_index;
-    shortcut_listening_index = -1;
-
-    GString *gstr = g_string_new("");
-    if (state & GDK_CONTROL_MASK) g_string_append(gstr, "<Control>");
-    if (state & GDK_SHIFT_MASK)   g_string_append(gstr, "<Shift>");
-    if (state & GDK_ALT_MASK)     g_string_append(gstr, "<Alt>");
-    if (state & GDK_SUPER_MASK)   g_string_append(gstr, "<Super>");
-
-    const char *key_name = gdk_keyval_name(keyval);
-    if (!key_name) {
-        key_name = "void";
-    }
-    g_string_append(gstr, key_name);
-
-    strncpy(app_shortcuts[idx].shortcut_str, gstr->str, sizeof(app_shortcuts[idx].shortcut_str) - 1);
-    app_shortcuts[idx].shortcut_str[sizeof(app_shortcuts[idx].shortcut_str) - 1] = '\0';
-    app_shortcuts[idx].keyval = keyval;
-    app_shortcuts[idx].state = state & (GDK_CONTROL_MASK | GDK_SHIFT_MASK | GDK_ALT_MASK | GDK_SUPER_MASK);
-
-    sqlite3 *db = NULL;
-    if (sqlite3_open(DB_PATH, &db) == SQLITE_OK) {
-        const char *insert_sql = "INSERT OR REPLACE INTO keyboard_shortcuts (action_name, shortcut_val) VALUES (?, ?);";
-        sqlite3_stmt *stmt = NULL;
-        if (sqlite3_prepare_v2(db, insert_sql, -1, &stmt, NULL) == SQLITE_OK) {
-            sqlite3_bind_text(stmt, 1, app_shortcuts[idx].action_id, -1, SQLITE_STATIC);
-            sqlite3_bind_text(stmt, 2, app_shortcuts[idx].shortcut_str, -1, SQLITE_STATIC);
-            sqlite3_step(stmt);
-            sqlite3_finalize(stmt);
-        }
-        sqlite3_close(db);
-    }
-
-    if (shortcut_value_labels[idx]) {
-        gchar *pretty_str = get_pretty_shortcut_string(app_shortcuts[idx].shortcut_str);
-        gtk_label_set_text(GTK_LABEL(shortcut_value_labels[idx]), pretty_str);
-        g_free(pretty_str);
-    }
-
-    if (shortcut_edit_buttons[idx]) {
-        gtk_button_set_label(GTK_BUTTON(shortcut_edit_buttons[idx]), "Edit");
-    }
-
-    g_string_free(gstr, TRUE);
-
-    return TRUE;
-}
-
-static void on_edit_shortcut_clicked(GtkButton *btn, gpointer user_data) {
-    int idx = GPOINTER_TO_INT(user_data);
-
-    if (shortcut_listening_index >= 0 && shortcut_listening_index != idx) {
-        int old_idx = shortcut_listening_index;
-        if (shortcut_edit_buttons[old_idx]) {
-            gtk_button_set_label(GTK_BUTTON(shortcut_edit_buttons[old_idx]), "Edit");
-        }
-    }
-
-    shortcut_listening_index = idx;
-    gtk_button_set_label(btn, "Press keys...");
-}
-
-static void on_kb_window_destroy(GtkWidget *widget, gpointer user_data) {
-    (void)widget;
-    (void)user_data;
-    if (shortcut_listening_index >= 0) {
-        shortcut_listening_index = -1;
-    }
-    for (size_t i = 0; i < NUM_APP_SHORTCUTS; i++) {
-        shortcut_value_labels[i] = NULL;
-        shortcut_edit_buttons[i] = NULL;
-    }
-}
 
 
 /* ============================================================
@@ -1227,101 +830,9 @@ static void on_logo_clicked(GtkButton *btn, gpointer user_data) {
  * SEARCH
  * ============================================================ */
 
-static void update_search_match_count(AppGui *gui) {
-    if (!gui->search_ctx) return;
-    gint count = gtk_source_search_context_get_occurrences_count(gui->search_ctx);
-    char buf[48];
-    if (count == -1 || count == 0)
-        snprintf(buf, sizeof(buf), "no matches");
-    else
-        snprintf(buf, sizeof(buf), "%d match%s", count, count == 1 ? "" : "es");
-    gtk_label_set_text(GTK_LABEL(gui->search_match_label), buf);
-}
 
-static void do_search_forward(AppGui *gui) {
-    if (!gui->search_ctx) return;
-    GtkTextBuffer *buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(gui->source_view));
-    GtkTextIter start, end, ms, me;
-    gtk_text_buffer_get_selection_bounds(buf, &start, &end);
-    gtk_text_iter_forward_char(&end);
-    gboolean wrapped;
-    if (gtk_source_search_context_forward(gui->search_ctx, &end, &ms, &me, &wrapped)) {
-        gtk_text_buffer_select_range(buf, &ms, &me);
-        gtk_text_view_scroll_to_mark(GTK_TEXT_VIEW(gui->source_view),
-                                     gtk_text_buffer_get_insert(buf),
-                                     0.15, FALSE, 0.0, 0.5);
-    }
-    update_search_match_count(gui);
-}
 
-static void do_search_backward(AppGui *gui) {
-    if (!gui->search_ctx) return;
-    GtkTextBuffer *buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(gui->source_view));
-    GtkTextIter start, end, ms, me;
-    gtk_text_buffer_get_selection_bounds(buf, &start, &end);
-    gboolean wrapped;
-    if (gtk_source_search_context_backward(gui->search_ctx, &start, &ms, &me, &wrapped)) {
-        gtk_text_buffer_select_range(buf, &ms, &me);
-        gtk_text_view_scroll_to_mark(GTK_TEXT_VIEW(gui->source_view),
-                                     gtk_text_buffer_get_insert(buf),
-                                     0.15, FALSE, 0.0, 0.5);
-    }
-    update_search_match_count(gui);
-}
 
-static char *create_arabic_search_regex(const char *input) {
-    if (!input || strlen(input) == 0) return g_strdup("");
-
-    GString *pattern = g_string_new("");
-    const char *p = input;
-
-    while (*p != '\0') {
-        gunichar c = g_utf8_get_char(p);
-        const char *next_p = g_utf8_next_char(p);
-
-        // 1. Skip input diacritics so they are ignored/stripped from user query
-        if ((c >= 0x064B && c <= 0x065F) || c == 0x0670) {
-            p = next_p;
-            continue;
-        }
-
-        // 2. Check for regex special characters and escape them
-        if (strchr(".*+?^${}()|[]\\", (char)c) != NULL) {
-            g_string_append_printf(pattern, "\\%c", (char)c);
-        }
-        // 3. Arabic letter variations
-        else if (c == 0x0627 || c == 0x0623 || c == 0x0625 || c == 0x0622 || c == 0x0671) {
-            // Alef group: [اأإآٱ]
-            g_string_append(pattern, "[اأإآٱ]");
-        }
-        else if (c == 0x0629 || c == 0x0647) {
-            // Teh Marbuta / Heh: [ةه]
-            g_string_append(pattern, "[ةه]");
-        }
-        else if (c == 0x064A || c == 0x0649) {
-            // Yeh / Alef Maksura: [يى]
-            g_string_append(pattern, "[يى]");
-        }
-        else {
-            // Standard character: append its UTF-8 representation
-            char utf8_buf[6] = {0};
-            int len = g_unichar_to_utf8(c, utf8_buf);
-            g_string_append_len(pattern, utf8_buf, len);
-        }
-
-        // 4. Append optional Arabic diacritics matcher after this character
-        // Arabic block is 0x0600 to 0x06FF.
-        if (c >= 0x0600 && c <= 0x06FF) {
-            g_string_append(pattern, "[\\x{064B}-\\x{065F}\\x{0670}]*");
-        }
-
-        p = next_p;
-    }
-
-    char *result = pattern->str;
-    g_string_free(pattern, FALSE);
-    return result;
-}
 
 
 /* ============================================================
@@ -1416,7 +927,6 @@ static void format_mtime(time_t mtime, char *out, size_t n) {
 }
 
 /* Global tracker for the currently active tree row button */
-static GtkWidget *g_active_tree_row = NULL;
 
 /* Data passed to toggle callback for directory rows */
 typedef struct {
@@ -1425,202 +935,36 @@ typedef struct {
     gboolean   expanded;
 } TreeDirData;
 
-static void on_tree_dir_toggle(GtkButton *btn, gpointer user_data) {
-    (void)btn;
-    TreeDirData *d = (TreeDirData *)user_data;
-    d->expanded = !d->expanded;
-    gtk_widget_set_visible(d->children_box, d->expanded);
-    gtk_label_set_text(GTK_LABEL(d->arrow_label), d->expanded ? "▼" : "▶");
-}
 
-static void on_tree_file_clicked(GtkButton *btn, gpointer user_data) {
-    /* Clear previous active */
-    if (g_active_tree_row && GTK_IS_WIDGET(g_active_tree_row))
-        gtk_widget_remove_css_class(g_active_tree_row, "active");
-    g_active_tree_row = GTK_WIDGET(btn);
-    gtk_widget_add_css_class(GTK_WIDGET(btn), "active");
-    zig_open_file((const char *)user_data);
-}
 
 /* Forward declaration */
-static void tree_build_dir(GtkWidget *parent_box, const char *dir_path, int depth);
 
 /*
  * Build a single file row widget.
  * full_path  – absolute or relative path to the file
  * name       – display name (basename)
  */
-static GtkWidget *tree_build_file_row(const char *full_path, const char *name) {
-    gboolean is_md = g_str_has_suffix(name, ".md") || g_str_has_suffix(name, ".txt");
-
-    GtkWidget *btn = gtk_button_new();
-    gtk_widget_add_css_class(btn, "tree-row");
-    gtk_widget_set_hexpand(btn, TRUE);
-
-    GtkWidget *hbox = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 4);
-    gtk_widget_set_halign(hbox, GTK_ALIGN_FILL);
-    gtk_widget_set_hexpand(hbox, TRUE);
-
-    /* File icon */
-    const char *icon_name = is_md ? "text-x-generic-symbolic" : "text-x-generic-symbolic";
-    GtkWidget *icon = gtk_image_new_from_icon_name(icon_name);
-    gtk_widget_add_css_class(icon, is_md ? "tree-icon-md" : "tree-icon");
-    gtk_box_append(GTK_BOX(hbox), icon);
-
-    /* Name label */
-    GtkWidget *lbl = gtk_label_new(name);
-    gtk_widget_add_css_class(lbl, "tree-row-label");
-    gtk_label_set_ellipsize(GTK_LABEL(lbl), PANGO_ELLIPSIZE_END);
-    gtk_widget_set_hexpand(lbl, TRUE);
-    gtk_widget_set_halign(lbl, GTK_ALIGN_START);
-    gtk_box_append(GTK_BOX(hbox), lbl);
-
-    gtk_button_set_child(GTK_BUTTON(btn), hbox);
-
-    /* Store full path on button and connect signal */
-    char *path_copy = g_strdup(full_path);
-    g_signal_connect_data(btn, "clicked",
-                          G_CALLBACK(on_tree_file_clicked),
-                          path_copy, (GClosureNotify)g_free, 0);
-
-    /* Store filepath for search */
-    g_object_set_data_full(G_OBJECT(btn), "tree_filepath", g_strdup(full_path), g_free);
-
-    return btn;
-}
 
 /*
  * Build a directory row with a collapsible children box.
  * Returns the outer wrapper box (row + children).
  */
-static GtkWidget *tree_build_dir_row(const char *dir_path, const char *name) {
-    GtkWidget *wrapper = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
-
-    /* Header button row */
-    GtkWidget *btn = gtk_button_new();
-    gtk_widget_add_css_class(btn, "tree-row");
-    gtk_widget_add_css_class(btn, "tree-row-dir");
-    gtk_widget_set_hexpand(btn, TRUE);
-
-    GtkWidget *hbox = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 4);
-    gtk_widget_set_hexpand(hbox, TRUE);
-
-    /* Arrow label */
-    GtkWidget *arrow = gtk_label_new("▶");
-    gtk_widget_add_css_class(arrow, "tree-arrow");
-    gtk_box_append(GTK_BOX(hbox), arrow);
-
-    /* Folder icon */
-    GtkWidget *icon = gtk_image_new_from_icon_name("folder-symbolic");
-    gtk_widget_add_css_class(icon, "tree-icon-folder");
-    gtk_box_append(GTK_BOX(hbox), icon);
-
-    /* Name label */
-    GtkWidget *lbl = gtk_label_new(name);
-    gtk_widget_add_css_class(lbl, "tree-row-label");
-    gtk_label_set_ellipsize(GTK_LABEL(lbl), PANGO_ELLIPSIZE_END);
-    gtk_widget_set_hexpand(lbl, TRUE);
-    gtk_widget_set_halign(lbl, GTK_ALIGN_START);
-    gtk_box_append(GTK_BOX(hbox), lbl);
-
-    gtk_button_set_child(GTK_BUTTON(btn), hbox);
-    gtk_box_append(GTK_BOX(wrapper), btn);
-
-    /* Children container (hidden by default) */
-    GtkWidget *children_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
-    gtk_widget_add_css_class(children_box, "tree-children");
-    gtk_widget_set_visible(children_box, FALSE);
-    gtk_box_append(GTK_BOX(wrapper), children_box);
-
-    /* Recursively populate children */
-    tree_build_dir(children_box, dir_path, 0);
-
-    /* Toggle data */
-    TreeDirData *data = g_new0(TreeDirData, 1);
-    data->children_box = children_box;
-    data->arrow_label  = arrow;
-    data->expanded     = FALSE;
-
-    g_signal_connect_data(btn, "clicked",
-                          G_CALLBACK(on_tree_dir_toggle),
-                          data, (GClosureNotify)g_free, 0);
-
-    return wrapper;
-}
 
 /*
  * String comparison function for qsort — directories first, then alphabetical.
  */
 typedef struct { char name[NAME_MAX+1]; gboolean is_dir; } DirEntry;
 
-static int dir_entry_cmp(const void *a, const void *b) {
-    const DirEntry *ea = (const DirEntry *)a;
-    const DirEntry *eb = (const DirEntry *)b;
-    if (ea->is_dir != eb->is_dir)
-        return ea->is_dir ? -1 : 1; /* dirs first */
-    return strcasecmp(ea->name, eb->name);
-}
 
 /*
  * Recursively fill parent_box with tree rows for all entries in dir_path.
  * depth is unused currently but kept for future indent logic.
  */
-static void tree_build_dir(GtkWidget *parent_box, const char *dir_path, int depth) {
-    (void)depth;
-
-    GError *err = NULL;
-    GDir *dir = g_dir_open(dir_path, 0, &err);
-    if (!dir) {
-        if (err) g_error_free(err);
-        return;
-    }
-
-    /* Collect entries */
-    DirEntry entries[4096];
-    int count = 0;
-    const char *nm;
-    while ((nm = g_dir_read_name(dir)) != NULL && count < 4095) {
-        if (nm[0] == '.') continue; /* skip hidden */
-        strncpy(entries[count].name, nm, NAME_MAX);
-        entries[count].name[NAME_MAX] = '\0';
-
-        char full[PATH_MAX];
-        snprintf(full, sizeof(full), "%s/%s", dir_path, nm);
-        entries[count].is_dir = g_file_test(full, G_FILE_TEST_IS_DIR);
-        count++;
-    }
-    g_dir_close(dir);
-
-    qsort(entries, count, sizeof(DirEntry), dir_entry_cmp);
-
-    for (int i = 0; i < count; i++) {
-        char full[PATH_MAX];
-        snprintf(full, sizeof(full), "%s/%s", dir_path, entries[i].name);
-
-        GtkWidget *row_widget;
-        if (entries[i].is_dir) {
-            row_widget = tree_build_dir_row(full, entries[i].name);
-        } else {
-            /* Only show relevant text files */
-            const char *n = entries[i].name;
-            gboolean show = g_str_has_suffix(n, ".md")  ||
-                            g_str_has_suffix(n, ".txt") ||
-                            g_str_has_suffix(n, ".zig") ||
-                            g_str_has_suffix(n, ".c")   ||
-                            g_str_has_suffix(n, ".h")   ||
-                            g_str_has_suffix(n, ".zon");
-            if (!show) continue;
-            row_widget = tree_build_file_row(full, entries[i].name);
-        }
-        gtk_box_append(GTK_BOX(parent_box), row_widget);
-    }
-}
 
 /* ============================================================
  * populate_explorer  — replaces the old flat-list version
  * ============================================================ */
 
-static GtkWidget *g_tree_container = NULL; /* the root GtkBox inside the scroll */
 
 
 /* ============================================================
@@ -1628,75 +972,9 @@ static GtkWidget *g_tree_container = NULL; /* the root GtkBox inside the scroll 
  * filter visible rows by name on search)
  * ============================================================ */
 
-static guint explorer_search_timeout_id = 0;
 
 /* Recursively walk the tree GtkBox and show/hide file rows matching query */
-static int tree_filter_walk(GtkWidget *box, const char *query, int *match_count) {
-    GtkWidget *child = gtk_widget_get_first_child(box);
-    int visible_in_this_box = 0;
-    while (child) {
-        GtkWidget *next = gtk_widget_get_next_sibling(child);
-        if (GTK_IS_BUTTON(child)) {
-            /* File row */
-            const char *fp = g_object_get_data(G_OBJECT(child), "tree_filepath");
-            if (fp) {
-                const char *basename = g_path_get_basename(fp); /* leaks, but tiny */
-                gboolean match = (query == NULL || strlen(query) == 0 ||
-                                  (strcasestr(basename, query) != NULL));
-                gtk_widget_set_visible(child, match);
-                if (match) { visible_in_this_box++; if (match_count) (*match_count)++; }
-            }
-        } else if (GTK_IS_BOX(child)) {
-            /* Could be a dir wrapper or children_box */
-            /* Check if it has the tree-children class → recurse into it */
-            if (gtk_widget_has_css_class(child, "tree-children")) {
-                int sub = tree_filter_walk(child, query, match_count);
-                /* Make children_box visible if it has matches and we are searching */
-                if (query && strlen(query) > 0) {
-                    gtk_widget_set_visible(child, sub > 0);
-                    if (sub > 0) visible_in_this_box++;
-                } else {
-                    /* Reset to collapsed */
-                    gtk_widget_set_visible(child, FALSE);
-                }
-            } else {
-                /* Dir wrapper box (contains button + children_box) */
-                int sub = tree_filter_walk(child, query, match_count);
-                gtk_widget_set_visible(child, (query == NULL || strlen(query) == 0) || sub > 0);
-                if (sub > 0) visible_in_this_box++;
-            }
-        }
-        child = next;
-    }
-    return visible_in_this_box;
-}
 
-static gboolean do_debounced_explorer_search(gpointer user_data) {
-    AppGui *gui = (AppGui *)user_data;
-    explorer_search_timeout_id = 0;
-
-    if (!gui || !gui->explorer_listbox) return G_SOURCE_REMOVE;
-
-    const char *query = gtk_editable_get_text(GTK_EDITABLE(gui->exp_search_entry));
-    int match_count = 0;
-    tree_filter_walk(gui->explorer_listbox, query, &match_count);
-
-    if (gui->exp_count_label) {
-        char badge[64];
-        if (query && strlen(query) > 0)
-            snprintf(badge, sizeof(badge), "Found %d matches", match_count);
-        else {
-            /* Count top-level items */
-            int top = 0;
-            GtkWidget *w = gtk_widget_get_first_child(gui->explorer_listbox);
-            while (w) { top++; w = gtk_widget_get_next_sibling(w); }
-            snprintf(badge, sizeof(badge), "%d items", top);
-        }
-        gtk_label_set_text(GTK_LABEL(gui->exp_count_label), badge);
-    }
-
-    return G_SOURCE_REMOVE;
-}
 
 
 /* Stub sort func — not used with tree box but kept to avoid linker issues */
@@ -4299,5 +3577,7 @@ void gui_run_on_main_thread(GuiIdleCallback callback, void *user_data) {
     id->data = user_data;
     g_idle_add(idle_wrapper, id);
 }
+
+
 
 
