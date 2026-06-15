@@ -41,8 +41,10 @@ Qirtas/
 │       ├── gui_export.c                 ← Themed PDF export, theme chooser dialog, block renderer
 │       ├── gui_index.c                  ← SQLite FTS file indexing (called over FFI from Zig sync layer)
 │       ├── gui_sync_status.c            ← Sync-status UI reporting (labels/buttons/badge) for all providers
-│       └── gui_layout.c                 ← Editor layout & display prefs: paper-column sizing, border,
-│                                           focus/read/compact modes, dividers, column-resize, settings cbs
+│       ├── gui_layout.c                 ← Editor layout & display prefs: paper-column sizing, border,
+│       │                                   focus/read/compact modes, dividers, column-resize, settings cbs
+│       ├── gui_i18n.c                   ← EN→AR UI string table + qirtas_tr() lookup
+│       └── gui_rtl.c                    ← Per-paragraph RTL/LTR direction (buffer-edit path)
 │   └── ui/
 │       ├── themes/
 │       │   ├── base.css                 ← Shared layout (tab strip, paper card, desk outline, status pill)
@@ -211,6 +213,8 @@ system_keys schema, active-file-path bounds check). Run it before pushing anythi
 | `gui_index` | SQLite FTS file indexing (`gui_index_all_files` / `gui_index_file` / `gui_remove_file_from_index`), called over FFI from the Zig sync layer | `src/gui/gui_index.c` |
 | `gui_sync_status` | Sync-status UI reporting: maps backend status strings + connection states onto labels / connect+sync buttons / the global badge for Google Drive, Dropbox, GitHub, local (`gui_set_sync_state`, `gui_update_*_status`) | `src/gui/gui_sync_status.c` |
 | `gui_layout` | Editor layout & display preferences: paper-column sizing (`paper_column_tick`), editor border, focus/read/compact modes, layout dividers, column-resize drag, `apply_editor_prefs`, and the settings callbacks that drive them | `src/gui/gui_layout.c` |
+| `gui_i18n` | EN→AR UI string table (`tr_table`) + `qirtas_tr()` lookup, used by every gui module | `src/gui/gui_i18n.c` |
+| `gui_rtl` | Per-paragraph RTL/LTR text direction for the buffer-edit path (`update_all_paragraphs_direction`, `update_paragraph_direction_lines`); `gui_conceal.c` keeps its own copy for the conceal pass | `src/gui/gui_rtl.c` |
 
 ## UI Redesign (2026-06-13)
 
