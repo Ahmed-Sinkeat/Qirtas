@@ -321,6 +321,26 @@ gboolean on_window_close_request(GtkWindow *window, gpointer user_data);
 void on_save_as_dialog_response(GObject *source_object, GAsyncResult *res, gpointer user_data);
 void prompt_new_folder(AppGui *gui, const char *parent_dir);
 
+/* Settings window opener (gui.c). */
+void on_settings_btn_clicked(GtkButton *btn, gpointer user_data);
+
+/* Status bar actions + overflow menu (gui_statusbar.c). */
+void popdown_ancestor_popover(GtkWidget *w);
+GtkWidget *status_menu_item(const char *icon, const char *label, const char *hint, GCallback cb, gpointer user_data);
+void on_status_menu_shortcuts(GtkButton *btn, gpointer user_data);
+void on_status_menu_settings(GtkButton *btn, gpointer user_data);
+void on_status_menu_quit(GtkButton *btn, gpointer user_data);
+void on_status_menu_find_replace(GtkButton *btn, gpointer user_data);
+void on_status_menu_fullscreen(GtkButton *btn, gpointer user_data);
+void on_status_menu_copy_file(GtkButton *btn, gpointer user_data);
+void on_status_menu_save_as(GtkButton *btn, gpointer user_data);
+void on_status_bar_open_file_clicked(GtkButton *btn, gpointer user_data);
+void on_status_bar_new_file_clicked(GtkButton *btn, gpointer user_data);
+void on_status_bar_save_file_clicked(GtkButton *btn, gpointer user_data);
+void on_status_bar_export_pdf_clicked(GtkButton *btn, gpointer user_data);
+void on_read_mode_toggle_clicked(GtkButton *btn, gpointer user_data);
+void on_restart_clicked(GtkButton *btn, gpointer user_data);
+
 /* Paper-card geometry (shared between gui.c and gui_layout.c). */
 #define QIRTAS_DESK_GAP_MIN 8
 #define QIRTAS_DESK_GAP_MAX 360
