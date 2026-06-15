@@ -1,4 +1,8 @@
 
+> **See also:** [`docs/adr/`](../docs/adr/) for the big architecture decisions
+> and their rationale, and [`docs/conventions.md`](../docs/conventions.md) for
+> naming / module / linkage rules.
+
 ## Repository Layout
 
 ```text
