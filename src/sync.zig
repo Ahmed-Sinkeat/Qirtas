@@ -789,7 +789,63 @@ fn rename_file_on_drive(allocator: std.mem.Allocator, access_token: []const u8, 
     return error.DriveUpdateFailed;
 }
 
-fn upload_file_to_drive(allocator: std.mem.Allocator, access_token: []const u8, filename: []const u8, content: []const u8) ![]const u8 {
+/// Finds (or creates) the per-vault folder named `vault_id` inside
+/// appDataFolder and returns its Drive file ID. All sync listing/uploads
+/// are scoped to this folder, so files from other vaults never appear
+/// in this vault's appDataFolder listing.
+fn drive_ensure_vault_folder(allocator: std.mem.Allocator, access_token: []const u8, vault_id: []const u8) ![]u8 {
+    const auth_hdr = try std.fmt.allocPrint(allocator, "Bearer {s}", .{access_token});
+    defer allocator.free(auth_hdr);
+
+    const search_url = try std.fmt.allocPrint(allocator,
+        "https://www.googleapis.com/drive/v3/files?q=name+%3D+%27{s}%27+and+%27appDataFolder%27+in+parents+and+trashed+%3D+false&spaces=appDataFolder&fields=files(id,name)",
+        .{vault_id});
+    defer allocator.free(search_url);
+
+    const search_res = try http_fetch(allocator, .GET, search_url, &[_]std.http.Header{
+        .{ .name = "Authorization", .value = auth_hdr },
+    }, null);
+    defer allocator.free(search_res.body);
+
+    if (search_res.status == .unauthorized or search_res.status == .forbidden) {
+        zig_sync_disconnect();
+        return error.AuthenticationExpired;
+    }
+    if (search_res.status == .ok) {
+        const FolderSearch = struct {
+            files: []struct { id: []const u8, name: []const u8 },
+        };
+        if (std.json.parseFromSlice(FolderSearch, allocator, search_res.body, .{ .ignore_unknown_fields = true })) |parsed| {
+            defer parsed.deinit();
+            if (parsed.value.files.len > 0) {
+                return try allocator.dupe(u8, parsed.value.files[0].id);
+            }
+        } else |_| {}
+    }
+
+    const create_body = try std.fmt.allocPrint(allocator,
+        "{{\"name\": \"{s}\", \"mimeType\": \"application/vnd.google-apps.folder\", \"parents\": [\"appDataFolder\"]}}",
+        .{vault_id});
+    defer allocator.free(create_body);
+
+    const create_res = try http_fetch(allocator, .POST, "https://www.googleapis.com/drive/v3/files", &[_]std.http.Header{
+        .{ .name = "Authorization", .value = auth_hdr },
+        .{ .name = "Content-Type", .value = "application/json" },
+    }, create_body);
+    defer allocator.free(create_res.body);
+
+    if (create_res.status == .unauthorized or create_res.status == .forbidden) {
+        zig_sync_disconnect();
+        return error.AuthenticationExpired;
+    }
+    if (create_res.status != .ok and create_res.status != .created) return error.DriveCreateFolderFailed;
+
+    const parsed = try std.json.parseFromSlice(DriveUploadResponse, allocator, create_res.body, .{ .ignore_unknown_fields = true });
+    defer parsed.deinit();
+    return try allocator.dupe(u8, parsed.value.id);
+}
+
+fn upload_file_to_drive(allocator: std.mem.Allocator, access_token: []const u8, parent_folder_id: []const u8, filename: []const u8, content: []const u8) ![]const u8 {
     var attempt: u32 = 0;
     const max_attempts = 3;
     while (attempt < max_attempts) : (attempt += 1) {
@@ -820,7 +876,7 @@ fn upload_file_to_drive(allocator: std.mem.Allocator, access_token: []const u8, 
             \\--foo
             \\Content-Type: application/json; charset=UTF-8
             \\
-            \\{{"name": "{s}", "parents": ["appDataFolder"]}}
+            \\{{"name": "{s}", "parents": ["{s}"]}}
             \\
             \\--foo
             \\Content-Type: text/markdown
@@ -828,7 +884,7 @@ fn upload_file_to_drive(allocator: std.mem.Allocator, access_token: []const u8, 
             \\{s}
             \\--foo--
             ,
-            .{filename, content}
+            .{filename, parent_folder_id, content}
         ) catch |err| return err;
         defer allocator.free(multipart_body);
 
@@ -982,19 +1038,22 @@ fn update_local_metadata(allocator: std.mem.Allocator, filename: []const u8, dri
     _ = c.sqlite3_step(stmt);
 }
 
-fn local_sync_dir_path(allocator: std.mem.Allocator) ![]u8 {
+/// Returns "<base>/<vault_id>" so each vault syncs to its own subfolder
+/// instead of dumping every vault's files into one shared directory.
+fn local_sync_dir_path(allocator: std.mem.Allocator, vault_id: []const u8) ![]u8 {
     if (c.getenv("QIRTAS_LOCAL_SYNC_DIR")) |env_path| {
         const path = std.mem.span(env_path);
-        if (path.len > 0) return try allocator.dupe(u8, path);
+        if (path.len > 0) return try std.fmt.allocPrint(allocator, "{s}/{s}", .{ path, vault_id });
     }
 
     if (c.getenv("HOME")) |home| {
-        return try std.fmt.allocPrint(allocator, "{s}/QirtasSync", .{std.mem.span(home)});
+        return try std.fmt.allocPrint(allocator, "{s}/QirtasSync/{s}", .{ std.mem.span(home), vault_id });
     }
 
-    return try allocator.dupe(u8, "/tmp/QirtasSync");
+    return try std.fmt.allocPrint(allocator, "/tmp/QirtasSync/{s}", .{vault_id});
 }
 
+/// Creates `path` and any missing parent directories.
 fn ensure_directory(path: []const u8) !void {
     const path_z = try std.heap.page_allocator.dupeZ(u8, path);
     defer std.heap.page_allocator.free(path_z);
@@ -1003,6 +1062,10 @@ fn ensure_directory(path: []const u8) !void {
     if (c.stat(path_z.ptr, &st) == 0) {
         if ((st.st_mode & c.S_IFMT) == c.S_IFDIR) return;
         return error.SyncTargetIsNotDirectory;
+    }
+
+    if (std.fs.path.dirname(path)) |parent| {
+        if (parent.len > 0) try ensure_directory(parent);
     }
 
     if (c.mkdir(path_z.ptr, @as(c.mode_t, 0o700)) < 0) return error.CreateSyncDirectoryFailed;
@@ -1068,7 +1131,10 @@ fn local_sync_impl(allocator: std.mem.Allocator) !u32 {
     var conflicts: u32 = 0;
     var num_buf: [24]u8 = undefined;
 
-    const target_dir = try local_sync_dir_path(allocator);
+    var vid_buf: [16]u8 = undefined;
+    const vault_id = vault_id_hex(&vid_buf);
+
+    const target_dir = try local_sync_dir_path(allocator, vault_id);
     try ensure_directory(target_dir);
 
     var local_map = try collect_local_files(allocator);
@@ -1080,10 +1146,12 @@ fn local_sync_impl(allocator: std.mem.Allocator) !u32 {
         const local_mtime = entry.value_ptr.*;
         const target_path = try join_path(allocator, target_dir, name);
         defer allocator.free(target_path);
+        const scoped_name = try scoped_key(allocator, vault_id, name);
+        defer allocator.free(scoped_name);
 
         if (stat_path(target_path)) |remote_stat| {
             const remote_mtime = remote_stat.st_mtim.tv_sec;
-            const meta = sync_meta_get("local_sync_meta", allocator, name);
+            const meta = sync_meta_get("local_sync_meta", allocator, scoped_name);
             defer if (meta) |m| allocator.free(m.remote_marker);
 
             const stored_local: i64 = if (meta) |m| m.local_mtime else -1;
@@ -1110,11 +1178,11 @@ fn local_sync_impl(allocator: std.mem.Allocator) !u32 {
                     main.alert_file_updated();
                 }
                 const new_st = stat_path(name) orelse continue;
-                sync_meta_set("local_sync_meta", allocator, name, new_st.st_mtim.tv_sec, i64_to_text(&num_buf, remote_mtime));
+                sync_meta_set("local_sync_meta", allocator, scoped_name, new_st.st_mtim.tv_sec, i64_to_text(&num_buf, remote_mtime));
             } else if (local_changed) {
                 try copy_file_path(allocator, name, target_path);
                 const new_remote = stat_path(target_path) orelse continue;
-                sync_meta_set("local_sync_meta", allocator, name, local_mtime, i64_to_text(&num_buf, new_remote.st_mtim.tv_sec));
+                sync_meta_set("local_sync_meta", allocator, scoped_name, local_mtime, i64_to_text(&num_buf, new_remote.st_mtim.tv_sec));
             } else if (remote_changed) {
                 try copy_file_path(allocator, target_path, name);
                 const name_z = try allocator.dupeZ(u8, name);
@@ -1122,14 +1190,14 @@ fn local_sync_impl(allocator: std.mem.Allocator) !u32 {
                 gui_index_file(name_z.ptr);
                 main.alert_file_updated();
                 const new_st = stat_path(name) orelse continue;
-                sync_meta_set("local_sync_meta", allocator, name, new_st.st_mtim.tv_sec, i64_to_text(&num_buf, remote_mtime));
+                sync_meta_set("local_sync_meta", allocator, scoped_name, new_st.st_mtim.tv_sec, i64_to_text(&num_buf, remote_mtime));
             } else if (meta == null) {
-                sync_meta_set("local_sync_meta", allocator, name, local_mtime, i64_to_text(&num_buf, remote_mtime));
+                sync_meta_set("local_sync_meta", allocator, scoped_name, local_mtime, i64_to_text(&num_buf, remote_mtime));
             }
         } else {
             try copy_file_path(allocator, name, target_path);
             const new_remote = stat_path(target_path) orelse continue;
-            sync_meta_set("local_sync_meta", allocator, name, local_mtime, i64_to_text(&num_buf, new_remote.st_mtim.tv_sec));
+            sync_meta_set("local_sync_meta", allocator, scoped_name, local_mtime, i64_to_text(&num_buf, new_remote.st_mtim.tv_sec));
         }
     }
 
@@ -1156,7 +1224,9 @@ fn local_sync_impl(allocator: std.mem.Allocator) !u32 {
             gui_index_file(name_z.ptr);
             const new_st = stat_path(name) orelse continue;
             const rs = stat_path(source_path) orelse continue;
-            sync_meta_set("local_sync_meta", allocator, name, new_st.st_mtim.tv_sec, i64_to_text(&num_buf, rs.st_mtim.tv_sec));
+            const scoped_name = try scoped_key(allocator, vault_id, name);
+            defer allocator.free(scoped_name);
+            sync_meta_set("local_sync_meta", allocator, scoped_name, new_st.st_mtim.tv_sec, i64_to_text(&num_buf, rs.st_mtim.tv_sec));
         }
     }
 
@@ -1207,6 +1277,17 @@ fn sync_now_impl(allocator: std.mem.Allocator) anyerror!void {
     const access_token = try refresh_token_if_needed(allocator, &creds);
     defer allocator.free(access_token);
 
+    var vid_buf: [16]u8 = undefined;
+    const vault_id = vault_id_hex(&vid_buf);
+
+    const vault_folder_id = try drive_ensure_vault_folder(allocator, access_token, vault_id);
+    defer allocator.free(vault_folder_id);
+
+    const search_url = try std.fmt.allocPrint(allocator,
+        "https://www.googleapis.com/drive/v3/files?q=%27{s}%27+in+parents+and+trashed+%3D+false&spaces=appDataFolder&fields=files(id,name,modifiedTime,md5Checksum)",
+        .{vault_folder_id});
+    defer allocator.free(search_url);
+
     var body_list: std.ArrayList(u8) = .empty;
     defer body_list.deinit(allocator);
 
@@ -1222,7 +1303,7 @@ fn sync_now_impl(allocator: std.mem.Allocator) anyerror!void {
         var client = std.http.Client{ .allocator = allocator, .io = main.global_io };
         defer client.deinit();
 
-        const uri_search = std.Uri.parse("https://www.googleapis.com/drive/v3/files?q=%27appDataFolder%27+in+parents+and+trashed+%3D+false&spaces=appDataFolder&fields=files(id,name,modifiedTime,md5Checksum)") catch |e| return e;
+        const uri_search = std.Uri.parse(search_url) catch |e| return e;
         const auth_hdr = std.fmt.allocPrint(allocator, "Bearer {s}", .{access_token}) catch |e| return e;
         defer allocator.free(auth_hdr);
 
@@ -1500,7 +1581,7 @@ fn sync_now_impl(allocator: std.mem.Allocator) anyerror!void {
             std.debug.print("Local only: uploading {s}\n", .{filename});
             const local_content = try read_file_content(allocator, filename);
             defer allocator.free(local_content);
-            const drive_id_new = try upload_file_to_drive(allocator, access_token, filename, local_content);
+            const drive_id_new = try upload_file_to_drive(allocator, access_token, vault_folder_id, filename, local_content);
             defer allocator.free(drive_id_new);
 
             const new_cloud_time = try get_file_modified_time_from_drive(allocator, access_token, drive_id_new);
@@ -1598,6 +1679,32 @@ fn hexToBytesAlloc(allocator: std.mem.Allocator, hex: []const u8) ![]u8 {
         out[i / 2] = (h1 << 4) | h2;
     }
     return out;
+}
+
+/// Stable per-vault identifier: first 8 bytes of SHA256(cwd) as 16 lowercase
+/// hex chars. zig_open_vault() chdir()s into the vault directory, so cwd
+/// uniquely identifies the currently open vault for namespacing remote
+/// sync folders and per-file sync state.
+fn vault_id_hex(out: *[16]u8) []const u8 {
+    var cwd_buf: [4096]u8 = undefined;
+    const cwd_ptr = c.getcwd(&cwd_buf, cwd_buf.len);
+    const cwd: []const u8 = if (cwd_ptr != null) std.mem.span(cwd_ptr) else "/";
+
+    var digest: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(cwd, &digest, .{});
+
+    const hex_chars = "0123456789abcdef";
+    for (digest[0..8], 0..) |b, i| {
+        out[i * 2] = hex_chars[b >> 4];
+        out[i * 2 + 1] = hex_chars[b & 0x0f];
+    }
+    return out[0..];
+}
+
+/// Vault-scoped key for the *_sync_meta tables, so two vaults that both
+/// have e.g. "notes/todo.md" don't clobber each other's sync state.
+fn scoped_key(allocator: std.mem.Allocator, vault_id: []const u8, filename: []const u8) ![]u8 {
+    return std.fmt.allocPrint(allocator, "{s}/{s}", .{ vault_id, filename });
 }
 
 fn deriveKey(key: *[32]u8) !void {
@@ -2292,7 +2399,12 @@ const DbxFileMeta = struct {
     server_modified: []const u8 = "",
 };
 
-fn dropbox_remote_list(allocator: std.mem.Allocator, token: []const u8) !std.StringHashMap(i64) {
+/// Per-vault subfolder under the app's Dropbox folder, e.g. "/qirtas/<vault_id>".
+fn dbx_vault_folder(allocator: std.mem.Allocator, vault_id: []const u8) ![]u8 {
+    return std.fmt.allocPrint(allocator, "{s}/{s}", .{ DBX_FOLDER, vault_id });
+}
+
+fn dropbox_remote_list(allocator: std.mem.Allocator, token: []const u8, vault_id: []const u8) !std.StringHashMap(i64) {
     var map = std.StringHashMap(i64).init(allocator);
     errdefer map.deinit();
 
@@ -2308,10 +2420,11 @@ fn dropbox_remote_list(allocator: std.mem.Allocator, token: []const u8) !std.Str
             "https://api.dropboxapi.com/2/files/list_folder"
         else
             "https://api.dropboxapi.com/2/files/list_folder/continue";
-        const body = if (first)
-            try std.fmt.allocPrint(allocator, "{{\"path\": \"{s}\"}}", .{DBX_FOLDER})
-        else
-            try std.fmt.allocPrint(allocator, "{{\"cursor\": \"{s}\"}}", .{cursor});
+        const body = if (first) blk: {
+            const folder = try dbx_vault_folder(allocator, vault_id);
+            defer allocator.free(folder);
+            break :blk try std.fmt.allocPrint(allocator, "{{\"path\": \"{s}\"}}", .{folder});
+        } else try std.fmt.allocPrint(allocator, "{{\"cursor\": \"{s}\"}}", .{cursor});
         defer allocator.free(body);
 
         const res = try http_fetch(allocator, .POST, url, &[_]std.http.Header{
@@ -2347,16 +2460,18 @@ fn dropbox_remote_list(allocator: std.mem.Allocator, token: []const u8) !std.Str
     return map;
 }
 
-fn dropbox_api_arg_path(allocator: std.mem.Allocator, filename: []const u8) ![]u8 {
+fn dropbox_api_arg_path(allocator: std.mem.Allocator, vault_id: []const u8, filename: []const u8) ![]u8 {
     const esc = try json_escape_header(allocator, filename);
     defer allocator.free(esc);
-    return std.fmt.allocPrint(allocator, "{{\"path\": \"{s}/{s}\"}}", .{ DBX_FOLDER, esc });
+    const folder = try dbx_vault_folder(allocator, vault_id);
+    defer allocator.free(folder);
+    return std.fmt.allocPrint(allocator, "{{\"path\": \"{s}/{s}\"}}", .{ folder, esc });
 }
 
-fn dropbox_download(allocator: std.mem.Allocator, token: []const u8, filename: []const u8) ![]u8 {
+fn dropbox_download(allocator: std.mem.Allocator, token: []const u8, vault_id: []const u8, filename: []const u8) ![]u8 {
     const auth = try std.fmt.allocPrint(allocator, "Bearer {s}", .{token});
     defer allocator.free(auth);
-    const arg = try dropbox_api_arg_path(allocator, filename);
+    const arg = try dropbox_api_arg_path(allocator, vault_id, filename);
     defer allocator.free(arg);
 
     const res = try http_fetch(allocator, .POST, "https://content.dropboxapi.com/2/files/download", &[_]std.http.Header{
@@ -2372,13 +2487,15 @@ fn dropbox_download(allocator: std.mem.Allocator, token: []const u8, filename: [
 }
 
 /// Upload (overwrite) and return the new server_modified unix time.
-fn dropbox_upload(allocator: std.mem.Allocator, token: []const u8, filename: []const u8, content: []const u8) !i64 {
+fn dropbox_upload(allocator: std.mem.Allocator, token: []const u8, vault_id: []const u8, filename: []const u8, content: []const u8) !i64 {
     const auth = try std.fmt.allocPrint(allocator, "Bearer {s}", .{token});
     defer allocator.free(auth);
     const esc = try json_escape_header(allocator, filename);
     defer allocator.free(esc);
+    const folder = try dbx_vault_folder(allocator, vault_id);
+    defer allocator.free(folder);
     const arg = try std.fmt.allocPrint(allocator,
-        "{{\"path\": \"{s}/{s}\", \"mode\": \"overwrite\", \"mute\": true}}", .{ DBX_FOLDER, esc });
+        "{{\"path\": \"{s}/{s}\", \"mode\": \"overwrite\", \"mute\": true}}", .{ folder, esc });
     defer allocator.free(arg);
 
     const res = try http_fetch(allocator, .POST, "https://content.dropboxapi.com/2/files/upload", &[_]std.http.Header{
@@ -2400,7 +2517,10 @@ fn dropbox_sync_impl(allocator: std.mem.Allocator, token: []const u8) !u32 {
     var conflicts: u32 = 0;
     var num_buf: [24]u8 = undefined;
 
-    var remote_map = try dropbox_remote_list(allocator, token);
+    var vid_buf: [16]u8 = undefined;
+    const vault_id = vault_id_hex(&vid_buf);
+
+    var remote_map = try dropbox_remote_list(allocator, token, vault_id);
     defer remote_map.deinit();
     var local_map = try collect_local_files(allocator);
     defer local_map.deinit();
@@ -2409,9 +2529,11 @@ fn dropbox_sync_impl(allocator: std.mem.Allocator, token: []const u8) !u32 {
     while (local_it.next()) |entry| {
         const filename = entry.key_ptr.*;
         const local_mtime = entry.value_ptr.*;
+        const scoped_name = try scoped_key(allocator, vault_id, filename);
+        defer allocator.free(scoped_name);
 
         if (remote_map.get(filename)) |remote_time| {
-            const meta = sync_meta_get("dropbox_sync_meta", allocator, filename);
+            const meta = sync_meta_get("dropbox_sync_meta", allocator, scoped_name);
             defer if (meta) |m| allocator.free(m.remote_marker);
 
             const stored_local: i64 = if (meta) |m| m.local_mtime else -1;
@@ -2423,7 +2545,7 @@ fn dropbox_sync_impl(allocator: std.mem.Allocator, token: []const u8) !u32 {
             const remote_changed = remote_time != stored_remote;
 
             if (local_changed and remote_changed) {
-                const remote_content = try dropbox_download(allocator, token, filename);
+                const remote_content = try dropbox_download(allocator, token, vault_id, filename);
                 defer allocator.free(remote_content);
                 const local_content = try read_file_content(allocator, filename);
                 defer allocator.free(local_content);
@@ -2439,14 +2561,14 @@ fn dropbox_sync_impl(allocator: std.mem.Allocator, token: []const u8) !u32 {
                     main.alert_file_updated();
                 }
                 const new_st = stat_path(filename) orelse continue;
-                sync_meta_set("dropbox_sync_meta", allocator, filename, new_st.st_mtim.tv_sec, i64_to_text(&num_buf, remote_time));
+                sync_meta_set("dropbox_sync_meta", allocator, scoped_name, new_st.st_mtim.tv_sec, i64_to_text(&num_buf, remote_time));
             } else if (local_changed) {
                 const local_content = try read_file_content(allocator, filename);
                 defer allocator.free(local_content);
-                const new_remote = try dropbox_upload(allocator, token, filename, local_content);
-                sync_meta_set("dropbox_sync_meta", allocator, filename, local_mtime, i64_to_text(&num_buf, new_remote));
+                const new_remote = try dropbox_upload(allocator, token, vault_id, filename, local_content);
+                sync_meta_set("dropbox_sync_meta", allocator, scoped_name, local_mtime, i64_to_text(&num_buf, new_remote));
             } else if (remote_changed) {
-                const remote_content = try dropbox_download(allocator, token, filename);
+                const remote_content = try dropbox_download(allocator, token, vault_id, filename);
                 defer allocator.free(remote_content);
                 try write_file_mmap(filename, remote_content);
                 const fz = try allocator.dupeZ(u8, filename);
@@ -2454,16 +2576,16 @@ fn dropbox_sync_impl(allocator: std.mem.Allocator, token: []const u8) !u32 {
                 gui_index_file(fz.ptr);
                 main.alert_file_updated();
                 const new_st = stat_path(filename) orelse continue;
-                sync_meta_set("dropbox_sync_meta", allocator, filename, new_st.st_mtim.tv_sec, i64_to_text(&num_buf, remote_time));
+                sync_meta_set("dropbox_sync_meta", allocator, scoped_name, new_st.st_mtim.tv_sec, i64_to_text(&num_buf, remote_time));
             } else if (meta == null) {
-                sync_meta_set("dropbox_sync_meta", allocator, filename, local_mtime, i64_to_text(&num_buf, remote_time));
+                sync_meta_set("dropbox_sync_meta", allocator, scoped_name, local_mtime, i64_to_text(&num_buf, remote_time));
             }
         } else {
             // Local only → upload
             const local_content = try read_file_content(allocator, filename);
             defer allocator.free(local_content);
-            const new_remote = try dropbox_upload(allocator, token, filename, local_content);
-            sync_meta_set("dropbox_sync_meta", allocator, filename, local_mtime, i64_to_text(&num_buf, new_remote));
+            const new_remote = try dropbox_upload(allocator, token, vault_id, filename, local_content);
+            sync_meta_set("dropbox_sync_meta", allocator, scoped_name, local_mtime, i64_to_text(&num_buf, new_remote));
         }
     }
 
@@ -2471,14 +2593,16 @@ fn dropbox_sync_impl(allocator: std.mem.Allocator, token: []const u8) !u32 {
     while (remote_it.next()) |entry| {
         const filename = entry.key_ptr.*;
         if (local_map.contains(filename)) continue;
-        const remote_content = try dropbox_download(allocator, token, filename);
+        const remote_content = try dropbox_download(allocator, token, vault_id, filename);
         defer allocator.free(remote_content);
         try write_file_mmap(filename, remote_content);
         const fz = try allocator.dupeZ(u8, filename);
         defer allocator.free(fz);
         gui_index_file(fz.ptr);
         const new_st = stat_path(filename) orelse continue;
-        sync_meta_set("dropbox_sync_meta", allocator, filename, new_st.st_mtim.tv_sec, i64_to_text(&num_buf, entry.value_ptr.*));
+        const scoped_name = try scoped_key(allocator, vault_id, filename);
+        defer allocator.free(scoped_name);
+        sync_meta_set("dropbox_sync_meta", allocator, scoped_name, new_st.st_mtim.tv_sec, i64_to_text(&num_buf, entry.value_ptr.*));
     }
 
     return conflicts;
@@ -2677,15 +2801,15 @@ fn github_ensure_repo(allocator: std.mem.Allocator, auth: []const u8, repo_name:
     allocator.free(res.body); // 201 created or 422 already-exists — both fine
 }
 
-fn github_remote_list(allocator: std.mem.Allocator, auth: []const u8, owner: []const u8, repo: []const u8) !std.StringHashMap(GhRemote) {
+fn github_remote_list(allocator: std.mem.Allocator, auth: []const u8, owner: []const u8, repo: []const u8, vault_id: []const u8) !std.StringHashMap(GhRemote) {
     var map = std.StringHashMap(GhRemote).init(allocator);
     errdefer map.deinit();
     const hdrs = gh_headers(auth);
-    const url = try std.fmt.allocPrint(allocator, "https://api.github.com/repos/{s}/{s}/contents/", .{ owner, repo });
+    const url = try std.fmt.allocPrint(allocator, "https://api.github.com/repos/{s}/{s}/contents/{s}", .{ owner, repo, vault_id });
     defer allocator.free(url);
     const res = try http_fetch(allocator, .GET, url, &hdrs, null);
     defer allocator.free(res.body);
-    if (res.status == .not_found) return map; // empty repo
+    if (res.status == .not_found) return map; // vault subfolder doesn't exist yet
     if (res.status == .unauthorized or res.status == .forbidden) return error.AuthenticationExpired;
     if (res.status != .ok) return error.GithubListFailed;
 
@@ -2700,10 +2824,10 @@ fn github_remote_list(allocator: std.mem.Allocator, auth: []const u8, owner: []c
     return map;
 }
 
-fn github_download_raw(allocator: std.mem.Allocator, auth: []const u8, owner: []const u8, repo: []const u8, filename: []const u8) ![]u8 {
+fn github_download_raw(allocator: std.mem.Allocator, auth: []const u8, owner: []const u8, repo: []const u8, vault_id: []const u8, filename: []const u8) ![]u8 {
     const enc = try percent_encode(allocator, filename);
     defer allocator.free(enc);
-    const url = try std.fmt.allocPrint(allocator, "https://api.github.com/repos/{s}/{s}/contents/{s}", .{ owner, repo, enc });
+    const url = try std.fmt.allocPrint(allocator, "https://api.github.com/repos/{s}/{s}/contents/{s}/{s}", .{ owner, repo, vault_id, enc });
     defer allocator.free(url);
     const hdrs = [_]std.http.Header{
         .{ .name = "Authorization", .value = auth },
@@ -2721,10 +2845,10 @@ fn github_download_raw(allocator: std.mem.Allocator, auth: []const u8, owner: []
 }
 
 /// PUT a file; existing_sha empty = create. Returns the new blob sha.
-fn github_upload(allocator: std.mem.Allocator, auth: []const u8, owner: []const u8, repo: []const u8, filename: []const u8, content: []const u8, existing_sha: []const u8) ![]u8 {
+fn github_upload(allocator: std.mem.Allocator, auth: []const u8, owner: []const u8, repo: []const u8, vault_id: []const u8, filename: []const u8, content: []const u8, existing_sha: []const u8) ![]u8 {
     const enc = try percent_encode(allocator, filename);
     defer allocator.free(enc);
-    const url = try std.fmt.allocPrint(allocator, "https://api.github.com/repos/{s}/{s}/contents/{s}", .{ owner, repo, enc });
+    const url = try std.fmt.allocPrint(allocator, "https://api.github.com/repos/{s}/{s}/contents/{s}/{s}", .{ owner, repo, vault_id, enc });
     defer allocator.free(url);
 
     const b64_len = std.base64.standard.Encoder.calcSize(content.len);
@@ -2773,7 +2897,10 @@ fn github_sync_impl(allocator: std.mem.Allocator, token: []const u8, repo_in: []
 
     github_ensure_repo(allocator, auth, repo);
 
-    var remote_map = try github_remote_list(allocator, auth, owner, repo);
+    var vid_buf: [16]u8 = undefined;
+    const vault_id = vault_id_hex(&vid_buf);
+
+    var remote_map = try github_remote_list(allocator, auth, owner, repo, vault_id);
     defer remote_map.deinit();
     var local_map = try collect_local_files(allocator);
     defer local_map.deinit();
@@ -2782,9 +2909,11 @@ fn github_sync_impl(allocator: std.mem.Allocator, token: []const u8, repo_in: []
     while (local_it.next()) |entry| {
         const filename = entry.key_ptr.*;
         const local_mtime = entry.value_ptr.*;
+        const scoped_name = try scoped_key(allocator, vault_id, filename);
+        defer allocator.free(scoped_name);
 
         if (remote_map.get(filename)) |remote| {
-            const meta = sync_meta_get("github_sync_meta", allocator, filename);
+            const meta = sync_meta_get("github_sync_meta", allocator, scoped_name);
             defer if (meta) |m| allocator.free(m.remote_marker);
 
             const stored_local: i64 = if (meta) |m| m.local_mtime else -1;
@@ -2793,7 +2922,7 @@ fn github_sync_impl(allocator: std.mem.Allocator, token: []const u8, repo_in: []
             const remote_changed = !std.mem.eql(u8, remote.sha, stored_sha);
 
             if (local_changed and remote_changed) {
-                const remote_content = try github_download_raw(allocator, auth, owner, repo, filename);
+                const remote_content = try github_download_raw(allocator, auth, owner, repo, vault_id, filename);
                 defer allocator.free(remote_content);
                 const local_content = try read_file_content(allocator, filename);
                 defer allocator.free(local_content);
@@ -2808,15 +2937,15 @@ fn github_sync_impl(allocator: std.mem.Allocator, token: []const u8, repo_in: []
                     main.alert_file_updated();
                 }
                 const new_st = stat_path(filename) orelse continue;
-                sync_meta_set("github_sync_meta", allocator, filename, new_st.st_mtim.tv_sec, remote.sha);
+                sync_meta_set("github_sync_meta", allocator, scoped_name, new_st.st_mtim.tv_sec, remote.sha);
             } else if (local_changed) {
                 const local_content = try read_file_content(allocator, filename);
                 defer allocator.free(local_content);
-                const new_sha = try github_upload(allocator, auth, owner, repo, filename, local_content, remote.sha);
+                const new_sha = try github_upload(allocator, auth, owner, repo, vault_id, filename, local_content, remote.sha);
                 defer allocator.free(new_sha);
-                sync_meta_set("github_sync_meta", allocator, filename, local_mtime, new_sha);
+                sync_meta_set("github_sync_meta", allocator, scoped_name, local_mtime, new_sha);
             } else if (remote_changed) {
-                const remote_content = try github_download_raw(allocator, auth, owner, repo, filename);
+                const remote_content = try github_download_raw(allocator, auth, owner, repo, vault_id, filename);
                 defer allocator.free(remote_content);
                 try write_file_mmap(filename, remote_content);
                 const fz = try allocator.dupeZ(u8, filename);
@@ -2824,16 +2953,16 @@ fn github_sync_impl(allocator: std.mem.Allocator, token: []const u8, repo_in: []
                 gui_index_file(fz.ptr);
                 main.alert_file_updated();
                 const new_st = stat_path(filename) orelse continue;
-                sync_meta_set("github_sync_meta", allocator, filename, new_st.st_mtim.tv_sec, remote.sha);
+                sync_meta_set("github_sync_meta", allocator, scoped_name, new_st.st_mtim.tv_sec, remote.sha);
             } else if (meta == null) {
-                sync_meta_set("github_sync_meta", allocator, filename, local_mtime, remote.sha);
+                sync_meta_set("github_sync_meta", allocator, scoped_name, local_mtime, remote.sha);
             }
         } else {
             const local_content = try read_file_content(allocator, filename);
             defer allocator.free(local_content);
-            const new_sha = try github_upload(allocator, auth, owner, repo, filename, local_content, "");
+            const new_sha = try github_upload(allocator, auth, owner, repo, vault_id, filename, local_content, "");
             defer allocator.free(new_sha);
-            sync_meta_set("github_sync_meta", allocator, filename, local_mtime, new_sha);
+            sync_meta_set("github_sync_meta", allocator, scoped_name, local_mtime, new_sha);
         }
     }
 
@@ -2841,14 +2970,16 @@ fn github_sync_impl(allocator: std.mem.Allocator, token: []const u8, repo_in: []
     while (remote_it.next()) |entry| {
         const filename = entry.key_ptr.*;
         if (local_map.contains(filename)) continue;
-        const remote_content = try github_download_raw(allocator, auth, owner, repo, filename);
+        const remote_content = try github_download_raw(allocator, auth, owner, repo, vault_id, filename);
         defer allocator.free(remote_content);
         try write_file_mmap(filename, remote_content);
         const fz = try allocator.dupeZ(u8, filename);
         defer allocator.free(fz);
         gui_index_file(fz.ptr);
         const new_st = stat_path(filename) orelse continue;
-        sync_meta_set("github_sync_meta", allocator, filename, new_st.st_mtim.tv_sec, entry.value_ptr.sha);
+        const scoped_name = try scoped_key(allocator, vault_id, filename);
+        defer allocator.free(scoped_name);
+        sync_meta_set("github_sync_meta", allocator, scoped_name, new_st.st_mtim.tv_sec, entry.value_ptr.sha);
     }
 
     return conflicts;
