@@ -23,6 +23,7 @@ pub fn build(b: *std.Build) void {
         "src/gui/gui_layout.c",
         "src/gui/gui_i18n.c",
         "src/gui/gui_rtl.c",
+        "src/gui/gui_dialogs.c",
     };
 
 

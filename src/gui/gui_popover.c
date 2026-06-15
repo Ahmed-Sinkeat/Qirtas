@@ -77,13 +77,7 @@ typedef struct {
     gboolean       is_paragraph;
 } IdleFormatData;
 
-typedef struct {
-    GtkWidget *popover;
-    GtkWidget *box_actions;
-    GtkWidget *box_input;
-    GtkWidget *entry_name;
-    AppGui *gui;
-} AddPopoverWidgets;
+/* AddPopoverWidgets now lives in gui_internal.h (shared with gui_dialogs.c). */
 
 static char *transform_paragraph_block(const char *block, const char *prefix, gint start_line) {
     if (!block) return g_strdup("");
