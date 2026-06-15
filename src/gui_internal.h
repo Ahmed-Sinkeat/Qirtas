@@ -296,6 +296,9 @@ gboolean idle_render_hrs_cb(gpointer user_data);
 
 void gui_remeasure_line_height(void);
 
+void gui_set_sync_status(const char *status);
+void gui_run_on_main_thread(GuiIdleCallback callback, void *user_data);
+
 extern AppGui *global_gui;
 extern GtkWidget *main_window;
 extern GtkWidget *global_window;
