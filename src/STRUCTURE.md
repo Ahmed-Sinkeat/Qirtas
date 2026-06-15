@@ -44,7 +44,9 @@ Qirtas/
 │       ├── gui_layout.c                 ← Editor layout & display prefs: paper-column sizing, border,
 │       │                                   focus/read/compact modes, dividers, column-resize, settings cbs
 │       ├── gui_i18n.c                   ← EN→AR UI string table + qirtas_tr() lookup
-│       └── gui_rtl.c                    ← Per-paragraph RTL/LTR direction (buffer-edit path)
+│       ├── gui_rtl.c                    ← Per-paragraph RTL/LTR direction (buffer-edit path)
+│       └── gui_dialogs.c                ← File/vault/save-as dialogs, add/open popover, folder prompt,
+│                                           app/window shutdown + unsaved-changes confirm
 │   └── ui/
 │       ├── themes/
 │       │   ├── base.css                 ← Shared layout (tab strip, paper card, desk outline, status pill)
@@ -215,6 +217,7 @@ system_keys schema, active-file-path bounds check). Run it before pushing anythi
 | `gui_layout` | Editor layout & display preferences: paper-column sizing (`paper_column_tick`), editor border, focus/read/compact modes, layout dividers, column-resize drag, `apply_editor_prefs`, and the settings callbacks that drive them | `src/gui/gui_layout.c` |
 | `gui_i18n` | EN→AR UI string table (`tr_table`) + `qirtas_tr()` lookup, used by every gui module | `src/gui/gui_i18n.c` |
 | `gui_rtl` | Per-paragraph RTL/LTR text direction for the buffer-edit path (`update_all_paragraphs_direction`, `update_paragraph_direction_lines`); `gui_conceal.c` keeps its own copy for the conceal pass | `src/gui/gui_rtl.c` |
+| `gui_dialogs` | File/vault/save-as `GtkFileDialog` responses, the unified add/open popover (`AddPopoverWidgets`), folder-creation prompt, and app/window shutdown + unsaved-changes confirmation | `src/gui/gui_dialogs.c` |
 
 ## UI Redesign (2026-06-13)
 
