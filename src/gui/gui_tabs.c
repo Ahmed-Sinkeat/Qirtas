@@ -63,9 +63,9 @@ static void on_tab_right_click(GtkGestureClick *gesture, gint n_press,
 }
 
 static GtkWidget *tab_item_at_index(AppGui *gui, int index) {
-    if (!gui || !gui->tab_bar_box || index < 0) return NULL;
+    if (!gui || !gui->tabs.bar_box || index < 0) return NULL;
 
-    GtkWidget *child = gtk_widget_get_first_child(gui->tab_bar_box);
+    GtkWidget *child = gtk_widget_get_first_child(gui->tabs.bar_box);
     for (int i = 0; i < index && child; i++) {
         child = gtk_widget_get_next_sibling(child);
     }
@@ -73,19 +73,19 @@ static GtkWidget *tab_item_at_index(AppGui *gui, int index) {
 }
 
 static void gui_tabs_scroll_active_into_view(AppGui *gui) {
-    if (!gui || !gui->tab_bar_scroll || !gui->tab_bar_box || gui->active_tab_index < 0) {
+    if (!gui || !gui->tabs.bar_scroll || !gui->tabs.bar_box || gui->tabs.active < 0) {
         return;
     }
 
-    GtkWidget *tab_item = tab_item_at_index(gui, gui->active_tab_index);
+    GtkWidget *tab_item = tab_item_at_index(gui, gui->tabs.active);
     if (!tab_item) return;
 
     GtkAdjustment *adj = gtk_scrolled_window_get_hadjustment(
-        GTK_SCROLLED_WINDOW(gui->tab_bar_scroll));
+        GTK_SCROLLED_WINDOW(gui->tabs.bar_scroll));
     if (!adj) return;
 
     graphene_rect_t bounds;
-    if (!gtk_widget_compute_bounds(tab_item, gui->tab_bar_box, &bounds)) {
+    if (!gtk_widget_compute_bounds(tab_item, gui->tabs.bar_box, &bounds)) {
         return;
     }
 
@@ -113,19 +113,19 @@ static gboolean scroll_active_tab_idle(gpointer user_data) {
     TabScrollData *data = (TabScrollData *)user_data;
     AppGui *gui = data->gui;
 
-    if (!gui || gui->active_tab_index < 0 || data->retries > 50) {
+    if (!gui || gui->tabs.active < 0 || data->retries > 50) {
         g_free(data);
         return G_SOURCE_REMOVE;
     }
 
-    GtkWidget *tab_item = tab_item_at_index(gui, gui->active_tab_index);
+    GtkWidget *tab_item = tab_item_at_index(gui, gui->tabs.active);
     if (!tab_item) {
         g_free(data);
         return G_SOURCE_REMOVE;
     }
 
     graphene_rect_t bounds;
-    if (!gtk_widget_compute_bounds(tab_item, gui->tab_bar_box, &bounds) || bounds.size.width <= 0.0) {
+    if (!gtk_widget_compute_bounds(tab_item, gui->tabs.bar_box, &bounds) || bounds.size.width <= 0.0) {
         data->retries++;
         return G_SOURCE_CONTINUE;
     }
@@ -136,7 +136,7 @@ static gboolean scroll_active_tab_idle(gpointer user_data) {
 }
 
 static void gui_tabs_queue_scroll_active(AppGui *gui) {
-    if (!gui || gui->active_tab_index < 0) return;
+    if (!gui || gui->tabs.active < 0) return;
     TabScrollData *data = g_new0(TabScrollData, 1);
     data->gui = gui;
     data->retries = 0;
@@ -144,10 +144,10 @@ static void gui_tabs_queue_scroll_active(AppGui *gui) {
 }
 
 static void gui_tabs_scroll_by(AppGui *gui, double delta) {
-    if (!gui || !gui->tab_bar_scroll) return;
+    if (!gui || !gui->tabs.bar_scroll) return;
 
     GtkAdjustment *adj = gtk_scrolled_window_get_hadjustment(
-        GTK_SCROLLED_WINDOW(gui->tab_bar_scroll));
+        GTK_SCROLLED_WINDOW(gui->tabs.bar_scroll));
     if (!adj) return;
 
     double page = gtk_adjustment_get_page_size(adj);
@@ -217,54 +217,54 @@ static gboolean on_tab_viewport_scroll_event(GtkEventController *controller,
 }
 
 void gui_tabs_setup_viewport(AppGui *gui) {
-    if (!gui || !gui->tab_bar_scroll) return;
+    if (!gui || !gui->tabs.bar_scroll) return;
 
-    if (gui->btn_tab_scroll_left) {
-        g_signal_connect(gui->btn_tab_scroll_left, "clicked",
+    if (gui->tabs.scroll_left_btn) {
+        g_signal_connect(gui->tabs.scroll_left_btn, "clicked",
                          G_CALLBACK(on_tab_scroll_left_clicked), gui);
     }
-    if (gui->btn_tab_scroll_right) {
-        g_signal_connect(gui->btn_tab_scroll_right, "clicked",
+    if (gui->tabs.scroll_right_btn) {
+        g_signal_connect(gui->tabs.scroll_right_btn, "clicked",
                          G_CALLBACK(on_tab_scroll_right_clicked), gui);
     }
 
     GtkEventController *scroll_ctrl = gtk_event_controller_legacy_new();
     g_signal_connect(scroll_ctrl, "event", G_CALLBACK(on_tab_viewport_scroll_event), gui);
-    gtk_widget_add_controller(gui->tab_bar_scroll, scroll_ctrl);
+    gtk_widget_add_controller(gui->tabs.bar_scroll, scroll_ctrl);
 }
 
 void gui_tabs_close(AppGui *gui, int index) {
-    if (!gui || index < 0 || index >= gui->num_tabs) return;
+    if (!gui || index < 0 || index >= gui->tabs.count) return;
 
-    g_free(gui->open_tabs[index]);
-    g_free(gui->tab_contents[index]);
+    g_free(gui->tabs.paths[index]);
+    g_free(gui->tabs.contents[index]);
 
-    for (int i = index; i < gui->num_tabs - 1; i++) {
-        gui->open_tabs[i] = gui->open_tabs[i + 1];
-        gui->tab_contents[i] = gui->tab_contents[i + 1];
-        gui->tab_modified[i] = gui->tab_modified[i + 1];
+    for (int i = index; i < gui->tabs.count - 1; i++) {
+        gui->tabs.paths[i] = gui->tabs.paths[i + 1];
+        gui->tabs.contents[i] = gui->tabs.contents[i + 1];
+        gui->tabs.modified[i] = gui->tabs.modified[i + 1];
     }
-    gui->open_tabs[gui->num_tabs - 1] = NULL;
-    gui->tab_contents[gui->num_tabs - 1] = NULL;
-    gui->tab_modified[gui->num_tabs - 1] = FALSE;
-    gui->num_tabs--;
+    gui->tabs.paths[gui->tabs.count - 1] = NULL;
+    gui->tabs.contents[gui->tabs.count - 1] = NULL;
+    gui->tabs.modified[gui->tabs.count - 1] = FALSE;
+    gui->tabs.count--;
 
-    if (index == gui->active_tab_index) {
-        if (gui->num_tabs > 0) {
+    if (index == gui->tabs.active) {
+        if (gui->tabs.count > 0) {
             int new_active = index;
-            if (new_active >= gui->num_tabs) {
-                new_active = gui->num_tabs - 1;
+            if (new_active >= gui->tabs.count) {
+                new_active = gui->tabs.count - 1;
             }
-            gui->active_tab_index = new_active;
+            gui->tabs.active = new_active;
             extern void zig_open_file(const char *filename);
-            zig_open_file(gui->open_tabs[new_active]);
+            zig_open_file(gui->tabs.paths[new_active]);
         } else {
-            gui->active_tab_index = -1;
+            gui->tabs.active = -1;
             gui_set_text("", 0);
             gui_set_title("Qirtas");
         }
-    } else if (index < gui->active_tab_index) {
-        gui->active_tab_index--;
+    } else if (index < gui->tabs.active) {
+        gui->tabs.active--;
     }
 
     gui_tabs_refresh(gui);
@@ -275,8 +275,8 @@ static void on_tab_close_clicked(GtkButton *btn, gpointer user_data) {
     const char *path = (const char *)user_data;
     AppGui *gui = global_gui;
     if (gui) {
-        for (int i = 0; i < gui->num_tabs; i++) {
-            if (strcmp(gui->open_tabs[i], path) == 0) {
+        for (int i = 0; i < gui->tabs.count; i++) {
+            if (strcmp(gui->tabs.paths[i], path) == 0) {
                 gui_tabs_close(gui, i);
                 break;
             }
@@ -285,25 +285,25 @@ static void on_tab_close_clicked(GtkButton *btn, gpointer user_data) {
 }
 
 void gui_tabs_refresh(AppGui *gui) {
-    if (!gui || !gui->tab_bar_box) return;
+    if (!gui || !gui->tabs.bar_box) return;
 
     GtkWidget *child;
-    while ((child = gtk_widget_get_first_child(gui->tab_bar_box))) {
-        gtk_box_remove(GTK_BOX(gui->tab_bar_box), child);
+    while ((child = gtk_widget_get_first_child(gui->tabs.bar_box))) {
+        gtk_box_remove(GTK_BOX(gui->tabs.bar_box), child);
     }
 
     if (gui->source_view) {
-        gtk_text_view_set_editable(GTK_TEXT_VIEW(gui->source_view), (gui->active_tab_index != -1));
+        gtk_text_view_set_editable(GTK_TEXT_VIEW(gui->source_view), (gui->tabs.active != -1));
     }
 
-    for (int i = 0; i < gui->num_tabs; i++) {
+    for (int i = 0; i < gui->tabs.count; i++) {
         GtkWidget *tab_item = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 2);
         gtk_widget_add_css_class(tab_item, "tab-item");
-        if (i == gui->active_tab_index) {
+        if (i == gui->tabs.active) {
             gtk_widget_add_css_class(tab_item, "active-tab");
         }
 
-        char *basename = g_path_get_basename(gui->open_tabs[i]);
+        char *basename = g_path_get_basename(gui->tabs.paths[i]);
         GtkWidget *tab_btn = gtk_button_new();
         gtk_widget_add_css_class(tab_btn, "tab-btn");
 
@@ -313,16 +313,16 @@ void gui_tabs_refresh(AppGui *gui) {
         gtk_box_append(GTK_BOX(btn_box), lbl);
 
         gboolean is_modified = FALSE;
-        if (i == gui->active_tab_index && gui->source_view) {
+        if (i == gui->tabs.active && gui->source_view) {
             GtkTextBuffer *buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(gui->source_view));
             if (buf) {
                 is_modified = gtk_text_buffer_get_modified(buf);
-                gui->tab_modified[i] = is_modified;
+                gui->tabs.modified[i] = is_modified;
             } else {
-                is_modified = gui->tab_modified[i];
+                is_modified = gui->tabs.modified[i];
             }
         } else {
-            is_modified = gui->tab_modified[i];
+            is_modified = gui->tabs.modified[i];
         }
 
         if (is_modified) {
@@ -334,12 +334,12 @@ void gui_tabs_refresh(AppGui *gui) {
         }
 
         gtk_button_set_child(GTK_BUTTON(tab_btn), btn_box);
-        g_signal_connect(tab_btn, "clicked", G_CALLBACK(on_tab_button_clicked), gui->open_tabs[i]);
+        g_signal_connect(tab_btn, "clicked", G_CALLBACK(on_tab_button_clicked), gui->tabs.paths[i]);
 
         GtkGesture *tab_rc = gtk_gesture_click_new();
         gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(tab_rc), GDK_BUTTON_SECONDARY);
         gtk_event_controller_set_propagation_phase(GTK_EVENT_CONTROLLER(tab_rc), GTK_PHASE_CAPTURE);
-        g_signal_connect(tab_rc, "pressed", G_CALLBACK(on_tab_right_click), gui->open_tabs[i]);
+        g_signal_connect(tab_rc, "pressed", G_CALLBACK(on_tab_right_click), gui->tabs.paths[i]);
         gtk_widget_add_controller(tab_btn, GTK_EVENT_CONTROLLER(tab_rc));
 
         gtk_box_append(GTK_BOX(tab_item), tab_btn);
@@ -349,10 +349,10 @@ void gui_tabs_refresh(AppGui *gui) {
         gtk_accessible_update_property(GTK_ACCESSIBLE(close_btn),
                                        GTK_ACCESSIBLE_PROPERTY_LABEL,
                                        "Close tab", -1);
-        g_signal_connect(close_btn, "clicked", G_CALLBACK(on_tab_close_clicked), gui->open_tabs[i]);
+        g_signal_connect(close_btn, "clicked", G_CALLBACK(on_tab_close_clicked), gui->tabs.paths[i]);
         gtk_box_append(GTK_BOX(tab_item), close_btn);
 
-        gtk_box_append(GTK_BOX(gui->tab_bar_box), tab_item);
+        gtk_box_append(GTK_BOX(gui->tabs.bar_box), tab_item);
     }
 
     gui_tabs_queue_scroll_active(gui);
@@ -365,15 +365,15 @@ void gui_tabs_refresh(AppGui *gui) {
  * opens. */
 void gui_tabs_close_all(AppGui *gui) {
     if (!gui) return;
-    for (int i = 0; i < gui->num_tabs; i++) {
-        g_free(gui->open_tabs[i]);
-        gui->open_tabs[i] = NULL;
-        g_free(gui->tab_contents[i]);
-        gui->tab_contents[i] = NULL;
-        gui->tab_modified[i] = FALSE;
+    for (int i = 0; i < gui->tabs.count; i++) {
+        g_free(gui->tabs.paths[i]);
+        gui->tabs.paths[i] = NULL;
+        g_free(gui->tabs.contents[i]);
+        gui->tabs.contents[i] = NULL;
+        gui->tabs.modified[i] = FALSE;
     }
-    gui->num_tabs = 0;
-    gui->active_tab_index = -1;
+    gui->tabs.count = 0;
+    gui->tabs.active = -1;
     gui_tabs_refresh(gui);
 }
 
@@ -382,22 +382,22 @@ void gui_tabs_add_or_select(AppGui *gui, const char *filepath) {
     if (strcmp(filepath, "Qirtas") == 0 || strcmp(filepath, "(No open file)") == 0) return;
 
     int existing_index = -1;
-    for (int i = 0; i < gui->num_tabs; i++) {
-        if (strcmp(gui->open_tabs[i], filepath) == 0) {
+    for (int i = 0; i < gui->tabs.count; i++) {
+        if (strcmp(gui->tabs.paths[i], filepath) == 0) {
             existing_index = i;
             break;
         }
     }
 
     if (existing_index != -1) {
-        gui->active_tab_index = existing_index;
+        gui->tabs.active = existing_index;
     } else {
-        if (gui->num_tabs < 20) {
-            gui->open_tabs[gui->num_tabs] = g_strdup(filepath);
-            gui->tab_contents[gui->num_tabs] = NULL;
-            gui->tab_modified[gui->num_tabs] = FALSE;
-            gui->active_tab_index = gui->num_tabs;
-            gui->num_tabs++;
+        if (gui->tabs.count < 20) {
+            gui->tabs.paths[gui->tabs.count] = g_strdup(filepath);
+            gui->tabs.contents[gui->tabs.count] = NULL;
+            gui->tabs.modified[gui->tabs.count] = FALSE;
+            gui->tabs.active = gui->tabs.count;
+            gui->tabs.count++;
         }
     }
 
@@ -409,33 +409,33 @@ void gui_tabs_add_or_select(AppGui *gui, const char *filepath) {
 void gui_tabs_save_active_to_cache(void) {
     AppGui *gui = global_gui;
     if (!gui) return;
-    int idx = gui->active_tab_index;
-    if (idx != -1 && idx < gui->num_tabs) {
-        if (strcmp(gui->open_tabs[idx], "Untitled") == 0) {
+    int idx = gui->tabs.active;
+    if (idx != -1 && idx < gui->tabs.count) {
+        if (strcmp(gui->tabs.paths[idx], "Untitled") == 0) {
             extern const char *zig_get_document_text(void);
             extern void zig_free_document_text(const char *ptr);
             const char *text = zig_get_document_text();
-            g_free(gui->tab_contents[idx]);
-            gui->tab_contents[idx] = text ? g_strdup(text) : NULL;
+            g_free(gui->tabs.contents[idx]);
+            gui->tabs.contents[idx] = text ? g_strdup(text) : NULL;
             zig_free_document_text(text);
         } else {
             extern int zig_save_document(void);
             zig_save_document();
         }
         GtkTextBuffer *buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(gui->source_view));
-        gui->tab_modified[idx] = gtk_text_buffer_get_modified(buf);
+        gui->tabs.modified[idx] = gtk_text_buffer_get_modified(buf);
     }
 }
 
 void gui_tabs_restore_active_from_cache(void) {
     AppGui *gui = global_gui;
     if (!gui) return;
-    int idx = gui->active_tab_index;
-    if (idx != -1 && idx < gui->num_tabs) {
-        if (strcmp(gui->open_tabs[idx], "Untitled") == 0 && gui->tab_contents[idx] != NULL) {
-            gui_set_text(gui->tab_contents[idx], -1);
+    int idx = gui->tabs.active;
+    if (idx != -1 && idx < gui->tabs.count) {
+        if (strcmp(gui->tabs.paths[idx], "Untitled") == 0 && gui->tabs.contents[idx] != NULL) {
+            gui_set_text(gui->tabs.contents[idx], -1);
             GtkTextBuffer *buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(gui->source_view));
-            gtk_text_buffer_set_modified(buf, gui->tab_modified[idx]);
+            gtk_text_buffer_set_modified(buf, gui->tabs.modified[idx]);
         }
     }
 }

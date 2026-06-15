@@ -606,9 +606,9 @@ void update_conceal_markdown(GtkTextBuffer *buf) {
 
 void on_buffer_modified_changed(GtkTextBuffer *buf, gpointer user_data) {
     AppGui *gui = (AppGui *)user_data;
-    if (gui && gui->active_tab_index != -1 && gui->active_tab_index < gui->num_tabs) {
+    if (gui && gui->tabs.active != -1 && gui->tabs.active < gui->tabs.count) {
         gboolean is_modified = gtk_text_buffer_get_modified(buf);
-        gui->tab_modified[gui->active_tab_index] = is_modified;
+        gui->tabs.modified[gui->tabs.active] = is_modified;
         gui_tabs_refresh(gui);
     }
 }

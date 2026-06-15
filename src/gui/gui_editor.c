@@ -106,7 +106,7 @@ void insert_horizontal_rule(GtkTextBuffer *buf) {
 
 void gui_manual_save(AppGui *gui) {
     if (!gui) return;
-    if (gui->active_tab_index != -1 && strcmp(gui->open_tabs[gui->active_tab_index], "Untitled") == 0) {
+    if (gui->tabs.active != -1 && strcmp(gui->tabs.paths[gui->tabs.active], "Untitled") == 0) {
         trigger_save_as(gui);
     } else {
         gui_trigger_autosave();

@@ -24,10 +24,10 @@ void reorder_main_layout(AppGui *gui) {
         if (selected == 1) status_bar_is_top = TRUE;
     }
 
-    if (gui->tab_strip)
-        gtk_box_reorder_child_after(GTK_BOX(gui->main_vertical_box), gui->tab_strip, NULL);
+    if (gui->tabs.strip)
+        gtk_box_reorder_child_after(GTK_BOX(gui->main_vertical_box), gui->tabs.strip, NULL);
 
-    GtkWidget *anchor = gui->tab_strip;
+    GtkWidget *anchor = gui->tabs.strip;
 
     if (status_bar_is_top) {
         gtk_box_reorder_child_after(GTK_BOX(gui->main_vertical_box), gui->bottom_bar_widget, anchor);

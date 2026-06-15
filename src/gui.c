@@ -1294,7 +1294,7 @@ static void activate(GtkApplication *app, gpointer user_data) {
     gui->enable_focus_mode = zig_get_focus_mode();
     load_trail_color_settings(gui);
     load_pointer_color_settings(gui);
-    gui->active_tab_index = -1;
+    gui->tabs.active = -1;
 
     /* Editor preferences from the app_prefs store */
     gui->wrap_lines             = qirtas_pref_get_int("wrap_lines", 1) != 0;
@@ -2733,41 +2733,41 @@ static void activate(GtkApplication *app, gpointer user_data) {
     gtk_widget_add_css_class(tab_strip, "tab-strip");
     gtk_widget_set_hexpand(tab_strip, TRUE);
     gtk_widget_set_halign(tab_strip, GTK_ALIGN_FILL);
-    gui->tab_strip = tab_strip;
+    gui->tabs.strip = tab_strip;
     /* Tab strip stays LTR even when the app runs RTL (Arabic). */
     gtk_widget_set_direction(tab_strip, GTK_TEXT_DIR_LTR);
 
-    gui->btn_tab_scroll_left = gtk_button_new_from_icon_name("pan-start-symbolic");
-    gtk_accessible_update_property(GTK_ACCESSIBLE(gui->btn_tab_scroll_left),
+    gui->tabs.scroll_left_btn = gtk_button_new_from_icon_name("pan-start-symbolic");
+    gtk_accessible_update_property(GTK_ACCESSIBLE(gui->tabs.scroll_left_btn),
                                    GTK_ACCESSIBLE_PROPERTY_LABEL,
                                    "Scroll tabs left", -1);
-    gtk_widget_add_css_class(gui->btn_tab_scroll_left, "tab-scroll-btn");
-    gtk_widget_set_tooltip_text(gui->btn_tab_scroll_left, qirtas_tr("Scroll tabs left"));
+    gtk_widget_add_css_class(gui->tabs.scroll_left_btn, "tab-scroll-btn");
+    gtk_widget_set_tooltip_text(gui->tabs.scroll_left_btn, qirtas_tr("Scroll tabs left"));
 
-    gui->tab_bar_scroll = gtk_scrolled_window_new();
-    gtk_widget_add_css_class(gui->tab_bar_scroll, "tab-bar-scroll");
-    gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(gui->tab_bar_scroll),
+    gui->tabs.bar_scroll = gtk_scrolled_window_new();
+    gtk_widget_add_css_class(gui->tabs.bar_scroll, "tab-bar-scroll");
+    gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(gui->tabs.bar_scroll),
                                    GTK_POLICY_AUTOMATIC, GTK_POLICY_NEVER);
-    gtk_scrolled_window_set_overlay_scrolling(GTK_SCROLLED_WINDOW(gui->tab_bar_scroll), TRUE);
-    gtk_widget_set_hexpand(gui->tab_bar_scroll, TRUE);
-    gtk_widget_set_hexpand_set(gui->tab_bar_scroll, TRUE);
+    gtk_scrolled_window_set_overlay_scrolling(GTK_SCROLLED_WINDOW(gui->tabs.bar_scroll), TRUE);
+    gtk_widget_set_hexpand(gui->tabs.bar_scroll, TRUE);
+    gtk_widget_set_hexpand_set(gui->tabs.bar_scroll, TRUE);
 
     GtkWidget *tab_bar = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
     gtk_widget_add_css_class(tab_bar, "tab-bar");
     gtk_widget_set_valign(tab_bar, GTK_ALIGN_CENTER);
-    gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(gui->tab_bar_scroll), tab_bar);
-    gui->tab_bar_box = tab_bar;
+    gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(gui->tabs.bar_scroll), tab_bar);
+    gui->tabs.bar_box = tab_bar;
 
-    gui->btn_tab_scroll_right = gtk_button_new_from_icon_name("pan-end-symbolic");
-    gtk_accessible_update_property(GTK_ACCESSIBLE(gui->btn_tab_scroll_right),
+    gui->tabs.scroll_right_btn = gtk_button_new_from_icon_name("pan-end-symbolic");
+    gtk_accessible_update_property(GTK_ACCESSIBLE(gui->tabs.scroll_right_btn),
                                    GTK_ACCESSIBLE_PROPERTY_LABEL,
                                    "Scroll tabs right", -1);
-    gtk_widget_add_css_class(gui->btn_tab_scroll_right, "tab-scroll-btn");
-    gtk_widget_set_tooltip_text(gui->btn_tab_scroll_right, qirtas_tr("Scroll tabs right"));
+    gtk_widget_add_css_class(gui->tabs.scroll_right_btn, "tab-scroll-btn");
+    gtk_widget_set_tooltip_text(gui->tabs.scroll_right_btn, qirtas_tr("Scroll tabs right"));
 
-    gtk_box_append(GTK_BOX(tab_strip), gui->btn_tab_scroll_left);
-    gtk_box_append(GTK_BOX(tab_strip), gui->tab_bar_scroll);
-    gtk_box_append(GTK_BOX(tab_strip), gui->btn_tab_scroll_right);
+    gtk_box_append(GTK_BOX(tab_strip), gui->tabs.scroll_left_btn);
+    gtk_box_append(GTK_BOX(tab_strip), gui->tabs.bar_scroll);
+    gtk_box_append(GTK_BOX(tab_strip), gui->tabs.scroll_right_btn);
     gui_tabs_setup_viewport(gui);
 
     /* The 🔍 search, 📖 read mode, and ⋮ menu live in the card header now.
