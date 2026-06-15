@@ -45,6 +45,7 @@ const DriveSearchResponse = struct {
         id: []const u8,
         name: []const u8,
         modifiedTime: []const u8,
+        md5Checksum: []const u8 = "",
     },
 };
 
@@ -721,6 +722,73 @@ fn patch_file_on_drive(allocator: std.mem.Allocator, access_token: []const u8, f
     return error.DriveUpdateFailed;
 }
 
+/// Metadata-only PATCH (no /upload/ prefix, JSON body) to rename a Drive file
+/// in place. Used by rename detection so a local rename becomes a Drive
+/// rename instead of a new upload + the old name being resurrected.
+fn rename_file_on_drive(allocator: std.mem.Allocator, access_token: []const u8, file_id: []const u8, new_name: []const u8) !void {
+    var attempt: u32 = 0;
+    const max_attempts = 3;
+    while (attempt < max_attempts) : (attempt += 1) {
+        if (attempt > 0) {
+            _ = c.usleep(attempt * 1000 * 1000);
+        }
+
+        var client = std.http.Client{ .allocator = allocator, .io = main.global_io };
+        defer client.deinit();
+
+        const update_url = std.fmt.allocPrint(allocator, "https://www.googleapis.com/drive/v3/files/{s}?fields=id", .{file_id}) catch |e| return e;
+        defer allocator.free(update_url);
+
+        const uri = std.Uri.parse(update_url) catch |e| return e;
+        const auth_hdr = std.fmt.allocPrint(allocator, "Bearer {s}", .{access_token}) catch |e| return e;
+        defer allocator.free(auth_hdr);
+
+        const name_json = json_escape_header(allocator, new_name) catch |e| return e;
+        defer allocator.free(name_json);
+        const body = std.fmt.allocPrint(allocator, "{{\"name\": \"{s}\"}}", .{name_json}) catch |e| return e;
+        defer allocator.free(body);
+
+        var req = client.request(.PATCH, uri, .{
+            .extra_headers = &[_]std.http.Header{
+                .{ .name = "Authorization", .value = auth_hdr },
+                .{ .name = "Content-Type", .value = "application/json" },
+            },
+        }) catch |err| {
+            std.debug.print("Rename attempt {} failed to send request: {}\n", .{attempt + 1, err});
+            if (attempt + 1 == max_attempts) return err;
+            continue;
+        };
+        defer req.deinit();
+
+        req.sendBodyComplete(@constCast(body)) catch |err| {
+            std.debug.print("Rename attempt {} failed to send body: {}\n", .{attempt + 1, err});
+            if (attempt + 1 == max_attempts) return err;
+            continue;
+        };
+
+        var redirect_buf: [1024]u8 = undefined;
+        const response = req.receiveHead(&redirect_buf) catch |err| {
+            std.debug.print("Rename attempt {} failed to receive head: {}\n", .{attempt + 1, err});
+            if (attempt + 1 == max_attempts) return err;
+            continue;
+        };
+
+        if (response.head.status != .ok) {
+            std.debug.print("Rename attempt {} failed with HTTP status: {}\n", .{attempt + 1, response.head.status});
+            if (response.head.status == .unauthorized or response.head.status == .forbidden) {
+                zig_sync_disconnect();
+                return error.AuthenticationExpired;
+            }
+            if (is_transient_error(response.head.status) and attempt + 1 < max_attempts) {
+                continue;
+            }
+            return error.DriveUpdateFailed;
+        }
+        return;
+    }
+    return error.DriveUpdateFailed;
+}
+
 fn upload_file_to_drive(allocator: std.mem.Allocator, access_token: []const u8, filename: []const u8, content: []const u8) ![]const u8 {
     var attempt: u32 = 0;
     const max_attempts = 3;
@@ -1154,7 +1222,7 @@ fn sync_now_impl(allocator: std.mem.Allocator) anyerror!void {
         var client = std.http.Client{ .allocator = allocator, .io = main.global_io };
         defer client.deinit();
 
-        const uri_search = std.Uri.parse("https://www.googleapis.com/drive/v3/files?q=%27appDataFolder%27+in+parents+and+trashed+%3D+false&spaces=appDataFolder&fields=files(id,name,modifiedTime)") catch |e| return e;
+        const uri_search = std.Uri.parse("https://www.googleapis.com/drive/v3/files?q=%27appDataFolder%27+in+parents+and+trashed+%3D+false&spaces=appDataFolder&fields=files(id,name,modifiedTime,md5Checksum)") catch |e| return e;
         const auth_hdr = std.fmt.allocPrint(allocator, "Bearer {s}", .{access_token}) catch |e| return e;
         defer allocator.free(auth_hdr);
 
@@ -1229,12 +1297,13 @@ fn sync_now_impl(allocator: std.mem.Allocator) anyerror!void {
     const CloudFileMeta = struct {
         id: []const u8,
         modifiedTime: []const u8,
+        md5: []const u8,
     };
     var cloud_map = std.StringHashMap(CloudFileMeta).init(allocator);
     defer cloud_map.deinit();
 
     for (parsed.value.files) |file| {
-        try cloud_map.put(file.name, .{ .id = file.id, .modifiedTime = file.modifiedTime });
+        try cloud_map.put(file.name, .{ .id = file.id, .modifiedTime = file.modifiedTime, .md5 = file.md5Checksum });
     }
 
     var local_map = std.StringHashMap(c.struct_stat).init(allocator);
@@ -1259,9 +1328,94 @@ fn sync_now_impl(allocator: std.mem.Allocator) anyerror!void {
         }
     }
 
+    // ── Rename detection (content-hash match) ──────────────────────────
+    // A local rename looks like "new local file" + "cloud file whose local
+    // counterpart vanished". Without this, the new name gets uploaded as a
+    // brand-new Drive file AND the old cloud name gets downloaded back,
+    // resurrecting the renamed-away file. If a cloud file we previously
+    // tracked under name X has no local counterpart, and some untracked local
+    // file's MD5 matches its md5Checksum, treat it as X having been renamed
+    // to that file: rename the Drive file in place instead of duplicating it.
+    var handled_local = std.StringHashMap(void).init(allocator);
+    defer handled_local.deinit();
+    var handled_cloud = std.StringHashMap(void).init(allocator);
+    defer handled_cloud.deinit();
+    {
+        var rename_db: ?*c.sqlite3 = null;
+        if (c.sqlite3_open(dbp(), &rename_db) == c.SQLITE_OK) {
+            defer _ = c.sqlite3_close(rename_db);
+            _ = c.sqlite3_busy_timeout(rename_db, 5000);
+
+            var cloud_it_r = cloud_map.iterator();
+            while (cloud_it_r.next()) |centry| {
+                const cloud_name = centry.key_ptr.*;
+                const cloud_meta = centry.value_ptr.*;
+                if (local_map.contains(cloud_name)) continue;
+                if (cloud_meta.md5.len == 0) continue;
+
+                var was_tracked = false;
+                {
+                    const sql_chk = "SELECT drive_file_id FROM file_metadata WHERE filepath = ?;";
+                    var stmt_chk: ?*c.sqlite3_stmt = null;
+                    if (c.sqlite3_prepare_v2(rename_db, sql_chk.ptr, -1, &stmt_chk, null) == c.SQLITE_OK) {
+                        defer _ = c.sqlite3_finalize(stmt_chk);
+                        const cn_z = try allocator.dupeZ(u8, cloud_name);
+                        defer allocator.free(cn_z);
+                        _ = c.sqlite3_bind_text(stmt_chk, 1, cn_z.ptr, -1, null);
+                        if (c.sqlite3_step(stmt_chk) == c.SQLITE_ROW) {
+                            const id_c = c.sqlite3_column_text(stmt_chk, 0);
+                            if (id_c != null and std.mem.eql(u8, std.mem.span(id_c), cloud_meta.id)) {
+                                was_tracked = true;
+                            }
+                        }
+                    }
+                }
+                if (!was_tracked) continue;
+
+                var local_it_r = local_map.iterator();
+                while (local_it_r.next()) |lentry| {
+                    const local_name = lentry.key_ptr.*;
+                    if (cloud_map.contains(local_name)) continue;
+                    if (handled_local.contains(local_name)) continue;
+
+                    const content = read_file_content(allocator, local_name) catch continue;
+                    defer allocator.free(content);
+                    const hash = md5_hex(allocator, content) catch continue;
+                    defer allocator.free(hash);
+                    if (!std.mem.eql(u8, hash, cloud_meta.md5)) continue;
+
+                    std.debug.print("Detected rename: {s} -> {s} (Drive id {s})\n", .{cloud_name, local_name, cloud_meta.id});
+                    rename_file_on_drive(allocator, access_token, cloud_meta.id, local_name) catch |err| {
+                        std.debug.print("Rename failed for {s}: {}\n", .{cloud_name, err});
+                        continue;
+                    };
+
+                    {
+                        const sql_del = "DELETE FROM file_metadata WHERE filepath = ?;";
+                        var stmt_del: ?*c.sqlite3_stmt = null;
+                        if (c.sqlite3_prepare_v2(rename_db, sql_del.ptr, -1, &stmt_del, null) == c.SQLITE_OK) {
+                            defer _ = c.sqlite3_finalize(stmt_del);
+                            const cn_z = try allocator.dupeZ(u8, cloud_name);
+                            defer allocator.free(cn_z);
+                            _ = c.sqlite3_bind_text(stmt_del, 1, cn_z.ptr, -1, null);
+                            _ = c.sqlite3_step(stmt_del);
+                        }
+                    }
+
+                    try update_local_metadata(allocator, local_name, cloud_meta.id, lentry.value_ptr.*.st_mtim.tv_sec);
+
+                    try handled_local.put(local_name, {});
+                    try handled_cloud.put(cloud_name, {});
+                    break;
+                }
+            }
+        }
+    }
+
     var local_it = local_map.iterator();
     while (local_it.next()) |entry| {
         const filename = entry.key_ptr.*;
+        if (handled_local.contains(filename)) continue;
         const local_st = entry.value_ptr.*;
         const local_mtime = local_st.st_mtim.tv_sec;
 
@@ -1358,6 +1512,7 @@ fn sync_now_impl(allocator: std.mem.Allocator) anyerror!void {
     while (cloud_it.next()) |entry| {
         const filename = entry.key_ptr.*;
         const cloud_meta = entry.value_ptr.*;
+        if (handled_cloud.contains(filename)) continue;
 
         if (!local_map.contains(filename)) {
             std.debug.print("Cloud only: downloading {s}\n", .{filename});
@@ -1412,6 +1567,14 @@ fn charToDigit(char: u8) !u8 {
         'A'...'F' => char - 'A' + 10,
         else => error.InvalidHexChar,
     };
+}
+
+/// Lowercase hex MD5 of `content`, in the same format as Drive's md5Checksum
+/// field — lets a rename be detected by comparing hashes without downloading.
+fn md5_hex(allocator: std.mem.Allocator, content: []const u8) ![]u8 {
+    var digest: [16]u8 = undefined;
+    std.crypto.hash.Md5.hash(content, &digest, .{});
+    return try bytesToHexAlloc(allocator, &digest);
 }
 
 fn bytesToHexAlloc(allocator: std.mem.Allocator, bytes: []const u8) ![]u8 {

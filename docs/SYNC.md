@@ -128,6 +128,21 @@ conflict-safe backend. Press Sync Now *before* editing on a second machine
 when using Dropbox/Local.** The right fix is to port the Drive-style 3-way
 metadata comparison (+`_conflict` copies) to the other three backends.
 
+### Rename detection — Google Drive only (2026-06-15)
+
+Renaming a file locally used to look like a brand-new file (uploaded as a
+duplicate) **and** a deleted cloud file (the old name gets downloaded back,
+resurrecting it). Drive sync now catches this: if a tracked cloud file's
+local counterpart has disappeared, and some other local file's MD5 content
+hash matches that cloud file's `md5Checksum`, Qirtas treats it as a rename —
+the Drive file is renamed in place (metadata-only PATCH, no re-upload) and
+`file_metadata` is updated to the new filename. No duplicate, no resurrection.
+
+This only fires when the file's **content is unchanged** (a pure
+rename/move). Rename + edit in the same sync cycle falls back to the old
+behavior. Dropbox, GitHub, and Local folder are unchanged — renames on those
+backends still duplicate + resurrect (see limitation 6 below).
+
 ---
 
 ## 3. Known limitations / sharp edges
@@ -137,6 +152,6 @@ metadata comparison (+`_conflict` copies) to the other three backends.
 3. ~~GitHub repo hardcoded~~ **Fixed (2026-06-12):** repo-name field on the GitHub sync card is wired; defaults to `qirtas-notes` if left blank.
 4. ~~`zig_github_connect()` dead mock-token path~~ **Fixed (2026-06-12):** removed (the real flow is the C device flow).
 5. Sync scans only the app's **current working directory**, non-recursive.
-6. Deletion does not propagate: removing a file on one side resurrects it from the other on next sync.
-6. Tokens are machine-bound (`/etc/machine-id` key derivation): restoring vault.db onto new hardware silently invalidates all sync credentials → `Error: missing credentials.` after decryption fails.
-7. Diagnostics print to stdout only — launch from a terminal (`zig build run` or `./zig-out/bin/qirtas`) when investigating.
+6. Deletion does not propagate: removing a file on one side resurrects it from the other on next sync. ~~Renames~~ **Partially fixed for Google Drive (2026-06-15):** a pure rename (same content, new filename) is detected via MD5 hash match and applied as a rename on Drive — no duplicate, no resurrection. A true *deletion* (nothing replaces the file) still resurrects on next sync, on every backend. Dropbox/GitHub/Local: renames still behave like delete+create (duplicate + resurrection).
+7. Tokens are machine-bound (`/etc/machine-id` key derivation): restoring vault.db onto new hardware silently invalidates all sync credentials → `Error: missing credentials.` after decryption fails.
+8. Diagnostics print to stdout only — launch from a terminal (`zig build run` or `./zig-out/bin/qirtas`) when investigating.
