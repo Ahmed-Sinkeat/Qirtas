@@ -1277,7 +1277,6 @@ static void activate(GtkApplication *app, gpointer user_data) {
     gtk_window_set_decorated(GTK_WINDOW(window), FALSE);
 
     AppGui *gui = g_new0(AppGui, 1);
-    gui->last_scroll_requested_line = -1;
     gui->conceal_dirty_start = -1;
     gui->conceal_dirty_end = -1;
     gui->outline_dirty = TRUE;
@@ -1929,12 +1928,6 @@ static void activate(GtkApplication *app, gpointer user_data) {
     gtk_widget_set_valign(source_view, GTK_ALIGN_FILL);
     gtk_widget_add_css_class(source_view, "editor-source");
     gui->source_view = source_view;
-
-    /* Legacy aliases from the old virtual-layout box; coordinate
-     * conversions that targeted the box now resolve to the view itself. */
-    gui->virtual_layout_box = source_view;
-    gui->top_spacer = NULL;
-    gui->bottom_spacer = NULL;
 
     gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(scrolled), source_view);
 
