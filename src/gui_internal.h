@@ -299,6 +299,47 @@ void gui_remeasure_line_height(void);
 void gui_set_sync_status(const char *status);
 void gui_run_on_main_thread(GuiIdleCallback callback, void *user_data);
 
+/* Paper-card geometry (shared between gui.c and gui_layout.c). */
+#define QIRTAS_DESK_GAP_MIN 8
+#define QIRTAS_DESK_GAP_MAX 360
+#define QIRTAS_CARD_CHROME       160
+#define QIRTAS_TEXT_COLUMN_MIN   420
+#define QIRTAS_TEXT_COLUMN_MAX   840
+
+typedef struct {
+    AppGui *gui;
+    GtkTextMark *mark;
+    guint generation;
+} ReadModeScrollData;
+
+void zig_set_focus_mode(int enabled);
+
+/* Editor layout & display preferences (gui_layout.c). */
+void reorder_main_layout(AppGui *gui);
+void apply_editor_border(AppGui *gui);
+gboolean paper_column_tick(GtkWidget *widget, GdkFrameClock *clock, gpointer data);
+void apply_focus_mode(AppGui *gui);
+void toggle_read_mode(AppGui *gui);
+void apply_compact_mode(AppGui *gui);
+void apply_editor_prefs(AppGui *gui);
+void apply_layout_dividers(AppGui *gui);
+int  paper_edge_margin(AppGui *gui, GtkWidget *overlay);
+gboolean paper_column_timeout_wrapper(gpointer data);
+void on_editor_border_toggled(GtkCheckButton *chk, gpointer user_data);
+void on_outline_close_clicked(GtkButton *btn, gpointer user_data);
+void on_compact_mode_toggled(GtkCheckButton *btn, gpointer user_data);
+void on_highlight_line_toggled(GtkCheckButton *btn, gpointer user_data);
+void on_line_numbers_toggled(GtkCheckButton *btn, gpointer user_data);
+void on_restore_session_toggled(GtkCheckButton *btn, gpointer user_data);
+void on_text_width_mode_changed(GObject *gobject, GParamSpec *pspec, gpointer user_data);
+void on_width_slider_changed(GtkRange *range, gpointer user_data);
+void on_card_gap_slider_changed(GtkRange *range, gpointer user_data);
+void on_focus_mode_toggled(GtkCheckButton *chk, gpointer user_data);
+void on_column_resize_motion(GtkEventControllerMotion *ctrl, gdouble x, gdouble y, gpointer user_data);
+void on_column_resize_begin(GtkGestureDrag *gesture, gdouble x, gdouble y, gpointer user_data);
+void on_column_resize_update(GtkGestureDrag *gesture, gdouble offset_x, gdouble offset_y, gpointer user_data);
+void on_column_resize_end(GtkGestureDrag *gesture, gdouble offset_x, gdouble offset_y, gpointer user_data);
+
 extern AppGui *global_gui;
 extern GtkWidget *main_window;
 extern GtkWidget *global_window;

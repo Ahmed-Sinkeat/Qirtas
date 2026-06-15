@@ -20,6 +20,7 @@ pub fn build(b: *std.Build) void {
         "src/gui/gui_buffer.c",
         "src/gui/gui_index.c",
         "src/gui/gui_sync_status.c",
+        "src/gui/gui_layout.c",
     };
 
 
