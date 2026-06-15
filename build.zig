@@ -18,6 +18,7 @@ pub fn build(b: *std.Build) void {
         "src/gui/gui_export.c",
         "src/gui/gui_history.c",
         "src/gui/gui_buffer.c",
+        "src/gui/gui_index.c",
     };
 
 
