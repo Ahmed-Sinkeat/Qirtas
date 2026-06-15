@@ -505,6 +505,7 @@ static void on_custom_theme_dialog_response(GObject *source_object, GAsyncResult
         }
         g_object_unref(file);
     } else {
+        g_clear_error(&error);
         if (dropdown) {
             int idx = 0;
             if (strcmp(current_theme, "sepia") == 0) idx = 1;
@@ -880,6 +881,8 @@ static void on_open_dialog_response(GObject *source_object, GAsyncResult *res, g
             g_free(path);
         }
         g_object_unref(file);
+    } else if (error) {
+        g_clear_error(&error);
     }
 }
 
@@ -902,6 +905,8 @@ static void on_vault_dialog_response(GObject *source_object, GAsyncResult *res, 
             g_free(path);
         }
         g_object_unref(folder);
+    } else if (error) {
+        g_clear_error(&error);
     }
 }
 
@@ -1243,6 +1248,7 @@ static void apply_regex_conceal(GtkTextBuffer *buf, const gchar *text, const gch
         }
         has_match = g_match_info_next(match_info, &error);
     }
+    g_clear_error(&error);
     g_match_info_free(match_info);
     if (regex != regex_bold && regex != regex_highlight && regex != regex_italic) {
         g_regex_unref(regex);
@@ -1298,6 +1304,7 @@ static void apply_regex_conceal_local(GtkTextBuffer *buf, const gchar *text, gin
         }
         has_match = g_match_info_next(match_info, &error);
     }
+    g_clear_error(&error);
     g_match_info_free(match_info);
     if (regex != regex_bold && regex != regex_highlight && regex != regex_italic) {
         g_regex_unref(regex);
@@ -5053,6 +5060,7 @@ void gui_index_all_files(void) {
         fseek(f, 0, SEEK_END);
         long sz = ftell(f);
         fseek(f, 0, SEEK_SET);
+        if (sz < 0) { fclose(f); continue; }
         char *content = g_malloc(sz + 1);
         size_t read_bytes = fread(content, 1, sz, f);
         content[read_bytes] = '\0';
@@ -5129,6 +5137,7 @@ void gui_index_file(const char *filename) {
     fseek(f, 0, SEEK_END);
     long sz = ftell(f);
     fseek(f, 0, SEEK_SET);
+    if (sz < 0) { fclose(f); sqlite3_close(db); return; }
     char *content = g_malloc(sz + 1);
     size_t read_bytes = fread(content, 1, sz, f);
     content[read_bytes] = '\0';
@@ -5366,6 +5375,7 @@ void gui_refresh_explorer(void) {
 }
 
 void gui_set_title(const char *title) {
+    if (!title) return;
     if (global_window)
         gtk_window_set_title(GTK_WINDOW(global_window), title);
     if (global_path_label) {
@@ -5393,8 +5403,8 @@ void gui_set_title(const char *title) {
 }
 
 void gui_set_sync_status(const char *status) {
-    if (!global_sync_label) return;
-    
+    if (!global_sync_label || !status) return;
+
     const char *display_status = status;
     if (strcmp(status, "Saved") == 0 || strcmp(status, "Synced") == 0 || strcmp(status, "Updated") == 0) {
         display_status = "Synced";
