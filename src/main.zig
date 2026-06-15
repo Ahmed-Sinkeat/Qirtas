@@ -134,6 +134,7 @@ extern fn gui_index_all_files() void;
 extern fn gui_index_file(filename: [*:0]const u8) void;
 extern fn gui_remove_file_from_index(filename: [*:0]const u8) void;
 extern fn gui_trigger_autosave() void;
+extern fn gui_autosave_enabled() c_int;
 extern fn gui_tabs_save_active_to_cache() void;
 extern fn gui_tabs_restore_active_from_cache() void;
 
@@ -1507,6 +1508,7 @@ fn autosave_thread_loop() void {
 
 fn autosave_callback(user_data: ?*anyopaque) callconv(.c) void {
     _ = user_data;
+    if (gui_autosave_enabled() == 0) return;
     gui_trigger_autosave();
 }
 
