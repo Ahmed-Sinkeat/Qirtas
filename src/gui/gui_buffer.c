@@ -379,7 +379,7 @@ static guint autosave_debounce_id = 0;
 static gboolean autosave_debounce_cb(gpointer user_data) {
     (void)user_data;
     autosave_debounce_id = 0;
-    gui_trigger_autosave();
+    if (gui_autosave_enabled()) gui_trigger_autosave();
     return G_SOURCE_REMOVE;
 }
 

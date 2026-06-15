@@ -265,6 +265,12 @@ void on_restore_session_toggled(GtkCheckButton *btn, gpointer user_data) {
     qirtas_pref_set_int("restore_session", gui->restore_session ? 1 : 0);
 }
 
+void on_autosave_toggled(GtkCheckButton *btn, gpointer user_data) {
+    AppGui *gui = (AppGui *)user_data;
+    gui->autosave_enabled = gtk_check_button_get_active(btn);
+    qirtas_pref_set_int("autosave_enabled", gui->autosave_enabled ? 1 : 0);
+}
+
 void on_text_width_mode_changed(GObject *gobject, GParamSpec *pspec, gpointer user_data) {
     (void)pspec;
     AppGui *gui = (AppGui *)user_data;

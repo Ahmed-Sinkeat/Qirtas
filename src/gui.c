@@ -1202,6 +1202,7 @@ static const IconPair icon_table[] = {
     { "keyboard",    "input-keyboard-symbolic",      "input-keyboard-symbolic" },
     { "quit",        "window-close-symbolic",        "application-exit-symbolic" },
     { "filemanager", "system-file-manager-symbolic", "system-file-manager-symbolic" },
+    { "history",     "document-open-recent-symbolic", "document-open-recent-symbolic" },
 };
 
 static void on_pointer_color_custom_toggled(GtkCheckButton *chk, gpointer user_data) {
@@ -1337,6 +1338,7 @@ static void activate(GtkApplication *app, gpointer user_data) {
     if (gui->centered_text_width > 1400) gui->centered_text_width = 1400;
     gui->show_overview_map      = qirtas_pref_get_int("show_overview_map", 0) != 0;
     gui->restore_session        = qirtas_pref_get_int("restore_session", 1) != 0;
+    gui->autosave_enabled       = qirtas_pref_get_int("autosave_enabled", 1) != 0;
     gui->compact_mode           = qirtas_pref_get_int("compact_mode", 0) != 0;
     gui->desk_gap                = qirtas_pref_get_int("desk_gap", QIRTAS_DESK_GAP_DEFAULT);
     if (gui->desk_gap < QIRTAS_DESK_GAP_MIN) gui->desk_gap = QIRTAS_DESK_GAP_MIN;
@@ -2264,6 +2266,11 @@ static void activate(GtkApplication *app, gpointer user_data) {
     g_signal_connect(restore_chk, "toggled", G_CALLBACK(on_restore_session_toggled), gui);
     gtk_box_append(GTK_BOX(pop_box), restore_chk);
 
+    GtkWidget *autosave_chk = gtk_check_button_new_with_label(qirtas_tr("Auto-save"));
+    gtk_check_button_set_active(GTK_CHECK_BUTTON(autosave_chk), gui->autosave_enabled);
+    g_signal_connect(autosave_chk, "toggled", G_CALLBACK(on_autosave_toggled), gui);
+    gtk_box_append(GTK_BOX(pop_box), autosave_chk);
+
     /* Card Gap slider — the one width control: 0 = full page width, larger =
      * narrower centred card. Auto-clamps so the card never overflows a narrow
      * window. (Replaces the old Text Width dropdown + Column Width slider.) */
@@ -2943,6 +2950,12 @@ static void on_exp_open_vault_fm_clicked(GtkButton *btn, gpointer user_data) {
     g_free(cwd);
 }
 
+static void on_tree_history_clicked(GtkButton *btn, gpointer user_data) {
+    popdown_ancestor_popover(GTK_WIDGET(btn));
+    const char *path = (const char *)user_data;
+    show_file_history(global_gui, path);
+}
+
 /* New Folder, created as a sibling of the right-clicked file (same directory). */
 static void on_tree_new_folder_clicked(GtkButton *btn, gpointer user_data) {
     popdown_ancestor_popover(GTK_WIDGET(btn));
@@ -2982,6 +2995,9 @@ void on_tree_file_right_click(GtkGestureClick *gesture, gint n_press,
     gtk_box_append(GTK_BOX(box),
         status_menu_item(qirtas_icon("folder"), qirtas_tr("New Folder"), NULL,
                          G_CALLBACK(on_tree_new_folder_clicked), (gpointer)path));
+    gtk_box_append(GTK_BOX(box),
+        status_menu_item(qirtas_icon("history"), qirtas_tr("File History"), NULL,
+                         G_CALLBACK(on_tree_history_clicked), (gpointer)path));
 
     gtk_popover_set_child(GTK_POPOVER(popover), box);
     gtk_popover_popup(GTK_POPOVER(popover));
@@ -3132,6 +3148,12 @@ int gui_get_absolute_cursor_line(void) {
     return line;
 }
 
+/* Whether the periodic/on-edit autosave triggers should fire. Manual save
+ * (Ctrl+S, via gui_manual_save) always saves regardless of this setting. */
+gboolean gui_autosave_enabled(void) {
+    return !global_gui || global_gui->autosave_enabled;
+}
+
 void gui_trigger_autosave(void) {
     if (!global_gui || !global_source_view) return;
 
@@ -3159,6 +3181,9 @@ void gui_trigger_autosave(void) {
         gtk_text_buffer_set_modified(buf, FALSE);  /* clears the unsaved dot + skips next idle save */
         gui_tabs_refresh(global_gui);
         gui_show_toast(qirtas_tr("Saved"));        /* visible confirmation */
+
+        if (global_gui->tabs.active >= 0)
+            gui_history_record(global_gui->tabs.paths[global_gui->tabs.active]);
     } else {
         gui_set_sync_status("Save Failed");
         gui_show_toast(qirtas_tr("Save failed"));
