@@ -171,7 +171,6 @@ void on_editor_motion(GtkEventControllerMotion *controller, gdouble x, gdouble y
 static gboolean on_editor_mouse_event(GtkEventControllerLegacy *controller, GdkEvent *event, gpointer user_data);
 gboolean keycode_matches_latin_keyval(guint keycode, guint target_keyval);
 void show_keybindings_window(AppGui *gui);
-static void on_settings_btn_clicked(GtkButton *btn, gpointer user_data);
 static gboolean on_settings_window_close_request(GtkWindow *window, gpointer user_data);
 static void on_status_bar_pos_changed(GObject *gobject, GParamSpec *pspec, gpointer user_data);
 static void on_sidebar_side_changed(GObject *gobject, GParamSpec *pspec, gpointer user_data);
@@ -885,7 +884,7 @@ static gboolean on_window_key_pressed(GtkEventControllerKey *ctrl,
 }
 
 
-static void on_settings_btn_clicked(GtkButton *btn, gpointer user_data) {
+void on_settings_btn_clicked(GtkButton *btn, gpointer user_data) {
     (void)btn;
     AppGui *gui = (AppGui *)user_data;
     if (gui->settings_window) {
@@ -1021,23 +1020,8 @@ void zig_set_editor_border(int);
 /* ===== Redesign UI shell (activate + handlers), ported from gui_conflict.c ===== */
 typedef struct { const char *key; const char *classic; const char *modern; } IconPair;
 /* forward decls (shell region) */
-static void on_status_menu_shortcuts(GtkButton *btn, gpointer user_data);
-static void on_status_menu_settings(GtkButton *btn, gpointer user_data);
-static void popdown_ancestor_popover(GtkWidget *w);
-static void on_status_menu_quit(GtkButton *btn, gpointer user_data);
-static void on_status_bar_open_file_clicked(GtkButton *btn, gpointer user_data);
-static void on_status_bar_new_file_clicked(GtkButton *btn, gpointer user_data);
-static void on_status_menu_find_replace(GtkButton *btn, gpointer user_data);
-static void on_status_bar_save_file_clicked(GtkButton *btn, gpointer user_data);
-static void on_status_menu_fullscreen(GtkButton *btn, gpointer user_data);
-static void on_restart_clicked(GtkButton *btn, gpointer user_data);
 static void on_icon_style_changed(GObject *gobject, GParamSpec *pspec, gpointer user_data);
 static void on_language_changed(GObject *gobject, GParamSpec *pspec, gpointer user_data);
-static void on_status_menu_copy_file(GtkButton *btn, gpointer user_data);
-static void on_status_bar_export_pdf_clicked(GtkButton *btn, gpointer user_data);
-static GtkWidget *status_menu_item(const char *icon, const char *label, const char *hint, GCallback cb, gpointer user_data);
-static void on_status_menu_save_as(GtkButton *btn, gpointer user_data);
-static void on_read_mode_toggle_clicked(GtkButton *btn, gpointer user_data);
 static void on_trail_color_custom_toggled(GtkCheckButton *chk, gpointer user_data);
 static void on_trail_color_changed(GObject *object, GParamSpec *pspec, gpointer user_data);
 static void on_pointer_color_custom_toggled(GtkCheckButton *chk, gpointer user_data);
@@ -1079,77 +1063,17 @@ static gboolean idle_wrapper(gpointer d);
 void gui_run_on_main_thread(GuiIdleCallback callback, void *user_data);
 
 /* auto-pulled deps round 2 */
-static void on_status_menu_shortcuts(GtkButton *btn, gpointer user_data) {
-    popdown_ancestor_popover(GTK_WIDGET(btn));
-    show_keybindings_window((AppGui *)user_data);
-}
 
-static void on_status_menu_settings(GtkButton *btn, gpointer user_data) {
-    popdown_ancestor_popover(GTK_WIDGET(btn));
-    on_settings_btn_clicked(NULL, (AppGui *)user_data);
-}
 
-static void popdown_ancestor_popover(GtkWidget *w) {
-    GtkWidget *pop = gtk_widget_get_ancestor(w, GTK_TYPE_POPOVER);
-    if (pop) gtk_popover_popdown(GTK_POPOVER(pop));
-}
 
-static void on_status_menu_quit(GtkButton *btn, gpointer user_data) {
-    (void)user_data;
-    popdown_ancestor_popover(GTK_WIDGET(btn));
-    g_application_quit(g_application_get_default());
-}
 
 
 /* auto-pulled deps round 1 */
-static void on_status_bar_open_file_clicked(GtkButton *btn, gpointer user_data) {
-    AppGui *gui = (AppGui *)user_data;
-    GtkWidget *pop = gtk_widget_get_ancestor(GTK_WIDGET(btn), GTK_TYPE_POPOVER);
-    if (pop) gtk_popover_popdown(GTK_POPOVER(pop));
 
-    GtkFileDialog *dialog = gtk_file_dialog_new();
-    gtk_file_dialog_set_title(dialog, qirtas_tr("Open Existing File"));
-    gtk_file_dialog_open(dialog, GTK_WINDOW(gui->window), NULL, on_open_dialog_response, gui);
-}
 
-static void on_status_bar_new_file_clicked(GtkButton *btn, gpointer user_data) {
-    (void)user_data;
-    GtkWidget *pop = gtk_widget_get_ancestor(GTK_WIDGET(btn), GTK_TYPE_POPOVER);
-    if (pop) gtk_popover_popdown(GTK_POPOVER(pop));
 
-    extern void zig_open_file(const char *filename);
-    zig_open_file("Untitled");
-}
 
-static void on_status_menu_find_replace(GtkButton *btn, gpointer user_data) {
-    popdown_ancestor_popover(GTK_WIDGET(btn));
-    AppGui *gui = (AppGui *)user_data;
-    if (!gui->search_visible) toggle_search(gui);
-}
 
-static void on_status_bar_save_file_clicked(GtkButton *btn, gpointer user_data) {
-    AppGui *gui = (AppGui *)user_data;
-    GtkWidget *pop = gtk_widget_get_ancestor(GTK_WIDGET(btn), GTK_TYPE_POPOVER);
-    if (pop) gtk_popover_popdown(GTK_POPOVER(pop));
-    gui_manual_save(gui);
-}
-
-static void on_status_menu_fullscreen(GtkButton *btn, gpointer user_data) {
-    popdown_ancestor_popover(GTK_WIDGET(btn));
-    toggle_fullscreen((AppGui *)user_data);
-}
-
-static void on_restart_clicked(GtkButton *btn, gpointer user_data) {
-    (void)btn; (void)user_data;
-    char exe[1024] = {0};
-    ssize_t n = readlink("/proc/self/exe", exe, sizeof(exe) - 1);
-    if (n > 0) {
-        exe[n] = '\0';
-        gchar *argv[] = { exe, NULL };
-        g_spawn_async(NULL, argv, NULL, G_SPAWN_DEFAULT, NULL, NULL, NULL, NULL);
-    }
-    g_application_quit(g_application_get_default());
-}
 
 static void on_icon_style_changed(GObject *gobject, GParamSpec *pspec, gpointer user_data) {
     (void)pspec;
@@ -1186,66 +1110,11 @@ static void on_language_changed(GObject *gobject, GParamSpec *pspec, gpointer us
         gtk_widget_set_direction(global_gui->bottom_bar_widget, GTK_TEXT_DIR_LTR);
 }
 
-static void on_status_menu_copy_file(GtkButton *btn, gpointer user_data) {
-    popdown_ancestor_popover(GTK_WIDGET(btn));
-    AppGui *gui = (AppGui *)user_data;
-    if (!gui || gui->active_tab_index == -1 || gui->active_tab_index >= gui->num_tabs) return;
-    const char *path = gui->open_tabs[gui->active_tab_index];
-    if (!path || strcmp(path, "Untitled") == 0) return;
-    if (!g_file_test(path, G_FILE_TEST_EXISTS)) return;
-
-    /* Put the file itself on the clipboard (text/uri-list) so pasting in
-     * a file manager copies the .md file. */
-    GFile *file = g_file_new_for_path(path);
-    GdkFileList *flist = gdk_file_list_new_from_array(&file, 1);
-    GdkClipboard *cb = gdk_display_get_clipboard(gdk_display_get_default());
-    gdk_clipboard_set(cb, GDK_TYPE_FILE_LIST, flist);
-    g_boxed_free(GDK_TYPE_FILE_LIST, flist);
-    g_object_unref(file);
-}
-
-static void on_status_bar_export_pdf_clicked(GtkButton *btn, gpointer user_data) {
-    AppGui *gui = (AppGui *)user_data;
-    GtkWidget *pop = gtk_widget_get_ancestor(GTK_WIDGET(btn), GTK_TYPE_POPOVER);
-    if (pop) gtk_popover_popdown(GTK_POPOVER(pop));
-
-    qirtas_export_to_pdf(gui);
-}
 
 
-static GtkWidget *status_menu_item(const char *icon, const char *label,
-                                   const char *hint,
-                                   GCallback cb, gpointer user_data) {
-    GtkWidget *btn = gtk_button_new();
-    gtk_widget_add_css_class(btn, "pop-btn");
-    gtk_widget_add_css_class(btn, "menu-item-btn");
-    GtkWidget *hbox = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
-    GtkWidget *img = gtk_image_new_from_icon_name(icon);
-    GtkWidget *lbl = gtk_label_new(label);
-    gtk_widget_set_halign(lbl, GTK_ALIGN_START);
-    gtk_widget_set_hexpand(lbl, TRUE);
-    gtk_box_append(GTK_BOX(hbox), img);
-    gtk_box_append(GTK_BOX(hbox), lbl);
-    if (hint) {
-        GtkWidget *hint_lbl = gtk_label_new(hint);
-        gtk_widget_add_css_class(hint_lbl, "menu-item-hint");
-        gtk_widget_set_halign(hint_lbl, GTK_ALIGN_END);
-        gtk_box_append(GTK_BOX(hbox), hint_lbl);
-    }
-    gtk_button_set_child(GTK_BUTTON(btn), hbox);
-    g_signal_connect(btn, "clicked", cb, user_data);
-    return btn;
-}
 
-static void on_status_menu_save_as(GtkButton *btn, gpointer user_data) {
-    popdown_ancestor_popover(GTK_WIDGET(btn));
-    trigger_save_as((AppGui *)user_data);
-}
 
-static void on_read_mode_toggle_clicked(GtkButton *btn, gpointer user_data) {
-    (void)btn;
-    toggle_read_mode((AppGui *)user_data);
-}
+
 
 
 /* auto-pulled deps round 0 */
@@ -3353,6 +3222,7 @@ void gui_run_on_main_thread(GuiIdleCallback callback, void *user_data) {
     id->data = user_data;
     g_idle_add(idle_wrapper, id);
 }
+
 
 
 
