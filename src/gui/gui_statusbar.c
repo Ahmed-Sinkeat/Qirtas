@@ -82,8 +82,8 @@ void on_restart_clicked(GtkButton *btn, gpointer user_data) {
 void on_status_menu_copy_file(GtkButton *btn, gpointer user_data) {
     popdown_ancestor_popover(GTK_WIDGET(btn));
     AppGui *gui = (AppGui *)user_data;
-    if (!gui || gui->active_tab_index == -1 || gui->active_tab_index >= gui->num_tabs) return;
-    const char *path = gui->open_tabs[gui->active_tab_index];
+    if (!gui || gui->tabs.active == -1 || gui->tabs.active >= gui->tabs.count) return;
+    const char *path = gui->tabs.paths[gui->tabs.active];
     if (!path || strcmp(path, "Untitled") == 0) return;
     if (!g_file_test(path, G_FILE_TEST_EXISTS)) return;
 

@@ -172,16 +172,19 @@ typedef struct {
     gboolean enable_bottom_margin;
     gboolean enable_editor_border;
 
-    /* Tabs system */
-    char *open_tabs[20];
-    char *tab_contents[20];
-    gboolean tab_modified[20];
-    int num_tabs;
-    int active_tab_index;
-    GtkWidget *tab_bar_box;
-    GtkWidget *tab_bar_scroll;
-    GtkWidget *btn_tab_scroll_left;
-    GtkWidget *btn_tab_scroll_right;
+    /* Open document tabs + tab strip (owned by gui_tabs.c). See ADR-0006. */
+    struct {
+        char     *paths[20];
+        char     *contents[20];
+        gboolean  modified[20];
+        int       count;
+        int       active;
+        GtkWidget *strip;            /* top tab strip container */
+        GtkWidget *bar_box;
+        GtkWidget *bar_scroll;
+        GtkWidget *scroll_left_btn;
+        GtkWidget *scroll_right_btn;
+    } tabs;
 
     /* Re-entrancy guard */
     gboolean in_conceal_update;
@@ -212,8 +215,7 @@ typedef struct {
     GtkWidget *source_map;
     GtkWidget *outline_box;
 
-    /* Redesign: top tab strip, card header band, desk outline panel */
-    GtkWidget *tab_strip;            /* moved to top of main_vertical_box */
+    /* Redesign: card header band, desk outline panel (tab strip → gui->tabs.strip) */
     GtkWidget *editor_card;          /* paper card wrapper: thread+header+text */
     GtkWidget *editor_header;        /* 46px card header band */
     GtkWidget *editor_thread;        /* 2px gradient thread on card top */
