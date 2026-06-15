@@ -299,6 +299,28 @@ void gui_remeasure_line_height(void);
 void gui_set_sync_status(const char *status);
 void gui_run_on_main_thread(GuiIdleCallback callback, void *user_data);
 
+/* Add/open popover widget bundle (gui_dialogs.c, built in activate). */
+typedef struct {
+    GtkWidget *popover;
+    GtkWidget *box_actions;
+    GtkWidget *box_input;
+    GtkWidget *entry_name;
+    AppGui *gui;
+} AddPopoverWidgets;
+
+/* Dialogs, add/open popover, folder prompt, shutdown (gui_dialogs.c). */
+void on_open_dialog_response(GObject *source_object, GAsyncResult *res, gpointer user_data);
+void on_vault_dialog_response(GObject *source_object, GAsyncResult *res, gpointer user_data);
+void on_open_vault_clicked(GtkButton *btn, gpointer user_data);
+void on_open_existing_clicked(GtkButton *btn, gpointer user_data);
+void on_create_submit(GtkEntry *entry, gpointer user_data);
+void on_create_new_clicked(GtkButton *btn, gpointer user_data);
+void on_popover_closed(GtkPopover *popover, gpointer user_data);
+void on_app_shutdown(GApplication *app, gpointer user_data);
+gboolean on_window_close_request(GtkWindow *window, gpointer user_data);
+void on_save_as_dialog_response(GObject *source_object, GAsyncResult *res, gpointer user_data);
+void prompt_new_folder(AppGui *gui, const char *parent_dir);
+
 /* Paper-card geometry (shared between gui.c and gui_layout.c). */
 #define QIRTAS_DESK_GAP_MIN 8
 #define QIRTAS_DESK_GAP_MAX 360
