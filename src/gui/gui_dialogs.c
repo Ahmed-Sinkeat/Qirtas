@@ -191,9 +191,11 @@ void on_save_as_dialog_response(GObject *source_object, GAsyncResult *res, gpoin
                     fputs(text, f);
                     fclose(f);
                     gui_set_sync_status("Saved");
+                    gui_show_toast(qirtas_tr("Saved"));
                     zig_open_file(path);
                 } else {
                     gui_set_sync_status("Save As Failed");
+                    gui_show_toast(qirtas_tr("Save failed"));
                 }
                 g_free(text);
             }

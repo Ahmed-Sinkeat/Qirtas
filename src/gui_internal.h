@@ -224,12 +224,12 @@ typedef struct {
     GtkWidget *outline_panel_inner;  /* content box, auto-hidden when empty */
     gboolean   outline_panel_visible;
 
-    /* User-resizable gap between the paper card and the desk edge (drag the
-     * card's outer edge); text_column_width is derived from the card width
-     * each tick, not persisted directly. */
+    /* Card Gap: symmetric margin between the paper card and the desk edge.
+     * 0 = full page width, larger = narrower centred card. Clamped each tick
+     * so the card never overflows a narrow window. */
     int        desk_gap;
     int        text_column_width;    /* derived cache, recomputed by paper_column_tick */
-    int        centered_text_width;  /* user slider: max column width in centered mode (px) */
+    int        centered_text_width;  /* legacy pref, unused since Card-Gap-only model */
     GtkWidget *width_slider;
     gboolean   resizing_text_column;
     int        resize_drag_start_gap;
@@ -299,6 +299,7 @@ gboolean idle_render_hrs_cb(gpointer user_data);
 void gui_remeasure_line_height(void);
 
 void gui_set_sync_status(const char *status);
+void gui_show_toast(const char *msg);
 void gui_run_on_main_thread(GuiIdleCallback callback, void *user_data);
 
 /* Add/open popover widget bundle (gui_dialogs.c, built in activate). */
@@ -344,11 +345,13 @@ void on_read_mode_toggle_clicked(GtkButton *btn, gpointer user_data);
 void on_restart_clicked(GtkButton *btn, gpointer user_data);
 
 /* Paper-card geometry (shared between gui.c and gui_layout.c). */
-#define QIRTAS_DESK_GAP_MIN 8
+#define QIRTAS_DESK_GAP_MIN 0          /* 0 = full page width */
 #define QIRTAS_DESK_GAP_MAX 360
 #define QIRTAS_CARD_CHROME       160
 #define QIRTAS_TEXT_COLUMN_MIN   420
 #define QIRTAS_TEXT_COLUMN_MAX   840
+#define QIRTAS_CARD_MIN_WIDTH    280   /* gap auto-clamps so the card never goes below this */
+#define QIRTAS_CARD_INNER_PAD     28   /* breathing room between card edge and text */
 
 typedef struct {
     AppGui *gui;
@@ -433,6 +436,7 @@ void on_replace_all_clicked(GtkButton *btn, gpointer user_data);
 gboolean on_search_entry_key(GtkEventControllerKey *ctrl, guint keyval, guint keycode, GdkModifierType state, gpointer user_data);
 void toggle_search(AppGui *gui);
 void toggle_fullscreen(AppGui *gui);
+void toggle_focus_mode(AppGui *gui);
 void on_search_icon_clicked(GtkButton *btn, gpointer user_data);
 void on_close_search_clicked(GtkButton *btn, gpointer user_data);
 void apply_wiki_link_tags(GtkTextBuffer *buf);
@@ -458,6 +462,7 @@ void save_pointer_color_settings(AppGui *gui);
 void load_trail_color_settings(AppGui *gui);
 void load_pointer_color_settings(AppGui *gui);
 void populate_explorer(AppGui *gui);
+void explorer_begin_new_folder(AppGui *gui, const char *parent_dir);
 void on_explorer_search_changed(GtkSearchEntry *entry, gpointer user_data);
 void on_file_card_clicked(GtkButton *btn, gpointer user_data);
 int explorer_sort_func(GtkListBoxRow *row1, GtkListBoxRow *row2, gpointer user_data);
@@ -478,6 +483,7 @@ void move_current_line(GtkTextBuffer *buf, gboolean up);
 gboolean on_editor_key_pressed(GtkEventControllerKey *ctrl, guint keyval, guint keycode, GdkModifierType state, gpointer user_data);
 void trigger_save_as(AppGui *gui);
 void gui_manual_save(AppGui *gui);
+void gui_paste_plain_text(AppGui *gui);
 void toggle_comment_current_line(GtkTextBuffer *buf);
 void clear_selection_formatting(GtkTextBuffer *buf);
 int gui_get_buffer_modified(void);

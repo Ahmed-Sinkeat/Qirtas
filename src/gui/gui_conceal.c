@@ -261,6 +261,60 @@ static void apply_regex_conceal_local(GtkTextBuffer *buf, const gchar *text, gin
     g_match_info_free(match_info);
 }
 
+/* Underline is HTML in markdown (`<u>…</u>`). Unlike bold/italic — whose only
+ * editor treatment is hiding the markers — underline has no other visual cue,
+ * so we both (a) conceal the `<u>` / `</u>` tags and (b) apply a real Pango
+ * underline to the inner text. base_offset maps the regex match (run against a
+ * substring in the range pass) back to absolute buffer offsets. */
+static void apply_underline_md(GtkTextBuffer *buf, const gchar *text, gint base_offset,
+                               gint cursor_char, GtkTextTag *conceal_tag) {
+    GtkTextTagTable *table = gtk_text_buffer_get_tag_table(buf);
+    GtkTextTag *u_tag = gtk_text_tag_table_lookup(table, "md-underline");
+    if (!u_tag)
+        u_tag = gtk_text_buffer_create_tag(buf, "md-underline",
+                                           "underline", PANGO_UNDERLINE_SINGLE, NULL);
+
+    GRegex *regex = get_cached_regex("<u>(.+?)</u>");
+    if (!regex) return;
+
+    const int OPEN = 3;   /* "<u>"  */
+    const int CLOSE = 4;  /* "</u>" */
+    gint total = gtk_text_buffer_get_char_count(buf);
+
+    GError *error = NULL;
+    GMatchInfo *match_info = NULL;
+    gboolean has_match = g_regex_match(regex, text, 0, &match_info);
+    while (has_match) {
+        gint start_byte = 0, end_byte = 0;
+        if (g_match_info_fetch_pos(match_info, 0, &start_byte, &end_byte)) {
+            gint sc = base_offset + g_utf8_pointer_to_offset(text, text + start_byte);
+            gint ec = base_offset + g_utf8_pointer_to_offset(text, text + end_byte);
+            if (sc < 0) sc = 0;
+            if (ec > total) ec = total;
+
+            GtkTextIter a, b;
+            /* Inner text → real underline. */
+            if (ec - CLOSE > sc + OPEN) {
+                gtk_text_buffer_get_iter_at_offset(buf, &a, sc + OPEN);
+                gtk_text_buffer_get_iter_at_offset(buf, &b, ec - CLOSE);
+                gtk_text_buffer_apply_tag(buf, u_tag, &a, &b);
+            }
+            /* Hide the markers unless the caret is inside (so they can be edited). */
+            gboolean cursor_inside = (cursor_char >= sc && cursor_char <= ec);
+            if (!cursor_inside && conceal_tag) {
+                gtk_text_buffer_get_iter_at_offset(buf, &a, sc);
+                gtk_text_buffer_get_iter_at_offset(buf, &b, sc + OPEN);
+                gtk_text_buffer_apply_tag(buf, conceal_tag, &a, &b);
+                gtk_text_buffer_get_iter_at_offset(buf, &a, ec - CLOSE);
+                gtk_text_buffer_get_iter_at_offset(buf, &b, ec);
+                gtk_text_buffer_apply_tag(buf, conceal_tag, &a, &b);
+            }
+        }
+        has_match = g_match_info_next(match_info, &error);
+    }
+    g_match_info_free(match_info);
+}
+
 static gboolean local_conceal_queued = FALSE;
 static gboolean global_conceal_queued = FALSE;
 
@@ -309,6 +363,10 @@ static void update_conceal_markdown_all_impl(GtkTextBuffer *buf) {
     gtk_text_buffer_remove_tag(buf, h2_tag_lookup, &start, &end);
     gtk_text_buffer_remove_tag(buf, h3_tag_lookup, &start, &end);
     gtk_text_buffer_remove_tag(buf, h4_tag_lookup, &start, &end);
+    {
+        GtkTextTag *u_clear = gtk_text_tag_table_lookup(table, "md-underline");
+        if (u_clear) gtk_text_buffer_remove_tag(buf, u_clear, &start, &end);
+    }
 
     gchar *text = gtk_text_buffer_get_text(buf, &start, &end, TRUE);
     if (!text || strlen(text) == 0) {
@@ -344,6 +402,9 @@ static void update_conceal_markdown_all_impl(GtkTextBuffer *buf) {
 
     /* Images: match and conceal entire match */
     apply_regex_conceal(buf, text, "!\\[[^\\]]*\\]\\([^)]*\\)", cursor_char, 2, conceal_tag);
+
+    /* Underline: conceal <u>/</u> and underline the inner text. */
+    apply_underline_md(buf, text, 0, cursor_char, conceal_tag);
 
     g_free(text);
 
@@ -491,10 +552,14 @@ static void update_conceal_markdown_range_impl(GtkTextBuffer *buf, int first_lin
     gtk_text_buffer_remove_tag(buf, h2_tag, &start, &end);
     gtk_text_buffer_remove_tag(buf, h3_tag, &start, &end);
     gtk_text_buffer_remove_tag(buf, h4_tag, &start, &end);
+    {
+        GtkTextTag *u_clear = gtk_text_tag_table_lookup(table, "md-underline");
+        if (u_clear) gtk_text_buffer_remove_tag(buf, u_clear, &start, &end);
+    }
 
     if (!strchr(text, '*') && !strchr(text, '=') && !strchr(text, '#') &&
         !strchr(text, '[') && !strchr(text, ']') && !strchr(text, '(') &&
-        !strchr(text, ')') && !strchr(text, '!')) {
+        !strchr(text, ')') && !strchr(text, '!') && !strchr(text, '<')) {
         g_free(text);
         if (global_gui) global_gui->in_conceal_update = FALSE;
         return;
@@ -521,6 +586,9 @@ static void update_conceal_markdown_range_impl(GtkTextBuffer *buf, int first_lin
 
     apply_regex_conceal_local(buf, text, range_start_offset, "\\[([^\\]]+)\\]\\([^)]*\\)", cursor_char, 1, conceal_tag);
     apply_regex_conceal_local(buf, text, range_start_offset, "!\\[[^\\]]*\\]\\([^)]*\\)", cursor_char, 2, conceal_tag);
+
+    /* Underline: conceal <u>/</u> and underline the inner text. */
+    apply_underline_md(buf, text, range_start_offset, cursor_char, conceal_tag);
 
     g_free(text);
 
