@@ -16,7 +16,8 @@ static AppShortcut app_shortcuts[] = {
     { "zoom_in", "Zoom In", "<Control>equal", 0, 0 },
     { "zoom_out", "Zoom Out", "<Control>minus", 0, 0 },
     { "reset_zoom", "Reset Zoom", "<Control>0", 0, 0 },
-    { "fullscreen", "Fullscreen / Focus Mode", "F11", 0, 0 },
+    { "fullscreen", "Fullscreen", "F11", 0, 0 },
+    { "focus_mode", "Focus mode", "<Control><Shift>f", 0, 0 },
     { "copy", "Copy selected text", "<Control>c", 0, 0 },
     { "cut", "Cut selected text", "<Control>x", 0, 0 },
     { "paste", "Paste text", "<Control>v", 0, 0 },
@@ -47,8 +48,8 @@ static AppShortcut app_shortcuts[] = {
     { "replace_text", "Replace text", "<Control>h", 0, 0 },
     { "close_tab", "Close file / tab", "<Control>w", 0, 0 },
     { "open_settings", "Open settings", "<Control>comma", 0, 0 },
-    { "shortcuts_ref", "Shortcuts reference", "<Control>question", 0, 0 },
-    { "toggle_sidebar", "Toggle Sidebar", "<Control><Shift>backslash", 0, 0 },
+    { "shortcuts_ref", "Shortcuts reference", "<Control><Shift>slash", 0, 0 },
+    { "toggle_sidebar", "Toggle Sidebar", "F9", 0, 0 },
     { "toggle_read_mode", "Toggle read mode", "<Control>e", 0, 0 },
     { "inline_code", "Inline code", "<Control>k", 0, 0 },
     { "highlight", "Highlight", "<Control><Shift>h", 0, 0 },
@@ -401,7 +402,8 @@ void show_keybindings_window(AppGui *gui) {
     KB_ROW("Ctrl + = / +",   "Zoom In", "zoom_in");
     KB_ROW("Ctrl + -",       "Zoom Out", "zoom_out");
     KB_ROW("Ctrl + 0",       "Reset Zoom", "reset_zoom");
-    KB_ROW("F11",            "Fullscreen / Focus Mode", "fullscreen");
+    KB_ROW("F11",            "Fullscreen", "fullscreen");
+    KB_ROW("Ctrl + Shift+F", "Focus mode", "focus_mode");
 
     KB_SECTION("3. ADVANCED EDITING")
     KB_ROW("Ctrl + C",       "Copy selected text", "copy");
@@ -437,8 +439,8 @@ void show_keybindings_window(AppGui *gui) {
     KB_ROW("Ctrl + H",       "Replace text", "replace_text");
     KB_ROW("Ctrl + W / F4",  "Close file / tab", "close_tab");
     KB_ROW("Ctrl + ,",       "Open settings", "open_settings");
-    KB_ROW("Ctrl + ?",       "Shortcuts reference", "shortcuts_ref");
-    KB_ROW("Ctrl + \\",      "Toggle Sidebar", "toggle_sidebar");
+    KB_ROW("Ctrl + Shift+/", "Shortcuts reference", "shortcuts_ref");
+    KB_ROW("F9",             "Toggle Sidebar", "toggle_sidebar");
 
     #undef KB_SECTION
     #undef KB_ROW

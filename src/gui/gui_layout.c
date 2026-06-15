@@ -46,37 +46,50 @@ void apply_editor_border(AppGui *gui) {
     gtk_widget_set_halign(card, GTK_ALIGN_FILL);
     gtk_widget_set_size_request(card, -1, -1);
 
-    if (gui->enable_focus_mode) {
-        gtk_widget_remove_css_class(card, "focus-mode");
-        gtk_widget_set_margin_start(card, gui->desk_gap);
-        gtk_widget_set_margin_end(card, gui->desk_gap);
-        gtk_widget_set_margin_top(card, 28);
-        gtk_widget_set_margin_bottom(card, 24);
-        return;
-    }
-
-    if (gui->enable_editor_border) {
-        gtk_widget_remove_css_class(card, "focus-mode");
-        int top = gui->compact_mode ? 10 : 28;
-        int bot = gui->compact_mode ?  8 : 24;
-        gtk_widget_set_margin_start(card, gui->desk_gap);
-        gtk_widget_set_margin_end(card, gui->desk_gap);
-        gtk_widget_set_margin_top(card, top);
-        gtk_widget_set_margin_bottom(card, bot);
-    } else {
+    /* Borderless: card fills the whole desk, no gap, no offset. */
+    if (!gui->enable_focus_mode && !gui->enable_editor_border) {
         gtk_widget_add_css_class(card, "focus-mode");
         gtk_widget_set_margin_start(card, 0);
         gtk_widget_set_margin_end(card, 0);
         gtk_widget_set_margin_top(card, 0);
         gtk_widget_set_margin_bottom(card, 0);
+        return;
     }
+    gtk_widget_remove_css_class(card, "focus-mode");
+
+    int top = (!gui->enable_focus_mode && gui->compact_mode) ? 10 : 28;
+    int bot = (!gui->enable_focus_mode && gui->compact_mode) ?  8 : 24;
+
+    /* Card Gap (symmetric desk margin). Clamp it to the slot the paned gave us
+     * — slot = current card width + its current margins — so a narrow window
+     * shrinks the gap instead of forcing the card (and the window) wider. */
+    int g = gui->desk_gap;
+    if (g < 0) g = 0;
+    int slot = gtk_widget_get_width(card)
+             + gtk_widget_get_margin_start(card)
+             + gtk_widget_get_margin_end(card);
+    if (slot > 1) {
+        int max_g = (slot - QIRTAS_CARD_MIN_WIDTH) / 2;
+        if (max_g < 0) max_g = 0;
+        if (g > max_g) g = max_g;
+    }
+
+    gtk_widget_set_margin_start(card, g);
+    gtk_widget_set_margin_end(card, g);
+    gtk_widget_set_margin_top(card, top);
+    gtk_widget_set_margin_bottom(card, bot);
 }
 
 gboolean paper_column_tick(GtkWidget *widget, GdkFrameClock *clock, gpointer data) {
     (void)clock;
     AppGui *gui = data;
     if (!gui || !gui->source_view) return G_SOURCE_CONTINUE;
-    int width = gtk_widget_get_width(widget);
+
+    /* Keep the card's gap/offset re-clamped to the live window width — this is
+     * what stops the card overflowing when the window is half-screen. */
+    apply_editor_border(gui);
+
+    int width = gtk_widget_get_width(widget);   /* card content width (margins excluded) */
     if (width <= 1) return G_SOURCE_CONTINUE;
 
     GtkSourceView *sv = GTK_SOURCE_VIEW(gui->source_view);
@@ -84,35 +97,31 @@ gboolean paper_column_tick(GtkWidget *widget, GdkFrameClock *clock, gpointer dat
     GtkWidget *gutter = GTK_WIDGET(gtk_source_view_get_gutter(sv, GTK_TEXT_WINDOW_LEFT));
     int gw = (ln && gutter) ? gtk_widget_get_width(gutter) : 0;
 
-    int sig = width ^ (ln ? 0x40000000 : 0) ^ (gw << 8);
+    int sig = width ^ (ln ? 0x40000000 : 0) ^ (gw << 8) ^ (gui->read_mode ? 0x20000000 : 0);
     if (sig == s_last_paper_width) return G_SOURCE_CONTINUE;
     s_last_paper_width = sig;
 
-    int text_w = width - QIRTAS_CARD_CHROME;
-    if (text_w < QIRTAS_TEXT_COLUMN_MIN) text_w = QIRTAS_TEXT_COLUMN_MIN;
-    /* Centered mode: cap at the user's chosen column width (slider). Falls back
-     * to the old fixed max if unset. */
-    int centered_max = (gui->centered_text_width > 0) ? gui->centered_text_width : QIRTAS_TEXT_COLUMN_MAX;
-    if (!gui->text_width_full_page && text_w > centered_max)
-        text_w = centered_max;
-    if (gui->read_mode && !gui->text_width_full_page && text_w > QIRTAS_READ_MODE_MAX_WIDTH)
-        text_w = QIRTAS_READ_MODE_MAX_WIDTH;
-    gui->text_column_width = text_w;
+    /* Card-Gap-only model: text fills the card (minus padding + gutter); the
+     * card's own width — set by the Card Gap slider — is the only width knob. */
+    const int PAD = QIRTAS_CARD_INNER_PAD;
+    const int GAP = 8;                       /* gutter → text gap */
+    int avail_text = width - 2 * PAD - (ln ? gw + GAP : 0);
+    if (avail_text < 80) avail_text = 80;
 
-    int margin = (width - text_w) / 2;
-    if (margin < 8) margin = 8;
+    /* Read mode keeps a comfortable narrow measure, centred inside the card. */
+    int side = 0;
+    if (gui->read_mode && avail_text > QIRTAS_READ_MODE_MAX_WIDTH)
+        side = (avail_text - QIRTAS_READ_MODE_MAX_WIDTH) / 2;
+    gui->text_column_width = avail_text - 2 * side;
 
     if (ln) {
-        const int GAP = 8;
-        int gutter_shift = margin - gw - GAP;
-        if (gutter_shift < 0) gutter_shift = 0;
-        if (gutter) gtk_widget_set_margin_start(gutter, gutter_shift);
-        gtk_text_view_set_left_margin(GTK_TEXT_VIEW(gui->source_view), GAP);
-        gtk_text_view_set_right_margin(GTK_TEXT_VIEW(gui->source_view), margin);
+        if (gutter) gtk_widget_set_margin_start(gutter, PAD);
+        gtk_text_view_set_left_margin(GTK_TEXT_VIEW(gui->source_view), GAP + side);
+        gtk_text_view_set_right_margin(GTK_TEXT_VIEW(gui->source_view), PAD + side);
     } else {
         if (gutter) gtk_widget_set_margin_start(gutter, 0);
-        gtk_text_view_set_left_margin(GTK_TEXT_VIEW(gui->source_view), margin);
-        gtk_text_view_set_right_margin(GTK_TEXT_VIEW(gui->source_view), margin);
+        gtk_text_view_set_left_margin(GTK_TEXT_VIEW(gui->source_view), PAD + side);
+        gtk_text_view_set_right_margin(GTK_TEXT_VIEW(gui->source_view), PAD + side);
     }
     return G_SOURCE_CONTINUE;
 }

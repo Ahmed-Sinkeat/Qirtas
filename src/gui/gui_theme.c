@@ -377,6 +377,13 @@ void apply_theme(AppGui *gui, const char *theme_name) {
             "  min-height: 1px;\n"
             "  margin-top: 16px;\n"
             "  margin-bottom: 16px;\n"
+            "}\n"
+            ".copy-toast {\n"
+            "  background-color: rgba(0,0,0,0.82);\n"
+            "  color: #ffffff;\n"
+            "  padding: 6px 14px;\n"
+            "  border-radius: 14px;\n"
+            "  font-size: 0.9em;\n"
             "}\n",
             css_body,
             caret_css,

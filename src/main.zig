@@ -105,6 +105,19 @@ extern fn qirtas_bench_outline_gate() c_int;
 extern fn qirtas_bench_wordcount() c_int;
 extern fn gui_set_text(text: [*]const u8, len: c_int) void;
 extern fn gui_set_title(title: [*:0]const u8) void;
+
+// UI language picked in settings (0 = English, 1 = Arabic). Owned by gui.c.
+extern var qirtas_app_language: c_int;
+
+// Starter text seeded into a freshly created / blank note. The basmala, in the
+// active UI language. Kept as a single source so the encrypted-file path and
+// the blank "Untitled" buffer agree.
+fn newFileTemplate() []const u8 {
+    return if (qirtas_app_language == 1)
+        "بسم الله الرحمن الرحيم\n"
+    else
+        "In the name of Allah, the Most Gracious, the Most Merciful\n";
+}
 extern fn gui_set_sync_state(state: c_int) void;
 const SYNC_SYNCED: c_int = 0;
 const SYNC_SAVING: c_int = 1;
@@ -112,6 +125,7 @@ const SYNC_NOT_SYNCED: c_int = 2;
 extern fn gui_show_editor() void;
 extern fn gui_get_cursor_position(line: *c_int, col: *c_int) void;
 extern fn gui_set_cursor_position(line: c_int, col: c_int) void;
+extern fn gui_set_cursor_position_quiet(line: c_int, col: c_int) void;
 extern fn gui_reload_full_buffer() void;
 extern fn gui_set_buffer_modified(modified: c_int) void;
 extern fn gui_get_buffer_modified() c_int;
@@ -802,16 +816,25 @@ pub export fn zig_open_file(filename_ptr: [*:0]const u8) callconv(.c) void {
     if (std.mem.eql(u8, filename, "Untitled")) {
         zig_undo_clear();
 
-        // Empty the live document (resets the view + line offsets to [0]).
-        loadDocFromSlice("") catch {};
+        // Fresh blank note: seed the basmala (per UI language). If this is a
+        // RE-opened Untitled tab, gui_tabs_restore_active_from_cache() below
+        // overwrites this with the cached content, so user edits aren't lost.
+        const tmpl = newFileTemplate();
+        loadDocFromSlice(tmpl) catch {};
 
         if (!setActiveFilePath(filename)) return;
 
-        gui_set_text("", 0);
+        gui_set_text(tmpl.ptr, @intCast(tmpl.len));
         gui_set_title("Untitled - Qirtas");
         gui_set_sync_state(SYNC_NOT_SYNCED);
         gui_show_editor();
         gui_tabs_restore_active_from_cache();
+        // Drop the caret on the blank line after the seeded basmala.
+        var seed_lines: c_int = 1;
+        for (tmpl) |ch| {
+            if (ch == '\n') seed_lines += 1;
+        }
+        gui_set_cursor_position(seed_lines, 0);
         var seed_line: c_int = 0;
         var seed_col: c_int = 0;
         gui_get_cursor_position(&seed_line, &seed_col);
@@ -835,10 +858,15 @@ pub export fn zig_open_file(filename_ptr: [*:0]const u8) callconv(.c) void {
                         display_name = filename;
                     }
                 } else {
-                    display_name = get_basename(filename);
+                    // Outside the vault: keep the ABSOLUTE path. Reducing to the
+                    // basename made access()/load_file_mmap look it up relative
+                    // to the vault root — the real file was never found, so the
+                    // editor opened a blank buffer (and created a stray empty
+                    // file in the vault). Absolute paths load + save correctly.
+                    display_name = filename;
                 }
             } else {
-                display_name = get_basename(filename);
+                display_name = filename;
             }
         }
 
@@ -1437,7 +1465,7 @@ fn load_file_and_update_gui(filename: []const u8) !void {
         
         if (active_master_key) |key| {
             active_file_is_encrypted = true;
-            const pt = "# New Notebook Document\n\n- Start writing here...\n";
+            const pt = newFileTemplate();
             const enc_blob = encryptWithMasterKey(std.heap.page_allocator, key, pt) catch return;
             defer std.heap.page_allocator.free(enc_blob);
             try f.writeStreamingAll(global_io, enc_blob);
@@ -1926,7 +1954,9 @@ fn restoreSnapshot(entry: UndoEntry) void {
     gui_reload_full_buffer();
     gui_set_buffer_modified(1);
     gui_set_sync_state(SYNC_NOT_SYNCED);
-    gui_set_cursor_position(entry.cursor_line, entry.cursor_col);
+    // Quiet caret move: keep the page where the user is looking instead of
+    // snapping the viewport to the restored caret (undo-jumps-up bug).
+    gui_set_cursor_position_quiet(entry.cursor_line, entry.cursor_col);
 }
 
 pub export fn zig_undo_push(cursor_line: c_int, cursor_col: c_int) callconv(.c) void {

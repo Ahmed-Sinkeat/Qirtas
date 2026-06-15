@@ -580,6 +580,7 @@ static void on_ctx_copy_clicked(GtkButton *btn, gpointer user_data) {
     if (global_source_view) gtk_widget_grab_focus(global_source_view);
     GdkClipboard *clipboard = gtk_widget_get_clipboard(global_source_view);
     gtk_text_buffer_copy_clipboard(pd->buf, clipboard);
+    gui_show_toast(qirtas_tr("Copied"));
 }
 
 static void on_ctx_paste_clicked(GtkButton *btn, gpointer user_data) {
@@ -593,8 +594,9 @@ static void on_ctx_paste_clicked(GtkButton *btn, gpointer user_data) {
         gtk_text_buffer_get_iter_at_offset(pd->buf, &it, pd->saved_start);
         gtk_text_buffer_place_cursor(pd->buf, &it);
     }
-    GdkClipboard *clipboard = gtk_widget_get_clipboard(global_source_view);
-    gtk_text_buffer_paste_clipboard(pd->buf, clipboard, NULL, TRUE);
+    /* Plain text only — never GTK's rich-text paste (see gui_paste_plain_text).
+     * Any active selection is left intact so the plain insert replaces it. */
+    gui_paste_plain_text(global_gui);
 }
 
 static void on_popover_destroy(GtkWidget *widget, gpointer user_data) {

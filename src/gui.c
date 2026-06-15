@@ -52,6 +52,28 @@
  * in gui_buffer.c; UI dropdown/restart-button not yet ported to redesign. */
 int qirtas_app_language = 0;
 
+/* Transient editor toast ("Copied", etc.) — a revealer pill over the editor
+ * overlay. Created in the editor setup; driven by gui_show_toast(). */
+static GtkWidget *g_toast_revealer = NULL;
+static GtkWidget *g_toast_label = NULL;
+static guint g_toast_timeout_id = 0;
+
+static gboolean toast_hide_cb(gpointer data) {
+    (void)data;
+    g_toast_timeout_id = 0;
+    if (g_toast_revealer)
+        gtk_revealer_set_reveal_child(GTK_REVEALER(g_toast_revealer), FALSE);
+    return G_SOURCE_REMOVE;
+}
+
+void gui_show_toast(const char *msg) {
+    if (!g_toast_revealer || !g_toast_label || !msg) return;
+    gtk_label_set_text(GTK_LABEL(g_toast_label), msg);
+    gtk_revealer_set_reveal_child(GTK_REVEALER(g_toast_revealer), TRUE);
+    if (g_toast_timeout_id) g_source_remove(g_toast_timeout_id);
+    g_toast_timeout_id = g_timeout_add(1300, toast_hide_cb, NULL);
+}
+
 /* Perf observability gate (QIRTAS_PERF=1). Read by QIRTAS_PERF_* macros in
  * gui_internal.h; set from env in run_gui(). */
 int qirtas_perf_enabled = 0;
@@ -500,7 +522,8 @@ static AppShortcut app_shortcuts[] = {
     { "zoom_in", "Zoom In", "<Control>equal", 0, 0 },
     { "zoom_out", "Zoom Out", "<Control>minus", 0, 0 },
     { "reset_zoom", "Reset Zoom", "<Control>0", 0, 0 },
-    { "fullscreen", "Fullscreen / Focus Mode", "F11", 0, 0 },
+    { "fullscreen", "Fullscreen", "F11", 0, 0 },
+    { "focus_mode", "Focus mode", "<Control><Shift>f", 0, 0 },
     { "copy", "Copy selected text", "<Control>c", 0, 0 },
     { "cut", "Cut selected text", "<Control>x", 0, 0 },
     { "paste", "Paste text", "<Control>v", 0, 0 },
@@ -531,8 +554,8 @@ static AppShortcut app_shortcuts[] = {
     { "replace_text", "Replace text", "<Control>h", 0, 0 },
     { "close_tab", "Close file / tab", "<Control>w", 0, 0 },
     { "open_settings", "Open settings", "<Control>comma", 0, 0 },
-    { "shortcuts_ref", "Shortcuts reference", "<Control>question", 0, 0 },
-    { "toggle_sidebar", "Toggle Sidebar", "<Control><Shift>backslash", 0, 0 },
+    { "shortcuts_ref", "Shortcuts reference", "<Control><Shift>slash", 0, 0 },
+    { "toggle_sidebar", "Toggle Sidebar", "F9", 0, 0 },
     { "inline_code", "Inline code", "<Control>k", 0, 0 },
     { "highlight", "Highlight", "<Control><Shift>h", 0, 0 },
     { "blockquote", "Blockquote", "<Control>q", 0, 0 },
@@ -821,7 +844,7 @@ static gboolean on_window_key_pressed(GtkEventControllerKey *ctrl,
 
     /* Create New Folder (Ctrl+Shift+N) */
     if (match_app_shortcut("new_folder", keyval, keycode, state)) {
-        prompt_new_folder(gui, NULL);
+        explorer_begin_new_folder(gui, NULL);
         return TRUE;
     }
 
@@ -851,9 +874,15 @@ static gboolean on_window_key_pressed(GtkEventControllerKey *ctrl,
         return TRUE;
     }
 
-    /* Fullscreen / Focus Mode */
+    /* Fullscreen (window only) */
     if (match_app_shortcut("fullscreen", keyval, keycode, state)) {
         toggle_fullscreen(gui);
+        return TRUE;
+    }
+
+    /* Focus mode (hide chrome / center text) */
+    if (match_app_shortcut("focus_mode", keyval, keycode, state)) {
+        toggle_focus_mode(gui);
         return TRUE;
     }
 
@@ -1779,18 +1808,22 @@ static void activate(GtkApplication *app, gpointer user_data) {
     gtk_overlay_set_measure_overlay(GTK_OVERLAY(editor_overlay), trail_area, FALSE);
     gui->cursor.trail_area = trail_area;
 
-    /* Resizable centred text column: cursor hint + drag handles on the
-     * paper's left/right margins (see on_column_resize_* above). */
-    GtkEventController *col_motion = gtk_event_controller_motion_new();
-    g_signal_connect(col_motion, "motion", G_CALLBACK(on_column_resize_motion), gui);
-    gtk_widget_add_controller(editor_overlay, col_motion);
-
-    GtkGesture *col_drag = gtk_gesture_drag_new();
-    gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(col_drag), GDK_BUTTON_PRIMARY);
-    g_signal_connect(col_drag, "drag-begin", G_CALLBACK(on_column_resize_begin), gui);
-    g_signal_connect(col_drag, "drag-update", G_CALLBACK(on_column_resize_update), gui);
-    g_signal_connect(col_drag, "drag-end", G_CALLBACK(on_column_resize_end), gui);
-    gtk_widget_add_controller(editor_overlay, GTK_EVENT_CONTROLLER(col_drag));
+    /* Transient "Copied" pill — a GtkRevealer at the bottom-centre of the
+     * editor, hidden until gui_show_toast() reveals it for a moment. */
+    g_toast_label = gtk_label_new("");
+    gtk_widget_add_css_class(g_toast_label, "copy-toast");
+    g_toast_revealer = gtk_revealer_new();
+    gtk_revealer_set_transition_type(GTK_REVEALER(g_toast_revealer),
+                                     GTK_REVEALER_TRANSITION_TYPE_CROSSFADE);
+    gtk_revealer_set_transition_duration(GTK_REVEALER(g_toast_revealer), 150);
+    gtk_revealer_set_child(GTK_REVEALER(g_toast_revealer), g_toast_label);
+    gtk_revealer_set_reveal_child(GTK_REVEALER(g_toast_revealer), FALSE);
+    gtk_widget_set_halign(g_toast_revealer, GTK_ALIGN_CENTER);
+    gtk_widget_set_valign(g_toast_revealer, GTK_ALIGN_END);
+    gtk_widget_set_margin_bottom(g_toast_revealer, 24);
+    gtk_widget_set_can_target(g_toast_revealer, FALSE);
+    gtk_overlay_add_overlay(GTK_OVERLAY(editor_overlay), g_toast_revealer);
+    gtk_overlay_set_measure_overlay(GTK_OVERLAY(editor_overlay), g_toast_revealer, FALSE);
 
     /* ── Paper card wrapper ──
      * The thread, the header band, and the scrolling text now live inside
@@ -2059,6 +2092,12 @@ static void activate(GtkApplication *app, gpointer user_data) {
     GtkEventController *editor_key_ctrl = gtk_event_controller_key_new();
     g_signal_connect(editor_key_ctrl, "key-pressed",
                      G_CALLBACK(on_editor_key_pressed), gui);
+    /* CAPTURE phase so our editor shortcuts (Home/End logical-line, numbered-
+     * list Enter, Alt+Up/Down, etc.) run BEFORE GtkTextView's built-in key
+     * bindings, which otherwise win in the default bubble phase and shadow
+     * them. on_editor_key_pressed returns FALSE for anything it doesn't claim,
+     * so plain typing and the input method still reach GtkTextView normally. */
+    gtk_event_controller_set_propagation_phase(editor_key_ctrl, GTK_PHASE_CAPTURE);
     gtk_widget_add_controller(source_view, editor_key_ctrl);
 
     /* ── Cursor-trail: wire draw function + frame-clock tick ── */
@@ -2225,36 +2264,9 @@ static void activate(GtkApplication *app, gpointer user_data) {
     g_signal_connect(restore_chk, "toggled", G_CALLBACK(on_restore_session_toggled), gui);
     gtk_box_append(GTK_BOX(pop_box), restore_chk);
 
-    const char *text_width_modes[] = { "Centered (Fixed Width)", "Full Page Width", NULL };
-    GtkWidget *text_width_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
-    GtkWidget *text_width_lbl = gtk_label_new(qirtas_tr("Text Width"));
-    gtk_widget_set_hexpand(text_width_lbl, TRUE);
-    gtk_widget_set_halign(text_width_lbl, GTK_ALIGN_START);
-    gui->text_width_dropdown = gtk_drop_down_new_from_strings(text_width_modes);
-    gtk_drop_down_set_selected(GTK_DROP_DOWN(gui->text_width_dropdown), gui->text_width_full_page ? 1 : 0);
-    g_signal_connect(gui->text_width_dropdown, "notify::selected", G_CALLBACK(on_text_width_mode_changed), gui);
-    gtk_box_append(GTK_BOX(text_width_row), text_width_lbl);
-    gtk_box_append(GTK_BOX(text_width_row), gui->text_width_dropdown);
-    gtk_box_append(GTK_BOX(pop_box), text_width_row);
-
-    /* Column-width slider — sets the centered-mode max column width (px). */
-    GtkWidget *width_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
-    GtkWidget *width_lbl = gtk_label_new(qirtas_tr("Column Width"));
-    gtk_widget_set_halign(width_lbl, GTK_ALIGN_START);
-    GtkWidget *width_slider = gtk_scale_new_with_range(GTK_ORIENTATION_HORIZONTAL,
-                                                       QIRTAS_TEXT_COLUMN_MIN, 1400, 10);
-    gtk_range_set_value(GTK_RANGE(width_slider), gui->centered_text_width);
-    gtk_widget_set_hexpand(width_slider, TRUE);
-    gtk_scale_set_draw_value(GTK_SCALE(width_slider), TRUE);
-    gtk_scale_set_value_pos(GTK_SCALE(width_slider), GTK_POS_RIGHT);
-    g_signal_connect(width_slider, "value-changed", G_CALLBACK(on_width_slider_changed), gui);
-    gui->width_slider = width_slider;
-    gtk_box_append(GTK_BOX(width_row), width_lbl);
-    gtk_box_append(GTK_BOX(width_row), width_slider);
-    gtk_box_append(GTK_BOX(pop_box), width_row);
-
-    /* Card gap slider — how narrow the paper card sits from the screen edge
-     * (only visible effect when the editor layout border / card is on). */
+    /* Card Gap slider — the one width control: 0 = full page width, larger =
+     * narrower centred card. Auto-clamps so the card never overflows a narrow
+     * window. (Replaces the old Text Width dropdown + Column Width slider.) */
     GtkWidget *gap_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
     GtkWidget *gap_lbl = gtk_label_new(qirtas_tr("Card Gap"));
     gtk_widget_set_halign(gap_lbl, GTK_ALIGN_START);
@@ -2896,12 +2908,17 @@ static void on_tree_open_clicked(GtkButton *btn, gpointer user_data) {
 static void on_tree_open_in_fm_clicked(GtkButton *btn, gpointer user_data) {
     popdown_ancestor_popover(GTK_WIDGET(btn));
     const char *path = (const char *)user_data;
-    GFile *file = g_file_new_for_path(path);
+    /* Tree paths are vault-relative ("./Notes/x.md"); a relative GFile won't
+     * resolve for the file launcher. Canonicalize against the cwd (vault root)
+     * to an absolute path first. */
+    char *abs = g_canonicalize_filename(path, NULL);
+    GFile *file = g_file_new_for_path(abs ? abs : path);
     GtkFileLauncher *launcher = gtk_file_launcher_new(file);
     GtkWindow *parent = global_gui ? GTK_WINDOW(global_gui->window) : NULL;
     gtk_file_launcher_open_containing_folder(launcher, parent, NULL, NULL, NULL);
     g_object_unref(launcher);
     g_object_unref(file);
+    g_free(abs);
 }
 
 /* Explorer header toolbar actions. */
@@ -2912,7 +2929,7 @@ static void on_exp_new_file_clicked(GtkButton *btn, gpointer user_data) {
 }
 static void on_exp_new_folder_clicked(GtkButton *btn, gpointer user_data) {
     (void)btn;
-    prompt_new_folder((AppGui *)user_data, NULL);
+    explorer_begin_new_folder((AppGui *)user_data, NULL);
 }
 static void on_exp_open_vault_fm_clicked(GtkButton *btn, gpointer user_data) {
     (void)btn; (void)user_data;
@@ -2932,7 +2949,7 @@ static void on_tree_new_folder_clicked(GtkButton *btn, gpointer user_data) {
     const char *path = (const char *)user_data;
     char *parent = g_path_get_dirname(path);
     /* g_path_get_dirname returns "." for a bare filename → vault root. */
-    prompt_new_folder(global_gui, (parent && strcmp(parent, ".") != 0) ? parent : NULL);
+    explorer_begin_new_folder(global_gui, (parent && strcmp(parent, ".") != 0) ? parent : NULL);
     g_free(parent);
 }
 
@@ -3094,6 +3111,20 @@ void gui_set_cursor_position(int line, int col) {
     reset_cursor_trail(global_gui);
 }
 
+/* Place the caret WITHOUT scrolling the viewport to it. on_mark_set bails out
+ * of its deferred scroll-to-cursor while loading_viewport is set, so toggling
+ * it across the select_range suppresses the scroll. Used by undo/redo so the
+ * page stays put instead of snapping to the restored caret (the "undo jumps
+ * the screen up" bug — the baseline snapshot's caret is at 0,0). The reload's
+ * own line-anchored viewport restore then keeps the visible text in place. */
+void gui_set_cursor_position_quiet(int line, int col) {
+    if (!global_gui) { gui_set_cursor_position(line, col); return; }
+    gboolean prev = global_gui->loading_viewport;
+    global_gui->loading_viewport = TRUE;
+    gui_set_cursor_position(line, col);
+    global_gui->loading_viewport = prev;
+}
+
 int gui_get_absolute_cursor_line(void) {
     if (!global_gui || !global_source_view) return 1;
     int line = 1, col = 0;
@@ -3127,8 +3158,10 @@ void gui_trigger_autosave(void) {
         gui_set_sync_status("Saved");
         gtk_text_buffer_set_modified(buf, FALSE);  /* clears the unsaved dot + skips next idle save */
         gui_tabs_refresh(global_gui);
+        gui_show_toast(qirtas_tr("Saved"));        /* visible confirmation */
     } else {
         gui_set_sync_status("Save Failed");
+        gui_show_toast(qirtas_tr("Save failed"));
     }
 }
 
@@ -3198,6 +3231,12 @@ void gui_set_sync_status(const char *status) {
 void gui_show_editor(void) {
     if (global_gui && global_gui->stack && global_gui->btn_editor)
         set_active_tab(global_gui, global_gui->btn_editor, "editor");
+    /* Focus the text view so the caret is live immediately. Without this, a
+     * freshly opened (esp. empty / Untitled) document left focus on the file
+     * tree, and the first click in the editor only moved focus — the caret
+     * didn't land until a second interaction (right-click / save). */
+    if (global_gui && global_gui->source_view)
+        gtk_widget_grab_focus(global_gui->source_view);
 }
 
 typedef struct { GuiIdleCallback cb; void *data; } IdleData;

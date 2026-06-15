@@ -5,8 +5,6 @@ existing code and contributors know when to create a file or a module. For *why*
 the big decisions were made, see [`docs/adr/`](adr/). For *what lives where*, see
 [`src/STRUCTURE.md`](../src/STRUCTURE.md).
 
----
-
 ## Layers
 
 - **Zig backend** (`src/main.zig`, `sync.zig`, …) owns document state, file I/O,
@@ -15,7 +13,7 @@ the big decisions were made, see [`docs/adr/`](adr/). For *what lives where*, se
 - **The boundary is FFI:** `gui_*` functions exported from C and called by Zig;
   `zig_*` functions exported from Zig and called by C.
 
----
+
 
 ## Naming
 
@@ -35,7 +33,7 @@ the big decisions were made, see [`docs/adr/`](adr/). For *what lives where*, se
 Arabic UI strings are written inline as UTF-8 literals; user-facing English
 strings go through `qirtas_tr()` (see `gui_i18n.c`) so they can switch to Arabic.
 
----
+
 
 ## When to create a new file / module
 
@@ -53,7 +51,7 @@ Do **not** let `gui.c` reaccumulate subsystem logic, and never reintroduce a
 duplicate of a function that already lives in a module. See
 [ADR-0004](adr/0004-gui-modularization.md).
 
----
+
 
 ## Linkage rules (the boundary check)
 
@@ -79,7 +77,7 @@ top-level buttons stay top-level). See
 [ADR-0006](adr/0006-appgui-substructs.md). This is organization, not access
 control; C doesn't stop other modules reaching in.
 
----
+
 
 ## Adding / moving a module — checklist
 
@@ -92,7 +90,7 @@ control; C doesn't stop other modules reaching in.
 5. Update **`src/STRUCTURE.md`** (repo tree **and** module table).
 6. One logical change per commit.
 
----
+
 
 ## Code style
 
@@ -103,7 +101,7 @@ control; C doesn't stop other modules reaching in.
   **silent-fail**, never crash the UI.
 - Keep behavior-preserving refactors and behavior changes in separate commits.
 
----
+
 
 ## Commits
 
@@ -115,7 +113,7 @@ Subject concise (~50 chars); body explains *why* when not obvious. Sign off:
 Co-Authored-By: <name> <email>
 ```
 
----
+
 
 ## Documentation map
 

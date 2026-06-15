@@ -5,6 +5,12 @@
 # قرطاس · Qirtas
 
 **A native markdown notebook for Linux that feels like ink on paper.**
+phiposphy:قرطاس هو محاولة لجعل برنامج الملاحظات يعود برنامج ملاحظات فقط.
+before i add a feature or change any thing i ask: هل هذه الميزة تجعل قرطاس برنامج ملاحظات أفضل؟
+
+أم تجعل قرطاس برنامجاً آخر؟إذا كانت الميزة تجعل المستخدم يكتب أو يقرأ أو يجد أو يصدّر ملاحظاته بشكل أفضل، فهي مرشحة للدخول إلى قرطاس.
+
+إذا كانت الميزة تحاول تحويل قرطاس إلى منصة، فهي مرشحة لأن تكون إضافة أو أن تُرفض
 
 Zig backend · C GTK4/Libadwaita frontend · no Electron
 
@@ -87,3 +93,14 @@ Working-directory `.md` files are plaintext. Read
 Pre-1.0, single-developer project under active development on the
 `full-buffer-editor-v2` branch. Expect sharp edges; file issues with the
 terminal output (`zig build run` prints sync and crash diagnostics to stdout).
+
+الميزات التي اريدها لاحقا:
+تحسين العربية.
+Spell Check.
+تحسين التصدير والقوالب.
+دعم الجداول.
+Split View.
+نسخة الهاتف.
+DOCX Import/Export.
+نظام الإضافات.
+تحسين المزامنة والسجل التاريخي
