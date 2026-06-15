@@ -60,8 +60,8 @@ void update_editor_font(AppGui *gui) {
      * must be honored HERE (emitting it only in the theme provider made
      * the setting a no-op). */
     char caret_value[64];
-    if (gui->use_custom_pointer_color) {
-        gchar *rgba_str = gdk_rgba_to_string(&gui->custom_pointer_color);
+    if (gui->cursor.use_custom_pointer_color) {
+        gchar *rgba_str = gdk_rgba_to_string(&gui->cursor.custom_pointer_color);
         g_strlcpy(caret_value, rgba_str, sizeof(caret_value));
         g_free(rgba_str);
     } else {
@@ -326,8 +326,8 @@ void apply_theme(AppGui *gui, const char *theme_name) {
 
     if (gui->css_provider) {
         gchar *caret_css = NULL;
-        if (gui->use_custom_pointer_color) {
-            gchar *rgba_str = gdk_rgba_to_string(&gui->custom_pointer_color);
+        if (gui->cursor.use_custom_pointer_color) {
+            gchar *rgba_str = gdk_rgba_to_string(&gui->cursor.custom_pointer_color);
             caret_css = g_strdup_printf(
                 "textview, textview.sourceview, .editor-source {\n"
                 "  caret-color: %s;\n"

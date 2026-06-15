@@ -301,12 +301,12 @@ void on_theme_dropdown_changed(GObject *gobject, GParamSpec *pspec, gpointer use
 static void on_trail_toggled(GtkCheckButton *chk, gpointer user_data) {
     AppGui *gui = (AppGui *)user_data;
     gboolean active = gtk_check_button_get_active(chk);
-    gui->enable_cursor_trail = active;
+    gui->cursor.enable_trail = active;
     zig_set_cursor_trail(active ? 1 : 0);
     if (!active) {
-        gui->trail_len = 0;
-        if (gui->cursor_trail_area) {
-            gtk_widget_queue_draw(gui->cursor_trail_area);
+        gui->cursor.trail_len = 0;
+        if (gui->cursor.trail_area) {
+            gtk_widget_queue_draw(gui->cursor.trail_area);
         }
     }
 }
@@ -1122,9 +1122,9 @@ static void on_language_changed(GObject *gobject, GParamSpec *pspec, gpointer us
 static void on_trail_color_custom_toggled(GtkCheckButton *chk, gpointer user_data) {
     AppGui *gui = (AppGui *)user_data;
     gboolean active = gtk_check_button_get_active(chk);
-    gui->use_custom_trail_color = active;
-    if (gui->trail_color_btn) {
-        gtk_widget_set_sensitive(gui->trail_color_btn, active);
+    gui->cursor.use_custom_trail_color = active;
+    if (gui->cursor.trail_color_btn) {
+        gtk_widget_set_sensitive(gui->cursor.trail_color_btn, active);
     }
     save_trail_color_settings(gui);
     reset_cursor_trail(gui);
@@ -1135,11 +1135,11 @@ static void on_trail_color_custom_toggled(GtkCheckButton *chk, gpointer user_dat
 static void on_trail_color_changed(GObject *object, GParamSpec *pspec, gpointer user_data) {
     (void)pspec;
     AppGui *gui = (AppGui *)user_data;
-    if (!gui || !gui->use_custom_trail_color) return;
+    if (!gui || !gui->cursor.use_custom_trail_color) return;
     GtkColorDialogButton *btn = GTK_COLOR_DIALOG_BUTTON(object);
     const GdkRGBA *rgba = gtk_color_dialog_button_get_rgba(btn);
     if (rgba) {
-        gui->custom_trail_color = *rgba;
+        gui->cursor.custom_trail_color = *rgba;
         save_trail_color_settings(gui);
         reset_cursor_trail(gui);
     }
@@ -1178,9 +1178,9 @@ static const IconPair icon_table[] = {
 static void on_pointer_color_custom_toggled(GtkCheckButton *chk, gpointer user_data) {
     AppGui *gui = (AppGui *)user_data;
     gboolean active = gtk_check_button_get_active(chk);
-    gui->use_custom_pointer_color = active;
-    if (gui->pointer_color_btn) {
-        gtk_widget_set_sensitive(gui->pointer_color_btn, active);
+    gui->cursor.use_custom_pointer_color = active;
+    if (gui->cursor.pointer_color_btn) {
+        gtk_widget_set_sensitive(gui->cursor.pointer_color_btn, active);
     }
     save_pointer_color_settings(gui);
     apply_theme(gui, current_theme);
@@ -1190,11 +1190,11 @@ static void on_pointer_color_custom_toggled(GtkCheckButton *chk, gpointer user_d
 static void on_pointer_color_changed(GObject *object, GParamSpec *pspec, gpointer user_data) {
     (void)pspec;
     AppGui *gui = (AppGui *)user_data;
-    if (!gui || !gui->use_custom_pointer_color) return;
+    if (!gui || !gui->cursor.use_custom_pointer_color) return;
     GtkColorDialogButton *btn = GTK_COLOR_DIALOG_BUTTON(object);
     const GdkRGBA *rgba = gtk_color_dialog_button_get_rgba(btn);
     if (rgba) {
-        gui->custom_pointer_color = *rgba;
+        gui->cursor.custom_pointer_color = *rgba;
         save_pointer_color_settings(gui);
         apply_theme(gui, current_theme);
         update_editor_font(gui);
@@ -1287,7 +1287,7 @@ static void activate(GtkApplication *app, gpointer user_data) {
     gui->search_visible = FALSE;
     gui->font_provider  = NULL;
     gui->css_provider   = NULL;
-    gui->enable_cursor_trail = zig_get_cursor_trail();
+    gui->cursor.enable_trail = zig_get_cursor_trail();
     gui->show_layout_dividers = zig_get_layout_dividers();
     gui->enable_bottom_margin = zig_get_bottom_margin();
     gui->enable_editor_border = zig_get_editor_border();
@@ -1777,7 +1777,7 @@ static void activate(GtkApplication *app, gpointer user_data) {
     gtk_widget_set_focusable(trail_area, FALSE);
     gtk_overlay_add_overlay(GTK_OVERLAY(editor_overlay), trail_area);
     gtk_overlay_set_measure_overlay(GTK_OVERLAY(editor_overlay), trail_area, FALSE);
-    gui->cursor_trail_area = trail_area;
+    gui->cursor.trail_area = trail_area;
 
     /* Resizable centred text column: cursor hint + drag handles on the
      * paper's left/right margins (see on_column_resize_* above). */
@@ -2063,7 +2063,7 @@ static void activate(GtkApplication *app, gpointer user_data) {
 
     /* ── Cursor-trail: wire draw function + frame-clock tick ── */
     gtk_drawing_area_set_draw_func(
-        GTK_DRAWING_AREA(gui->cursor_trail_area),
+        GTK_DRAWING_AREA(gui->cursor.trail_area),
         draw_cursor_trail,
         gui,
         NULL  /* GDestroyNotify — not needed */
@@ -2182,12 +2182,12 @@ static void activate(GtkApplication *app, gpointer user_data) {
     gtk_box_append(GTK_BOX(pop_box), gui->focus_chk);
 
     GtkWidget *trail_chk = gtk_check_button_new_with_label(qirtas_tr("Pointer Trail Animation"));
-    gtk_check_button_set_active(GTK_CHECK_BUTTON(trail_chk), gui->enable_cursor_trail);
+    gtk_check_button_set_active(GTK_CHECK_BUTTON(trail_chk), gui->cursor.enable_trail);
     g_signal_connect(trail_chk, "toggled", G_CALLBACK(on_trail_toggled), gui);
     gtk_box_append(GTK_BOX(pop_box), trail_chk);
 
     /* Trail-color customization removed — the cursor trail uses the default
-     * (theme caret) color. gui->use_custom_trail_color stays 0. */
+     * (theme caret) color. gui->cursor.use_custom_trail_color stays 0. */
 
     /* Pointer-color customization removed (the caret uses the theme color). */
 

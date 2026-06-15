@@ -122,23 +122,35 @@ typedef struct {
     double         mouse_press_y;
     guint          buffer_generation;
 
-    /* Cursor trail animation */
-    GtkWidget *cursor_trail_area;
-    gboolean   cursor_initialized;
-    double     cursor_target_x;
-    double     cursor_target_y;
-    double     cursor_current_x;
-    double     cursor_current_y;
-    double     cursor_height;
-    double     cursor_width;
+    /* Cursor trail animation + caret/pointer colour (owned by gui_cursor.c).
+     * See docs/adr/0006-appgui-substructs.md for the grouping convention. */
     struct {
-        double x;
-        double y;
-        double alpha;
-    } trail[GHOST_COUNT];
-    int      trail_len;
-    gboolean trail_needs_clear;
-    guint    cursor_tick_id;
+        GtkWidget *trail_area;
+        gboolean   initialized;
+        double     target_x;
+        double     target_y;
+        double     current_x;
+        double     current_y;
+        double     height;
+        double     width;
+        struct {
+            double x;
+            double y;
+            double alpha;
+        } trail[GHOST_COUNT];
+        int        trail_len;
+        gboolean   trail_needs_clear;
+        guint      tick_id;
+        gboolean   enable_trail;
+        gboolean   use_custom_trail_color;
+        GdkRGBA    custom_trail_color;
+        GtkWidget *trail_color_btn;
+        GtkWidget *trail_color_chk;
+        gboolean   use_custom_pointer_color;
+        GdkRGBA    custom_pointer_color;
+        GtkWidget *pointer_color_btn;
+        GtkWidget *pointer_color_chk;
+    } cursor;
 
     /* Layout preferences */
     GtkWidget *main_vertical_box;
@@ -156,18 +168,9 @@ typedef struct {
     /* Vault system */
     GtkWidget *vault_path_lbl_val;
 
-    /* Cursor trail */
-    gboolean enable_cursor_trail;
+    /* Editor chrome toggles (not cursor; cursor colour fields are in `cursor`). */
     gboolean enable_bottom_margin;
     gboolean enable_editor_border;
-    gboolean use_custom_trail_color;
-    GdkRGBA  custom_trail_color;
-    GtkWidget *trail_color_btn;
-    GtkWidget *trail_color_chk;
-    gboolean use_custom_pointer_color;
-    GdkRGBA  custom_pointer_color;
-    GtkWidget *pointer_color_btn;
-    GtkWidget *pointer_color_chk;
 
     /* Tabs system */
     char *open_tabs[20];
