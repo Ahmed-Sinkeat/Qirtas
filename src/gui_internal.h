@@ -109,10 +109,9 @@ typedef struct {
     GtkWidget *btn_sync_icon_bottom;
     GtkWidget *btn_status_actions;
 
-    /* Virtual document layout */
-    GtkWidget     *virtual_layout_box;
-    GtkWidget     *top_spacer;
-    GtkWidget     *bottom_spacer;
+    /* Scroll / mouse-drag / buffer-generation state (residual virtual-scroll
+     * fields removed — see ADR-0002; loading_viewport is now a generic
+     * suppress-side-effects-during-load guard). */
     GtkAdjustment *vadjustment;
     gboolean       in_scroll_update;
     gboolean       scroll_queued;
@@ -121,8 +120,6 @@ typedef struct {
     gboolean       primary_button_down;
     double         mouse_press_x;
     double         mouse_press_y;
-    double         last_v_offset;
-    int            last_scroll_requested_line;
     guint          buffer_generation;
 
     /* Cursor trail animation */
