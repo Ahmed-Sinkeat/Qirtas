@@ -13,9 +13,9 @@ Qirtas/
 │   ├── gui.c                            ← Entry/FFI layer + redesign UI shell: run_gui,
 │   │                                       activate() builds the paper-card window (tab strip,
 │   │                                       editor card, outline panel, sidebar logo, status bar,
-│   │                                       settings), paper-card column subsystem (paper_column_tick,
-│   │                                       focus/read mode), explorer header toolbar + folder prompt,
-│   │                                       app shutdown + unsaved-changes dialog, EN→AR tr_table
+│   │                                       settings), status-bar/menu callbacks, theme/cursor-colour
+│   │                                       settings callbacks, explorer header toolbar + folder prompt,
+│   │                                       app shutdown + unsaved-changes dialog, text-FFI getters, EN→AR tr_table
 │   ├── gui_internal.h                   ← Canonical AppGui struct + UI-only shared state, module hooks
 │   ├── gui_shared.h                     ← Zig-facing FFI declarations, Position, QirtasSyncState
 │   ├── STRUCTURE.md                     ← This file
@@ -37,7 +37,12 @@ Qirtas/
 │       ├── gui_tabs.c                   ← Tab strip + tab cache + gui_reload_full_buffer (full-buffer model)
 │       ├── gui_history.c               ← Per-file edit-history snapshots
 │       ├── gui_shortcuts.c              ← Keyboard shortcuts table, keybindings window
-│       └── gui_sync.c                   ← Cloud credentials and sync event UI
+│       ├── gui_sync.c                   ← Cloud credentials and sync handshake (OAuth/network)
+│       ├── gui_export.c                 ← Themed PDF export, theme chooser dialog, block renderer
+│       ├── gui_index.c                  ← SQLite FTS file indexing (called over FFI from Zig sync layer)
+│       ├── gui_sync_status.c            ← Sync-status UI reporting (labels/buttons/badge) for all providers
+│       └── gui_layout.c                 ← Editor layout & display prefs: paper-column sizing, border,
+│                                           focus/read/compact modes, dividers, column-resize, settings cbs
 │   └── ui/
 │       ├── themes/
 │       │   ├── base.css                 ← Shared layout (tab strip, paper card, desk outline, status pill)
@@ -91,8 +96,8 @@ back after the reflow so concealing markers doesn't shift the view.
 card (`editor_card`) on a desk, top tab strip, card-header breadcrumb, desk
 outline panel, sidebar with brand logo + explorer header toolbar (new file /
 new folder / open vault in FM) + file tree, and a status bar. `paper_column_tick`
-keeps the text column centered as the card resizes. Focus mode and read mode
-toggle on the same card.
+(now in `gui_layout.c`) keeps the text column centered as the card resizes. Focus
+mode and read mode toggle on the same card.
 
 **Localization.** `qirtas_tr()` (gui.c) looks up an EN→AR `tr_table` when the
 app language is Arabic (persisted pref, RTL default direction). Labels are
@@ -143,13 +148,14 @@ system_keys schema, active-file-path bounds check). Run it before pushing anythi
 | App behaviour, file I/O, autosave, inotify | `src/main.zig` |
 | Debounced save-on-pause (2.5 s after typing stops) | `autosave_debounce_cb` in `src/gui.c` |
 | Crash-recovery snapshot history (`file_history` table, pruning tiers) | `src/gui/gui_history.c` |
-| Sync status dot states | `QirtasSyncState` enum in `src/gui_shared.h`, `gui_set_sync_state` in `src/gui.c` |
+| Sync status dot states | `QirtasSyncState` enum in `src/gui_shared.h`, `gui_set_sync_state` in `src/gui/gui_sync_status.c` |
 | Undo stack (heap snapshots, capped at 64 MB total), save/restore, text edit APIs | `src/main.zig` |
 | Undo keybinding routing (GTK built-in undo is disabled — keep it that way) | `on_editor_key_pressed` in `src/gui/gui_editor.c`, `set_enable_undo(FALSE)` in `src/gui.c` |
 | BIP-39 recovery phrase helpers | `src/bip39.zig` |
 | Cloud sync logic | `src/sync.zig` |
 | GTK UI layout, window setup, key handling | `src/gui.c` |
-| Cloud sync status UI callbacks | `src/gui/gui_sync.c` |
+| Cloud sync handshake (OAuth/network) | `src/gui/gui_sync.c` |
+| Cloud sync status UI reporting (labels/buttons/badge) | `src/gui/gui_sync_status.c` |
 | Editor gesture handling and undo commit boundaries | `src/gui/gui_editor.c` |
 | Formatting popovers and post-edit undo sealing | `src/gui/gui_popover.c` |
 | Markdown concealment, heading tags, buffer-generation guards | `src/gui/gui_conceal.c` |
@@ -165,7 +171,7 @@ system_keys schema, active-file-path bounds check). Run it before pushing anythi
 | Build configuration | `build.zig` |
 | UI string translations (English→Arabic) | `tr_table` in `src/gui.c` (`qirtas_tr`) |                           jjjjjjjj
 | Icon style sets (Classic/Modern) | `icon_table` in `src/gui.c` (`qirtas_icon`) |
-| Persisted editor/app preferences | `qirtas_pref_*` helpers in `src/gui/gui_cursor.c`, applied in `apply_editor_prefs` in `src/gui.c` |
+| Persisted editor/app preferences | `qirtas_pref_*` helpers in `src/gui/gui_cursor.c`, applied in `apply_editor_prefs` in `src/gui/gui_layout.c` |
 | Find & Replace | `src/gui/gui_search.c` |
 | Settings window contents | settings section of `activate()` in `src/gui.c` |
 | Status-bar menu items | `status_menu_item` block in `src/gui.c` |
@@ -201,7 +207,10 @@ system_keys schema, active-file-path bounds check). Run it before pushing anythi
 | `gui_switcher` | Quick Switcher (Ctrl+P) fuzzy file palette | `src/gui/gui_switcher.c` |
 | `gui_outline` | Outline panel content (heading TOC); the panel now lives on the desk left of the paper card as a GtkRevealer built in `gui.c` | `src/gui/gui_outline.c` |
 | `gui_shortcuts` | Keyboard shortcuts table, keybindings settings window | `src/gui/gui_shortcuts.c` |
-| `gui_sync` | Cloud credentials and synchronization event UI | `src/gui/gui_sync.c` |
+| `gui_sync` | Cloud credentials and synchronization handshake (OAuth, sockets, network) | `src/gui/gui_sync.c` |
+| `gui_index` | SQLite FTS file indexing (`gui_index_all_files` / `gui_index_file` / `gui_remove_file_from_index`), called over FFI from the Zig sync layer | `src/gui/gui_index.c` |
+| `gui_sync_status` | Sync-status UI reporting: maps backend status strings + connection states onto labels / connect+sync buttons / the global badge for Google Drive, Dropbox, GitHub, local (`gui_set_sync_state`, `gui_update_*_status`) | `src/gui/gui_sync_status.c` |
+| `gui_layout` | Editor layout & display preferences: paper-column sizing (`paper_column_tick`), editor border, focus/read/compact modes, layout dividers, column-resize drag, `apply_editor_prefs`, and the settings callbacks that drive them | `src/gui/gui_layout.c` |
 
 ## UI Redesign (2026-06-13)
 
