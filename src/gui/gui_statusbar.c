@@ -67,6 +67,18 @@ void on_status_menu_fullscreen(GtkButton *btn, gpointer user_data) {
     toggle_fullscreen((AppGui *)user_data);
 }
 
+/* Open the version history for the file in the active tab. (Also reachable by
+ * right-clicking a file in the explorer; this surfaces it where users look.) */
+void on_status_menu_history(GtkButton *btn, gpointer user_data) {
+    popdown_ancestor_popover(GTK_WIDGET(btn));
+    AppGui *gui = (AppGui *)user_data;
+    if (!gui) return;
+    if (gui->tabs.active >= 0 && gui->tabs.active < gui->tabs.count) {
+        const char *path = gui->tabs.paths[gui->tabs.active];
+        if (path && *path) show_file_history(gui, path);
+    }
+}
+
 void on_restart_clicked(GtkButton *btn, gpointer user_data) {
     (void)btn; (void)user_data;
     char exe[1024] = {0};
