@@ -1,6 +1,7 @@
 #include "gui_internal.h"
 #include <string.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <unistd.h>
 
 static char custom_theme_path[1024] = "";
@@ -14,22 +15,46 @@ static const char *CSS_FALLBACK_MINIMAL =
     ".tree-row   { padding: 4px 8px; border-radius: 6px; }\n"
     ".bottom-bar { padding: 4px 12px; }\n";
 
+/* Resolve a bundled resource (CSS, logo, icons) given a repo-relative path like
+ * "src/ui/themes/base.css". Search order:
+ *   1. $QIRTAS_DATA_DIR/<rel>            (explicit override)
+ *   2. <exe>/../../<rel>                 (running from the build tree)
+ *   3. <exe>/<rel>                       (assets alongside the binary)
+ *   4. /usr/share/qirtas/<rel>,
+ *      /usr/local/share/qirtas/<rel>     (system install)
+ * Falls back to the bare relative path if nothing exists, so callers still get
+ * a non-NULL string (load then fails into the minimal CSS / placeholder). */
 static char *resolve_resource_path(const char *rel_path) {
     static char abs_path[2048];
+
+    const char *data_dir = getenv("QIRTAS_DATA_DIR");
+    if (data_dir && data_dir[0]) {
+        snprintf(abs_path, sizeof(abs_path), "%s/%s", data_dir, rel_path);
+        if (access(abs_path, F_OK) == 0) return abs_path;
+    }
+
     char exe_path[1024] = {0};
     ssize_t exe_len = readlink("/proc/self/exe", exe_path, sizeof(exe_path) - 1);
     if (exe_len > 0) {
         exe_path[exe_len] = '\0';
         char *last_slash = strrchr(exe_path, '/');
         if (last_slash) *last_slash = '\0';
-        
+
         snprintf(abs_path, sizeof(abs_path), "%s/../../%s", exe_path, rel_path);
-        
-        if (access(abs_path, F_OK) != 0) {
-            snprintf(abs_path, sizeof(abs_path), "%s/%s", exe_path, rel_path);
-        }
-        return abs_path;
+        if (access(abs_path, F_OK) == 0) return abs_path;
+
+        snprintf(abs_path, sizeof(abs_path), "%s/%s", exe_path, rel_path);
+        if (access(abs_path, F_OK) == 0) return abs_path;
     }
+
+    static const char *const sys_prefixes[] = {
+        "/usr/share/qirtas", "/usr/local/share/qirtas",
+    };
+    for (size_t i = 0; i < sizeof(sys_prefixes) / sizeof(sys_prefixes[0]); i++) {
+        snprintf(abs_path, sizeof(abs_path), "%s/%s", sys_prefixes[i], rel_path);
+        if (access(abs_path, F_OK) == 0) return abs_path;
+    }
+
     strncpy(abs_path, rel_path, sizeof(abs_path) - 1);
     abs_path[sizeof(abs_path) - 1] = '\0';
     return abs_path;

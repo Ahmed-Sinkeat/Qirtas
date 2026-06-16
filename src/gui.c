@@ -1416,22 +1416,50 @@ static void activate(GtkApplication *app, gpointer user_data) {
      * We set main_vertical_box as the content below.
      */
 
-     /* 1. Resolve dynamic icon search path absolute location */
-    char exe_path[PATH_MAX];
+     /* 1. Resolve the bundled icons directory. Search order mirrors
+      *    resolve_resource_path(): $QIRTAS_DATA_DIR, the build tree
+      *    (<exe>/../../), then the system install (/usr/share/qirtas). */
     char custom_icon_path[PATH_MAX] = "";
-    ssize_t link_len = readlink("/proc/self/exe", exe_path, sizeof(exe_path)-1);
-    if (link_len != -1) {
-        exe_path[link_len] = '\0';
-        char *dir = dirname(exe_path);
-        // The binary is in <project_root>/zig-out/bin/qirtas, so we go up two levels to get the project root.
-        snprintf(custom_icon_path, sizeof(custom_icon_path), "%s/../../src/ui/icons", dir);
+    {
+        char exe_path[PATH_MAX];
+        char exe_dir[PATH_MAX] = "";
+        ssize_t link_len = readlink("/proc/self/exe", exe_path, sizeof(exe_path)-1);
+        if (link_len != -1) {
+            exe_path[link_len] = '\0';
+            g_strlcpy(exe_dir, dirname(exe_path), sizeof(exe_dir));
+        }
+        char cand[3][PATH_MAX];
+        const char *candidates[3];
+        int nc = 0;
+        const char *data_dir = g_getenv("QIRTAS_DATA_DIR");
+        if (data_dir && data_dir[0]) {
+            snprintf(cand[nc], PATH_MAX, "%s/src/ui/icons", data_dir);
+            candidates[nc] = cand[nc]; nc++;
+        }
+        if (exe_dir[0]) {
+            snprintf(cand[nc], PATH_MAX, "%s/../../src/ui/icons", exe_dir);
+            candidates[nc] = cand[nc]; nc++;
+        }
+        snprintf(cand[nc], PATH_MAX, "/usr/share/qirtas/src/ui/icons");
+        candidates[nc] = cand[nc]; nc++;
+        for (int i = 0; i < nc; i++) {
+            if (access(candidates[i], F_OK) == 0) {
+                g_strlcpy(custom_icon_path, candidates[i], sizeof(custom_icon_path));
+                break;
+            }
+        }
     }
 
     /* 2. Retrieve active icon theme name and dynamically prepare its layout */
     gchar *theme_name = NULL;
     g_object_get(gtk_settings_get_default(), "gtk-icon-theme-name", &theme_name, NULL);
 
-    if (theme_name && strlen(theme_name) > 0 && strlen(custom_icon_path) > 0) {
+    /* This step writes a per-theme alias dir (symlinks + index.theme) into the
+     * icons directory. On a read-only system install (/usr/share) that isn't
+     * writable, so only attempt it when the dir is writable. Icons still
+     * resolve via the bundled hicolor/ fallback in the search path below. */
+    if (theme_name && strlen(theme_name) > 0 && strlen(custom_icon_path) > 0 &&
+        access(custom_icon_path, W_OK) == 0) {
         char theme_dir[PATH_MAX];
         snprintf(theme_dir, sizeof(theme_dir), "%s/%s", custom_icon_path, theme_name);
         mkdir(theme_dir, 0755);
@@ -1488,9 +1516,10 @@ static void activate(GtkApplication *app, gpointer user_data) {
     }
     g_free(theme_name);
 
-    /* 3. Register custom icon theme paths to default GTK display icon theme */
+    /* 3. Register the bundled icons directory with the display icon theme.
+     *    GTK looks under <path>/hicolor/... automatically, so the custom
+     *    qirtas-* icons resolve from there even without the per-theme aliases. */
     GtkIconTheme *icon_theme = gtk_icon_theme_get_for_display(gdk_display_get_default());
-    gtk_icon_theme_add_search_path(icon_theme, "src/ui/icons");
     if (strlen(custom_icon_path) > 0) {
         char resolved_path[PATH_MAX];
         if (realpath(custom_icon_path, resolved_path) != NULL) {
