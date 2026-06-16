@@ -322,7 +322,7 @@ static gpointer github_device_flow_thread(gpointer user_data) {
         g_free(verification_uri);
     }
     
-    gui_update_github_status(0, "Connection failed");
+    gui_update_github_status(0, "Couldn't reach GitHub. Check connection.");
     return NULL;
 }
 
@@ -420,9 +420,9 @@ static gpointer loopback_thread_func(gpointer user_data) {
         }
     } else {
         if (service == 1) {
-            gui_update_sync_status(0, "Connection timed out");
+            gui_update_sync_status(0, "Sign-in timed out. Try again.");
         } else {
-            gui_update_dropbox_status(0, "Connection timed out");
+            gui_update_dropbox_status(0, "Sign-in timed out. Try again.");
         }
     }
     
@@ -434,8 +434,8 @@ static gpointer loopback_thread_func(gpointer user_data) {
 static void start_loopback_listener(AppGui *gui, int service_type, int port) {
     int server_fd = socket(AF_INET, SOCK_STREAM, 0);
     if (server_fd < 0) {
-        if (service_type == 1) gui_update_sync_status(0, "Failed to create socket");
-        else gui_update_dropbox_status(0, "Failed to create socket");
+        if (service_type == 1) gui_update_sync_status(0, "Couldn't start sign-in. Try again.");
+        else gui_update_dropbox_status(0, "Couldn't start sign-in. Try again.");
         return;
     }
     
@@ -450,15 +450,15 @@ static void start_loopback_listener(AppGui *gui, int service_type, int port) {
     
     if (bind(server_fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
         close(server_fd);
-        if (service_type == 1) gui_update_sync_status(0, "Port 12345 busy");
-        else gui_update_dropbox_status(0, "Port 5173 busy");
+        if (service_type == 1) gui_update_sync_status(0, "Sign-in port busy. Close other apps, retry.");
+        else gui_update_dropbox_status(0, "Sign-in port busy. Close other apps, retry.");
         return;
     }
     
     if (listen(server_fd, 1) < 0) {
         close(server_fd);
-        if (service_type == 1) gui_update_sync_status(0, "Listen failed");
-        else gui_update_dropbox_status(0, "Listen failed");
+        if (service_type == 1) gui_update_sync_status(0, "Couldn't start sign-in. Try again.");
+        else gui_update_dropbox_status(0, "Couldn't start sign-in. Try again.");
         return;
     }
     
@@ -483,10 +483,13 @@ void on_sync_connect_clicked(GtkButton *btn, gpointer user_data) {
         zig_sync_disconnect();
     } else {
         if (!provider_id_configured(google_client_id(), "YOUR_PUBLIC_GOOGLE_ID")) {
-            gui_update_sync_status(0, "Set QIRTAS_GOOGLE_CLIENT_ID");
+            gui_update_sync_status(0, "Needs Google setup — see Help below.");
             return;
         }
         gui_update_sync_status(2, "Waiting for browser...");
+        char challenge[128];
+        unsigned long clen = zig_pkce_challenge(challenge, sizeof(challenge) - 1);
+        challenge[clen] = '\0';
         gchar *auth_url = g_strdup_printf(
             "https://accounts.google.com/o/oauth2/v2/auth"
             "?client_id=%s"
@@ -494,7 +497,9 @@ void on_sync_connect_clicked(GtkButton *btn, gpointer user_data) {
             "&response_type=code"
             "&scope=https://www.googleapis.com/auth/drive.appdata"
             "&access_type=offline"
-            "&prompt=consent", google_client_id());
+            "&prompt=consent"
+            "&code_challenge=%s"
+            "&code_challenge_method=S256", google_client_id(), challenge);
         gtk_show_uri(NULL, auth_url, 0);
         g_free(auth_url);
         start_loopback_listener(gui, 1, 12345);
@@ -509,16 +514,21 @@ void on_dropbox_connect_clicked(GtkButton *btn, gpointer user_data) {
         zig_dropbox_disconnect();
     } else {
         if (!provider_id_configured(dropbox_app_key(), "YOUR_PUBLIC_DROPBOX_KEY")) {
-            gui_update_dropbox_status(0, "Set QIRTAS_DROPBOX_APP_KEY");
+            gui_update_dropbox_status(0, "Needs Dropbox setup — see Help below.");
             return;
         }
         gui_update_dropbox_status(2, "Waiting for browser...");
+        char challenge[128];
+        unsigned long clen = zig_pkce_challenge(challenge, sizeof(challenge) - 1);
+        challenge[clen] = '\0';
         gchar *auth_url = g_strdup_printf(
             "https://www.dropbox.com/oauth2/authorize"
             "?client_id=%s"
             "&token_access_type=offline"
             "&response_type=code"
-            "&redirect_uri=http://localhost:5173", dropbox_app_key());
+            "&redirect_uri=http://localhost:5173"
+            "&code_challenge=%s"
+            "&code_challenge_method=S256", dropbox_app_key(), challenge);
         gtk_show_uri(NULL, auth_url, 0);
         g_free(auth_url);
         start_loopback_listener(gui, 2, 5173);
@@ -531,6 +541,24 @@ void on_github_connect_clicked(GtkButton *btn, gpointer user_data) {
     int connected = zig_github_check_status();
     if (connected) {
         zig_github_disconnect();
+        return;
+    }
+
+    /* Personal Access Token path — reliable, no GitHub-App install/permission
+     * problems. If the user pasted a token, use it. Otherwise fall back to the
+     * browser device flow. */
+    const char *token = NULL;
+    if (gui->github_token_entry) {
+        token = gtk_editable_get_text(GTK_EDITABLE(gui->github_token_entry));
+    }
+    const char *repo = NULL;
+    if (gui->github_repo_entry) {
+        repo = gtk_editable_get_text(GTK_EDITABLE(gui->github_repo_entry));
+    }
+    const char *repo_final = (repo && repo[0] != '\0') ? repo : "qirtas-notes";
+
+    if (token && token[0] != '\0') {
+        zig_github_connect_with_token(token, repo_final);
     } else {
         start_github_device_flow(gui);
     }

@@ -164,7 +164,7 @@ void apply_focus_mode(AppGui *gui) {
     }
 
     if (gui->focus_chk) {
-        gtk_check_button_set_active(GTK_CHECK_BUTTON(gui->focus_chk), gui->enable_focus_mode);
+        gtk_switch_set_active(GTK_SWITCH(gui->focus_chk), gui->enable_focus_mode);
     }
 }
 
@@ -214,9 +214,10 @@ void apply_compact_mode(AppGui *gui) {
     apply_editor_border(gui);
 }
 
-void on_editor_border_toggled(GtkCheckButton *chk, gpointer user_data) {
+void on_editor_border_toggled(GObject *gobject, GParamSpec *pspec, gpointer user_data) {
+    (void)pspec;
     AppGui *gui = (AppGui *)user_data;
-    gboolean active = gtk_check_button_get_active(chk);
+    gboolean active = gtk_switch_get_active(GTK_SWITCH(gobject));
     gui->enable_editor_border = active;
     zig_set_editor_border(active ? 1 : 0);
     apply_editor_border(gui);
@@ -238,36 +239,41 @@ void on_outline_close_clicked(GtkButton *btn, gpointer user_data) {
     qirtas_pref_set_int("outline_panel_visible", 0);
 }
 
-void on_compact_mode_toggled(GtkCheckButton *btn, gpointer user_data) {
+void on_compact_mode_toggled(GObject *gobject, GParamSpec *pspec, gpointer user_data) {
+    (void)pspec;
     AppGui *gui = (AppGui *)user_data;
-    gui->compact_mode = gtk_check_button_get_active(btn);
+    gui->compact_mode = gtk_switch_get_active(GTK_SWITCH(gobject));
     qirtas_pref_set_int("compact_mode", gui->compact_mode ? 1 : 0);
     apply_compact_mode(gui);
 }
 
-void on_highlight_line_toggled(GtkCheckButton *btn, gpointer user_data) {
+void on_highlight_line_toggled(GObject *gobject, GParamSpec *pspec, gpointer user_data) {
+    (void)pspec;
     AppGui *gui = (AppGui *)user_data;
-    gui->highlight_current_line = gtk_check_button_get_active(btn);
+    gui->highlight_current_line = gtk_switch_get_active(GTK_SWITCH(gobject));
     qirtas_pref_set_int("highlight_current_line", gui->highlight_current_line ? 1 : 0);
     apply_editor_prefs(gui);
 }
 
-void on_line_numbers_toggled(GtkCheckButton *btn, gpointer user_data) {
+void on_line_numbers_toggled(GObject *gobject, GParamSpec *pspec, gpointer user_data) {
+    (void)pspec;
     AppGui *gui = (AppGui *)user_data;
-    gui->show_line_numbers = gtk_check_button_get_active(btn);
+    gui->show_line_numbers = gtk_switch_get_active(GTK_SWITCH(gobject));
     qirtas_pref_set_int("show_line_numbers", gui->show_line_numbers ? 1 : 0);
     apply_editor_prefs(gui);
 }
 
-void on_restore_session_toggled(GtkCheckButton *btn, gpointer user_data) {
+void on_restore_session_toggled(GObject *gobject, GParamSpec *pspec, gpointer user_data) {
+    (void)pspec;
     AppGui *gui = (AppGui *)user_data;
-    gui->restore_session = gtk_check_button_get_active(btn);
+    gui->restore_session = gtk_switch_get_active(GTK_SWITCH(gobject));
     qirtas_pref_set_int("restore_session", gui->restore_session ? 1 : 0);
 }
 
-void on_autosave_toggled(GtkCheckButton *btn, gpointer user_data) {
+void on_autosave_toggled(GObject *gobject, GParamSpec *pspec, gpointer user_data) {
+    (void)pspec;
     AppGui *gui = (AppGui *)user_data;
-    gui->autosave_enabled = gtk_check_button_get_active(btn);
+    gui->autosave_enabled = gtk_switch_get_active(GTK_SWITCH(gobject));
     qirtas_pref_set_int("autosave_enabled", gui->autosave_enabled ? 1 : 0);
 }
 
@@ -308,9 +314,10 @@ void on_card_gap_slider_changed(GtkRange *range, gpointer user_data) {
     }
 }
 
-void on_focus_mode_toggled(GtkCheckButton *chk, gpointer user_data) {
+void on_focus_mode_toggled(GObject *gobject, GParamSpec *pspec, gpointer user_data) {
+    (void)pspec;
     AppGui *gui = (AppGui *)user_data;
-    gboolean active = gtk_check_button_get_active(chk);
+    gboolean active = gtk_switch_get_active(GTK_SWITCH(gobject));
     if (gui->enable_focus_mode == active) return;
     gui->enable_focus_mode = active;
     zig_set_focus_mode(active ? 1 : 0);

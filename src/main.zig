@@ -1594,12 +1594,20 @@ pub export fn zig_save_active_page(start_line: c_int, end_line: c_int, text: [*:
         atomicWriteFile(path, new_content) catch return 1;
     }
 
-    remap_active_file() catch return 1;
-    
+    // remap_active_file() requires the file_open_in_progress guard.
+    // zig_save_active_page is only ever called from the GUI thread, never
+    // from within zig_open_file, so the flag is always false here.
+    file_open_in_progress.store(true, .release);
+    remap_active_file() catch {
+        file_open_in_progress.store(false, .release);
+        return 1;
+    };
+    file_open_in_progress.store(false, .release);
+
     const path_z = gpa.dupeZ(u8, path) catch return 1;
     defer gpa.free(path_z);
     gui_index_file(path_z.ptr);
-    
+
     return 0;
 }
 

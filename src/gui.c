@@ -172,7 +172,7 @@ extern int zig_get_cursor_trail(void);
  * FORWARD DECLARATIONS
   ============ */
 
-static void on_trail_toggled(GtkCheckButton *chk, gpointer user_data);
+static void on_trail_toggled(GObject *gobject, GParamSpec *pspec, gpointer user_data);
 
 void populate_explorer(AppGui *gui);
 static void set_active_tab(AppGui *gui, GtkWidget *active_btn, const char *page);
@@ -320,9 +320,10 @@ void on_theme_dropdown_changed(GObject *gobject, GParamSpec *pspec, gpointer use
 
 
 
-static void on_trail_toggled(GtkCheckButton *chk, gpointer user_data) {
+static void on_trail_toggled(GObject *gobject, GParamSpec *pspec, gpointer user_data) {
+    (void)pspec;
     AppGui *gui = (AppGui *)user_data;
-    gboolean active = gtk_check_button_get_active(chk);
+    gboolean active = gtk_switch_get_active(GTK_SWITCH(gobject));
     gui->cursor.enable_trail = active;
     zig_set_cursor_trail(active ? 1 : 0);
     if (!active) {
@@ -331,6 +332,60 @@ static void on_trail_toggled(GtkCheckButton *chk, gpointer user_data) {
             gtk_widget_queue_draw(gui->cursor.trail_area);
         }
     }
+}
+
+/* Font-size stepper (− / value / +). Clamped to the same 10-26 range the old
+ * GtkSpinButton enforced. */
+static void on_font_size_step_clicked(GtkButton *btn, gpointer user_data) {
+    AppGui *gui = (AppGui *)user_data;
+    int delta = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(btn), "qirtas-delta"));
+    double new_size = gui->current_font_size + delta;
+    if (new_size < 10.0) new_size = 10.0;
+    if (new_size > 26.0) new_size = 26.0;
+    if (new_size == gui->current_font_size) return;
+    gui->current_font_size = new_size;
+    update_editor_font(gui);
+    if (gui->font_size_value_lbl) {
+        char buf[8];
+        snprintf(buf, sizeof(buf), "%d", (int)gui->current_font_size);
+        gtk_label_set_text(GTK_LABEL(gui->font_size_value_lbl), buf);
+    }
+}
+
+/* Settings row: title (+ optional subtitle) on the left, GtkSwitch on the
+ * right. Returned box is appended directly to pop_box and inherits the
+ * existing .settings-sheet-body > box card styling. */
+static GtkWidget *settings_switch_row(const char *title, const char *subtitle,
+                                       gboolean active, GCallback cb, gpointer user_data,
+                                       GtkWidget **out_switch) {
+    GtkWidget *row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
+
+    GtkWidget *text_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 2);
+    gtk_widget_set_hexpand(text_box, TRUE);
+    gtk_widget_set_valign(text_box, GTK_ALIGN_CENTER);
+
+    GtkWidget *title_lbl = gtk_label_new(title);
+    gtk_widget_set_halign(title_lbl, GTK_ALIGN_START);
+    gtk_widget_add_css_class(title_lbl, "settings-switch-title");
+    gtk_box_append(GTK_BOX(text_box), title_lbl);
+
+    if (subtitle) {
+        GtkWidget *sub_lbl = gtk_label_new(subtitle);
+        gtk_widget_set_halign(sub_lbl, GTK_ALIGN_START);
+        gtk_widget_add_css_class(sub_lbl, "settings-switch-subtitle");
+        gtk_box_append(GTK_BOX(text_box), sub_lbl);
+    }
+
+    gtk_box_append(GTK_BOX(row), text_box);
+
+    GtkWidget *sw = gtk_switch_new();
+    gtk_switch_set_active(GTK_SWITCH(sw), active);
+    gtk_widget_set_valign(sw, GTK_ALIGN_CENTER);
+    g_signal_connect(sw, "notify::active", cb, user_data);
+    gtk_box_append(GTK_BOX(row), sw);
+
+    if (out_switch) *out_switch = sw;
+    return row;
 }
 
 
@@ -650,11 +705,12 @@ static void on_files_clicked(GtkButton *btn, gpointer user_data) {
 /* stats click handler removed */
 
 
-static void on_wrap_toggled(GtkCheckButton *btn, gpointer user_data) {
+static void on_wrap_toggled(GObject *gobject, GParamSpec *pspec, gpointer user_data) {
+    (void)pspec;
     GtkTextView *view = GTK_TEXT_VIEW(user_data);
     /* Full-buffer model: soft wrap is a real user choice (the old virtual-
-     * paging restriction that forced it off is gone). Honor the checkbox. */
-    gboolean active = gtk_check_button_get_active(btn);
+     * paging restriction that forced it off is gone). Honor the switch. */
+    gboolean active = gtk_switch_get_active(GTK_SWITCH(gobject));
     if (global_gui) {
         global_gui->wrap_lines = active;
         qirtas_pref_set_int("wrap_lines", active ? 1 : 0);
@@ -668,9 +724,10 @@ static void on_wrap_toggled(GtkCheckButton *btn, gpointer user_data) {
  * conceal applies scale-tagged ranges that GTK's text layout can choke on with
  * some pathological documents — turning it off renders raw markers but is
  * crash-safe. */
-static void on_conceal_toggled(GtkCheckButton *btn, gpointer user_data) {
+static void on_conceal_toggled(GObject *gobject, GParamSpec *pspec, gpointer user_data) {
+    (void)pspec;
     AppGui *gui = (AppGui *)user_data;
-    gboolean on = gtk_check_button_get_active(btn);
+    gboolean on = gtk_switch_get_active(GTK_SWITCH(gobject));
     qirtas_no_conceal = on ? 0 : 1;
     qirtas_pref_set_int("conceal_enabled", on ? 1 : 0);
     if (!gui || !gui->source_view) return;
@@ -2159,12 +2216,32 @@ static void activate(GtkApplication *app, gpointer user_data) {
     GtkWidget *font_lbl = gtk_label_new(qirtas_tr("Font Size"));
     gtk_widget_set_hexpand(font_lbl, TRUE);
     gtk_widget_set_halign(font_lbl, GTK_ALIGN_START);
-    GtkWidget *font_spin = gtk_spin_button_new_with_range(10.0, 26.0, 1.0);
-    gtk_spin_button_set_value(GTK_SPIN_BUTTON(font_spin), 16.0);
-    g_signal_connect(font_spin, "value-changed", G_CALLBACK(on_font_size_changed), gui);
-    on_font_size_changed(GTK_SPIN_BUTTON(font_spin), gui);
+
+    GtkWidget *stepper = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
+    gtk_widget_add_css_class(stepper, "font-stepper");
+
+    GtkWidget *minus_btn = gtk_button_new_with_label("−");
+    gtk_widget_add_css_class(minus_btn, "font-stepper-btn");
+    g_object_set_data(G_OBJECT(minus_btn), "qirtas-delta", GINT_TO_POINTER(-1));
+    g_signal_connect(minus_btn, "clicked", G_CALLBACK(on_font_size_step_clicked), gui);
+
+    char fs_buf[8];
+    snprintf(fs_buf, sizeof(fs_buf), "%d", (int)gui->current_font_size);
+    GtkWidget *value_lbl = gtk_label_new(fs_buf);
+    gtk_widget_add_css_class(value_lbl, "font-stepper-value");
+    gui->font_size_value_lbl = value_lbl;
+
+    GtkWidget *plus_btn = gtk_button_new_with_label("+");
+    gtk_widget_add_css_class(plus_btn, "font-stepper-btn");
+    g_object_set_data(G_OBJECT(plus_btn), "qirtas-delta", GINT_TO_POINTER(1));
+    g_signal_connect(plus_btn, "clicked", G_CALLBACK(on_font_size_step_clicked), gui);
+
+    gtk_box_append(GTK_BOX(stepper), minus_btn);
+    gtk_box_append(GTK_BOX(stepper), value_lbl);
+    gtk_box_append(GTK_BOX(stepper), plus_btn);
+
     gtk_box_append(GTK_BOX(font_row), font_lbl);
-    gtk_box_append(GTK_BOX(font_row), font_spin);
+    gtk_box_append(GTK_BOX(font_row), stepper);
     gtk_box_append(GTK_BOX(pop_box), font_row);
 
     // English Font Selection
@@ -2207,25 +2284,21 @@ static void activate(GtkApplication *app, gpointer user_data) {
     gtk_box_append(GTK_BOX(ar_font_row), ar_font_dropdown);
     gtk_box_append(GTK_BOX(pop_box), ar_font_row);
 
-    GtkWidget *compact_chk = gtk_check_button_new_with_label(qirtas_tr("Compact Layout"));
-    gtk_check_button_set_active(GTK_CHECK_BUTTON(compact_chk), gui->compact_mode);
-    g_signal_connect(compact_chk, "toggled", G_CALLBACK(on_compact_mode_toggled), gui);
-    gtk_box_append(GTK_BOX(pop_box), compact_chk);
+    gtk_box_append(GTK_BOX(pop_box), settings_switch_row(
+        qirtas_tr("Compact Layout"), qirtas_tr("Tighter rows in the sidebar"),
+        gui->compact_mode, G_CALLBACK(on_compact_mode_toggled), gui, NULL));
 
-    GtkWidget *border_chk = gtk_check_button_new_with_label(qirtas_tr("Show editor border"));
-    gtk_check_button_set_active(GTK_CHECK_BUTTON(border_chk), gui->enable_editor_border);
-    g_signal_connect(border_chk, "toggled", G_CALLBACK(on_editor_border_toggled), gui);
-    gtk_box_append(GTK_BOX(pop_box), border_chk);
+    gtk_box_append(GTK_BOX(pop_box), settings_switch_row(
+        qirtas_tr("Show editor border"), qirtas_tr("The floating paper card outline"),
+        gui->enable_editor_border, G_CALLBACK(on_editor_border_toggled), gui, NULL));
 
-    gui->focus_chk = gtk_check_button_new_with_label(qirtas_tr("Focus Mode"));
-    gtk_check_button_set_active(GTK_CHECK_BUTTON(gui->focus_chk), gui->enable_focus_mode);
-    g_signal_connect(gui->focus_chk, "toggled", G_CALLBACK(on_focus_mode_toggled), gui);
-    gtk_box_append(GTK_BOX(pop_box), gui->focus_chk);
+    gtk_box_append(GTK_BOX(pop_box), settings_switch_row(
+        qirtas_tr("Focus Mode"), qirtas_tr("Dim everything but the active line"),
+        gui->enable_focus_mode, G_CALLBACK(on_focus_mode_toggled), gui, &gui->focus_chk));
 
-    GtkWidget *trail_chk = gtk_check_button_new_with_label(qirtas_tr("Pointer Trail Animation"));
-    gtk_check_button_set_active(GTK_CHECK_BUTTON(trail_chk), gui->cursor.enable_trail);
-    g_signal_connect(trail_chk, "toggled", G_CALLBACK(on_trail_toggled), gui);
-    gtk_box_append(GTK_BOX(pop_box), trail_chk);
+    gtk_box_append(GTK_BOX(pop_box), settings_switch_row(
+        qirtas_tr("Pointer Trail Animation"), qirtas_tr("Ink-smear caret effect"),
+        gui->cursor.enable_trail, G_CALLBACK(on_trail_toggled), gui, NULL));
 
     /* Trail-color customization removed — the cursor trail uses the default
      * (theme caret) color. gui->cursor.use_custom_trail_color stays 0. */
@@ -2240,36 +2313,29 @@ static void activate(GtkApplication *app, gpointer user_data) {
     gtk_widget_set_halign(ed_lbl, GTK_ALIGN_START);
     gtk_box_append(GTK_BOX(pop_box), ed_lbl);
 
-    GtkWidget *wrap_chk = gtk_check_button_new_with_label(qirtas_tr("Wrap Lines Automatically"));
-    gui->wrap_chk = wrap_chk;
-    gtk_check_button_set_active(GTK_CHECK_BUTTON(wrap_chk), gui->wrap_lines);
-    g_signal_connect(wrap_chk, "toggled", G_CALLBACK(on_wrap_toggled), gui->source_view);
-    gtk_box_append(GTK_BOX(pop_box), wrap_chk);
+    gtk_box_append(GTK_BOX(pop_box), settings_switch_row(
+        qirtas_tr("Wrap Lines Automatically"), NULL,
+        gui->wrap_lines, G_CALLBACK(on_wrap_toggled), gui->source_view, &gui->wrap_chk));
 
-    GtkWidget *conceal_chk = gtk_check_button_new_with_label(qirtas_tr("Conceal Markdown Markers"));
-    gtk_check_button_set_active(GTK_CHECK_BUTTON(conceal_chk), !qirtas_no_conceal);
-    g_signal_connect(conceal_chk, "toggled", G_CALLBACK(on_conceal_toggled), gui);
-    gtk_box_append(GTK_BOX(pop_box), conceal_chk);
+    gtk_box_append(GTK_BOX(pop_box), settings_switch_row(
+        qirtas_tr("Conceal Markdown Markers"), NULL,
+        !qirtas_no_conceal, G_CALLBACK(on_conceal_toggled), gui, NULL));
 
-    GtkWidget *ln_chk = gtk_check_button_new_with_label(qirtas_tr("Display Line Numbers"));
-    gtk_check_button_set_active(GTK_CHECK_BUTTON(ln_chk), gui->show_line_numbers);
-    g_signal_connect(ln_chk, "toggled", G_CALLBACK(on_line_numbers_toggled), gui);
-    gtk_box_append(GTK_BOX(pop_box), ln_chk);
+    gtk_box_append(GTK_BOX(pop_box), settings_switch_row(
+        qirtas_tr("Display Line Numbers"), NULL,
+        gui->show_line_numbers, G_CALLBACK(on_line_numbers_toggled), gui, NULL));
 
-    GtkWidget *hl_chk = gtk_check_button_new_with_label(qirtas_tr("Highlight Current Line"));
-    gtk_check_button_set_active(GTK_CHECK_BUTTON(hl_chk), gui->highlight_current_line);
-    g_signal_connect(hl_chk, "toggled", G_CALLBACK(on_highlight_line_toggled), gui);
-    gtk_box_append(GTK_BOX(pop_box), hl_chk);
+    gtk_box_append(GTK_BOX(pop_box), settings_switch_row(
+        qirtas_tr("Highlight Current Line"), NULL,
+        gui->highlight_current_line, G_CALLBACK(on_highlight_line_toggled), gui, NULL));
 
-    GtkWidget *restore_chk = gtk_check_button_new_with_label(qirtas_tr("Restore Session on Startup"));
-    gtk_check_button_set_active(GTK_CHECK_BUTTON(restore_chk), gui->restore_session);
-    g_signal_connect(restore_chk, "toggled", G_CALLBACK(on_restore_session_toggled), gui);
-    gtk_box_append(GTK_BOX(pop_box), restore_chk);
+    gtk_box_append(GTK_BOX(pop_box), settings_switch_row(
+        qirtas_tr("Restore Session on Startup"), NULL,
+        gui->restore_session, G_CALLBACK(on_restore_session_toggled), gui, NULL));
 
-    GtkWidget *autosave_chk = gtk_check_button_new_with_label(qirtas_tr("Auto-save"));
-    gtk_check_button_set_active(GTK_CHECK_BUTTON(autosave_chk), gui->autosave_enabled);
-    g_signal_connect(autosave_chk, "toggled", G_CALLBACK(on_autosave_toggled), gui);
-    gtk_box_append(GTK_BOX(pop_box), autosave_chk);
+    gtk_box_append(GTK_BOX(pop_box), settings_switch_row(
+        qirtas_tr("Auto-save"), NULL,
+        gui->autosave_enabled, G_CALLBACK(on_autosave_toggled), gui, NULL));
 
     /* Card Gap slider — the one width control: 0 = full page width, larger =
      * narrower centred card. Auto-clamps so the card never overflows a narrow
@@ -2344,6 +2410,14 @@ static void activate(GtkApplication *app, gpointer user_data) {
     g_signal_connect(gui->sync_now_btn, "clicked", G_CALLBACK(on_sync_now_clicked), gui);
     gtk_box_append(GTK_BOX(gd_card), gui->sync_now_btn);
 
+    GtkWidget *gd_help = gtk_label_new(qirtas_tr(
+        "Advanced: needs your own Google app key (QIRTAS_GOOGLE_CLIENT_ID). "
+        "For easy setup, use GitHub or the Local folder below."));
+    gtk_widget_add_css_class(gd_help, "dim-label");
+    gtk_label_set_wrap(GTK_LABEL(gd_help), TRUE);
+    gtk_label_set_xalign(GTK_LABEL(gd_help), 0.0);
+    gtk_box_append(GTK_BOX(gd_card), gd_help);
+
     // --- DROPBOX SYNC ---
     GtkWidget *db_card = gtk_box_new(GTK_ORIENTATION_VERTICAL, 10);
     gtk_widget_add_css_class(db_card, "sync-card");
@@ -2383,6 +2457,14 @@ static void activate(GtkApplication *app, gpointer user_data) {
     g_signal_connect(gui->dropbox_now_btn, "clicked", G_CALLBACK(on_dropbox_now_clicked), gui);
     gtk_box_append(GTK_BOX(db_card), gui->dropbox_now_btn);
 
+    GtkWidget *db_help = gtk_label_new(qirtas_tr(
+        "Advanced: needs your own Dropbox app key (QIRTAS_DROPBOX_APP_KEY). "
+        "For easy setup, use GitHub or the Local folder below."));
+    gtk_widget_add_css_class(db_help, "dim-label");
+    gtk_label_set_wrap(GTK_LABEL(db_help), TRUE);
+    gtk_label_set_xalign(GTK_LABEL(db_help), 0.0);
+    gtk_box_append(GTK_BOX(db_card), db_help);
+
     // --- GITHUB SYNC ---
     GtkWidget *gh_card = gtk_box_new(GTK_ORIENTATION_VERTICAL, 10);
     gtk_widget_add_css_class(gh_card, "sync-card");
@@ -2407,6 +2489,30 @@ static void activate(GtkApplication *app, gpointer user_data) {
     gtk_box_append(GTK_BOX(gh_row), gh_lbl_sec);
     gtk_box_append(GTK_BOX(gh_row), gui->github_status_lbl);
     gtk_box_append(GTK_BOX(gh_card), gh_row);
+
+    /* Token-based connect is the reliable method (no GitHub-App permission
+     * headaches). Help text + a one-click link that opens GitHub's token page
+     * with the right scope pre-selected. Leave the token empty to instead sign
+     * in through the browser (device flow). */
+    GtkWidget *gh_help = gtk_label_new(qirtas_tr(
+        "Paste a GitHub token below, or leave it empty to sign in via your browser."));
+    gtk_widget_add_css_class(gh_help, "dim-label");
+    gtk_label_set_wrap(GTK_LABEL(gh_help), TRUE);
+    gtk_label_set_xalign(GTK_LABEL(gh_help), 0.0);
+    gtk_box_append(GTK_BOX(gh_card), gh_help);
+
+    GtkWidget *gh_token_link = gtk_link_button_new_with_label(
+        "https://github.com/settings/tokens/new?scopes=repo&description=Qirtas%20Sync",
+        qirtas_tr("Get a token from GitHub \xe2\x86\x92"));
+    gtk_widget_set_halign(gh_token_link, GTK_ALIGN_START);
+    gtk_box_append(GTK_BOX(gh_card), gh_token_link);
+
+    gui->github_token_entry = gtk_password_entry_new();
+    gtk_password_entry_set_show_peek_icon(GTK_PASSWORD_ENTRY(gui->github_token_entry), TRUE);
+    g_object_set(gui->github_token_entry, "placeholder-text",
+                 qirtas_tr("GitHub token (ghp_… or github_pat_…)"), NULL);
+    gtk_widget_set_hexpand(gui->github_token_entry, TRUE);
+    gtk_box_append(GTK_BOX(gh_card), gui->github_token_entry);
 
     gui->github_repo_entry = gtk_entry_new();
     gtk_entry_set_placeholder_text(GTK_ENTRY(gui->github_repo_entry), qirtas_tr("Repo name (default: qirtas-notes)"));
@@ -2632,6 +2738,7 @@ static void activate(GtkApplication *app, gpointer user_data) {
     gtk_widget_set_tooltip_text(gui->btn_status_actions, qirtas_tr("Menu"));
 
     GtkWidget *actions_popover = gtk_popover_new();
+    gtk_widget_add_css_class(actions_popover, "qirtas-menu");
     GtkWidget *actions_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 4);
     gtk_widget_set_margin_start(actions_box, 6);
     gtk_widget_set_margin_end(actions_box, 6);
@@ -2677,9 +2784,12 @@ static void activate(GtkApplication *app, gpointer user_data) {
     g_signal_connect(btn_pop_save, "clicked", G_CALLBACK(on_status_bar_save_file_clicked), gui);
     gtk_box_append(GTK_BOX(actions_box), btn_pop_save);
 
+    gtk_box_append(GTK_BOX(actions_box), gtk_separator_new(GTK_ORIENTATION_HORIZONTAL));
+
     // 4. Export as PDF button
     GtkWidget *btn_pop_pdf = gtk_button_new();
     gtk_widget_add_css_class(btn_pop_pdf, "pop-btn");
+    gtk_widget_add_css_class(btn_pop_pdf, "menu-highlight");
     GtkWidget *hbox_pdf = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
     gtk_widget_set_halign(hbox_pdf, GTK_ALIGN_START);
     GtkWidget *img_pdf = gtk_image_new_from_icon_name(qirtas_icon("pdf"));
@@ -2706,9 +2816,6 @@ static void activate(GtkApplication *app, gpointer user_data) {
     gtk_box_append(GTK_BOX(actions_box),
         status_menu_item(qirtas_icon("fullscreen"), qirtas_tr("Fullscreen"), "F11",
                          G_CALLBACK(on_status_menu_fullscreen), gui));
-
-    gtk_box_append(GTK_BOX(actions_box), gtk_separator_new(GTK_ORIENTATION_HORIZONTAL));
-
     gtk_box_append(GTK_BOX(actions_box),
         status_menu_item(qirtas_icon("prefs"), qirtas_tr("Preferences"), "Ctrl+,",
                          G_CALLBACK(on_status_menu_settings), gui));
@@ -2718,9 +2825,10 @@ static void activate(GtkApplication *app, gpointer user_data) {
 
     gtk_box_append(GTK_BOX(actions_box), gtk_separator_new(GTK_ORIENTATION_HORIZONTAL));
 
-    gtk_box_append(GTK_BOX(actions_box),
-        status_menu_item(qirtas_icon("quit"), qirtas_tr("Quit Qirtas"), "Ctrl+Q",
-                         G_CALLBACK(on_status_menu_quit), gui));
+    GtkWidget *quit_item = status_menu_item(qirtas_icon("quit"), qirtas_tr("Quit Qirtas"), "Ctrl+Q",
+                         G_CALLBACK(on_status_menu_quit), gui);
+    gtk_widget_add_css_class(quit_item, "destructive");
+    gtk_box_append(GTK_BOX(actions_box), quit_item);
 
     gtk_popover_set_child(GTK_POPOVER(actions_popover), actions_box);
     gtk_menu_button_set_popover(GTK_MENU_BUTTON(gui->btn_status_actions), actions_popover);
