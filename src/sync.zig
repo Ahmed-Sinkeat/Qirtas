@@ -610,7 +610,7 @@ fn sync_error_message(err: anyerror) []const u8 {
         error.GithubDownloadFailed => "Error: GitHub download failed.",
         error.GithubUploadFailed => "Error: GitHub upload failed.",
         error.GithubShaConflict => "Error: GitHub upload conflict, resync.",
-        error.GithubRepoNotFound => "Repo not found. Create it on GitHub first.",
+        error.GithubRepoNotFound => "Repo not found, or token lacks 'repo' access.",
         error.GithubRepoCreateForbidden => "Cannot create repo. Create it on GitHub manually.",
         error.DropboxListFailed => "Error: Dropbox list failed.",
         error.DropboxDownloadFailed => "Error: Dropbox download failed.",
@@ -1196,7 +1196,7 @@ fn local_sync_impl(allocator: std.mem.Allocator) !u32 {
     var conflicts: u32 = 0;
     var num_buf: [24]u8 = undefined;
 
-    var vid_buf: [16]u8 = undefined;
+    var vid_buf: [256]u8 = undefined;
     const vault_id = vault_id_hex(&vid_buf);
 
     const target_dir = try local_sync_dir_path(allocator, vault_id);
@@ -1342,7 +1342,7 @@ fn sync_now_impl(allocator: std.mem.Allocator) anyerror!void {
     const access_token = try refresh_token_if_needed(allocator, &creds);
     defer allocator.free(access_token);
 
-    var vid_buf: [16]u8 = undefined;
+    var vid_buf: [256]u8 = undefined;
     const vault_id = vault_id_hex(&vid_buf);
 
     const vault_folder_id = try drive_ensure_vault_folder(allocator, access_token, vault_id);
@@ -1751,20 +1751,52 @@ fn hexToBytesAlloc(allocator: std.mem.Allocator, hex: []const u8) ![]u8 {
 /// hex chars. zig_open_vault() chdir()s into the vault directory, so cwd
 /// uniquely identifies the currently open vault for namespacing remote
 /// sync folders and per-file sync state.
-fn vault_id_hex(out: *[16]u8) []const u8 {
+/// Per-vault remote folder name: a readable slug from the vault directory's
+/// basename plus a 4-hex fingerprint of its full path, e.g. "my-notes-7c53".
+/// The slug is for humans; the suffix keeps two same-named folders (on
+/// different machines) from colliding in the same repo/account.
+fn vault_id_hex(out: *[256]u8) []const u8 {
     var cwd_buf: [4096]u8 = undefined;
     const cwd_ptr = c.getcwd(&cwd_buf, cwd_buf.len);
     const cwd: []const u8 = if (cwd_ptr != null) std.mem.span(cwd_ptr) else "/";
 
     var digest: [32]u8 = undefined;
     std.crypto.hash.sha2.Sha256.hash(cwd, &digest, .{});
-
     const hex_chars = "0123456789abcdef";
-    for (digest[0..8], 0..) |b, i| {
-        out[i * 2] = hex_chars[b >> 4];
-        out[i * 2 + 1] = hex_chars[b & 0x0f];
+
+    // Readable part: the folder's basename, sanitized to [A-Za-z0-9._-].
+    const base = std.fs.path.basename(cwd);
+    var n: usize = 0;
+    for (base) |ch| {
+        if (n + 6 >= out.len) break; // reserve room for "-XXXX"
+        const ok = (ch >= 'A' and ch <= 'Z') or (ch >= 'a' and ch <= 'z') or
+            (ch >= '0' and ch <= '9') or ch == '.' or ch == '_' or ch == '-';
+        if (ok) {
+            out[n] = ch;
+            n += 1;
+        } else if (ch == ' ') {
+            out[n] = '-';
+            n += 1;
+        }
     }
-    return out[0..];
+    if (n == 0) {
+        const fallback = "vault";
+        @memcpy(out[0..fallback.len], fallback);
+        n = fallback.len;
+    }
+
+    // Fingerprint suffix: "-" + first 2 bytes of the path hash as 4 hex chars.
+    out[n] = '-';
+    n += 1;
+    out[n] = hex_chars[digest[0] >> 4];
+    n += 1;
+    out[n] = hex_chars[digest[0] & 0x0f];
+    n += 1;
+    out[n] = hex_chars[digest[1] >> 4];
+    n += 1;
+    out[n] = hex_chars[digest[1] & 0x0f];
+    n += 1;
+    return out[0..n];
 }
 
 /// Vault-scoped key for the *_sync_meta tables, so two vaults that both
@@ -2590,7 +2622,7 @@ fn dropbox_sync_impl(allocator: std.mem.Allocator, token: []const u8) !u32 {
     var conflicts: u32 = 0;
     var num_buf: [24]u8 = undefined;
 
-    var vid_buf: [16]u8 = undefined;
+    var vid_buf: [256]u8 = undefined;
     const vault_id = vault_id_hex(&vid_buf);
 
     var remote_map = try dropbox_remote_list(allocator, token, vault_id);
@@ -2870,6 +2902,19 @@ fn github_verify_worker() void {
         }
         return;
     };
+
+    // A classic token advertises its scopes. If it has scopes but not `repo`,
+    // it can read /user yet 404 on private repos — reject it now with a clear
+    // message instead of a confusing sync failure later. (Empty = fine-grained
+    // token, which doesn't report scopes here; allow it and let sync verify.)
+    const scopes = github_token_scopes(allocator, auth) catch "";
+    std.debug.print("GitHub token scopes: '{s}'\n", .{scopes});
+    if (scopes.len > 0 and std.mem.indexOf(u8, scopes, "repo") == null) {
+        zig_github_disconnect();
+        gui_update_github_status(0, "Token lacks 'repo' scope. Make a new one.");
+        return;
+    }
+
     gui_update_github_status(1, "Connected");
 }
 
@@ -2899,6 +2944,48 @@ fn gh_headers(auth: []const u8) [5]std.http.Header {
         .{ .name = "X-GitHub-Api-Version", .value = "2022-11-28" },
         .{ .name = "Accept-Encoding", .value = "identity" },
     };
+}
+
+/// GET /user and return the value of the `X-OAuth-Scopes` response header
+/// (the scopes a *classic* token was granted, comma-separated). Returns "" if
+/// the header is absent — fine-grained tokens (`github_pat_…`) don't send it,
+/// so an empty result means "can't tell from here", not "no access". Caller frees.
+fn github_token_scopes(allocator: std.mem.Allocator, auth: []const u8) ![]u8 {
+    var client = std.http.Client{ .allocator = allocator, .io = main.global_io };
+    defer client.deinit();
+    const uri = try std.Uri.parse("https://api.github.com/user");
+    const hdrs = gh_headers(auth);
+    var req = try client.request(.GET, uri, .{
+        .extra_headers = &hdrs,
+        .headers = .{ .accept_encoding = .omit },
+    });
+    defer req.deinit();
+    try req.sendBodiless();
+
+    var redirect_buf: [2048]u8 = undefined;
+    var response = try req.receiveHead(&redirect_buf);
+
+    // Capture the header BEFORE reading the body (head strings are invalidated
+    // by subsequent stream consumption).
+    var scopes: []u8 = try allocator.dupe(u8, "");
+    var it = std.http.HeaderIterator.init(response.head.bytes);
+    while (it.next()) |h| {
+        if (std.ascii.eqlIgnoreCase(h.name, "x-oauth-scopes")) {
+            allocator.free(scopes);
+            scopes = try allocator.dupe(u8, h.value);
+            break;
+        }
+    }
+
+    // Drain the body so the connection can be cleanly closed.
+    var transfer_buf: [1024]u8 = undefined;
+    const rdr = response.reader(&transfer_buf);
+    while (true) {
+        var chunk: [1024]u8 = undefined;
+        const n = rdr.readSliceShort(&chunk) catch break;
+        if (n == 0) break;
+    }
+    return scopes;
 }
 
 fn github_owner_login(allocator: std.mem.Allocator, auth: []const u8) ![]u8 {
@@ -3009,17 +3096,83 @@ fn github_upload(allocator: std.mem.Allocator, auth: []const u8, owner: []const 
     var put_hdrs: [6]std.http.Header = undefined;
     @memcpy(put_hdrs[0..5], &hdrs);
     put_hdrs[5] = .{ .name = "Content-Type", .value = "application/json" };
-    const res = try http_fetch(allocator, .PUT, url, &put_hdrs, body);
-    defer allocator.free(res.body);
-    if (res.status != .ok and res.status != .created) {
-        std.debug.print("GitHub upload {s} failed {}: {s}\n", .{ filename, res.status, res.body });
-        if (res.status == .conflict) return error.GithubShaConflict;
-        if (res.status == .not_found) return error.GithubRepoNotFound;
+
+    // A repo that ensure_repo just auto-init'd isn't always immediately writable
+    // via the Contents API — the first PUT can 404 for a second or two. Retry a
+    // few times with backoff before giving up, so the user doesn't have to press
+    // Sync Now twice on a brand-new repo.
+    var attempt: u32 = 0;
+    while (true) : (attempt += 1) {
+        const res = try http_fetch(allocator, .PUT, url, &put_hdrs, body);
+        if (res.status == .ok or res.status == .created) {
+            defer allocator.free(res.body);
+            const parsed = try std.json.parseFromSlice(GhPutResp, allocator, res.body, .{ .ignore_unknown_fields = true });
+            defer parsed.deinit();
+            return allocator.dupe(u8, parsed.value.content.sha);
+        }
+        const status = res.status;
+        const retriable = status == .not_found and attempt < 4;
+        if (!retriable)
+            std.debug.print("GitHub upload {s} failed {}: {s}\n", .{ filename, status, res.body });
+        allocator.free(res.body);
+        if (status == .conflict) return error.GithubShaConflict;
+        if (retriable) {
+            _ = c.usleep((attempt + 1) * 1500 * 1000); // 1.5s, 3s, 4.5s, 6s
+            continue;
+        }
+        if (status == .not_found) return error.GithubRepoNotFound;
         return error.GithubUploadFailed;
     }
-    const parsed = try std.json.parseFromSlice(GhPutResp, allocator, res.body, .{ .ignore_unknown_fields = true });
-    defer parsed.deinit();
-    return allocator.dupe(u8, parsed.value.content.sha);
+}
+
+/// Accept whatever the user pastes into the repo field: a bare name
+/// (`qirtas-notes`), `owner/repo`, or a full URL
+/// (`https://github.com/owner/repo`, with or without `.git`). Returns the
+/// `owner/repo` or `repo` slice (a view into the input), stripped of scheme,
+/// host, and trailing junk.
+fn normalize_repo_input(repo_in: []const u8) []const u8 {
+    var s = std.mem.trim(u8, repo_in, " \t\r\n/");
+    inline for (.{ "https://", "http://" }) |scheme| {
+        if (std.mem.startsWith(u8, s, scheme)) {
+            s = s[scheme.len..];
+            break;
+        }
+    }
+    inline for (.{ "www.github.com/", "github.com/" }) |host| {
+        if (std.mem.startsWith(u8, s, host)) {
+            s = s[host.len..];
+            break;
+        }
+    }
+    if (std.mem.endsWith(u8, s, ".git")) s = s[0 .. s.len - 4];
+    return std.mem.trim(u8, s, " \t\r\n/");
+}
+
+/// GitHub repo names allow only [A-Za-z0-9._-]. A space (e.g. a user typing
+/// "qirtas sync") produces a malformed URL — GitHub answers 400 Bad Request
+/// with an HTML body. Map spaces to '-', drop anything else invalid. An empty
+/// result falls back to the default repo name.
+fn sanitize_repo_name(allocator: std.mem.Allocator, name: []const u8) ![]u8 {
+    var out = try allocator.alloc(u8, name.len);
+    errdefer allocator.free(out);
+    var n: usize = 0;
+    for (name) |ch| {
+        const ok = (ch >= 'A' and ch <= 'Z') or (ch >= 'a' and ch <= 'z') or
+            (ch >= '0' and ch <= '9') or ch == '.' or ch == '_' or ch == '-';
+        if (ok) {
+            out[n] = ch;
+            n += 1;
+        } else if (ch == ' ') {
+            out[n] = '-';
+            n += 1;
+        }
+        // any other char (slash already handled by the caller, etc.) is dropped
+    }
+    if (n == 0) {
+        allocator.free(out);
+        return allocator.dupe(u8, "qirtas-notes");
+    }
+    return allocator.realloc(out, n);
 }
 
 fn github_sync_impl(allocator: std.mem.Allocator, token: []const u8, repo_in: []const u8) !u32 {
@@ -3028,23 +3181,31 @@ fn github_sync_impl(allocator: std.mem.Allocator, token: []const u8, repo_in: []
     const auth = try std.fmt.allocPrint(allocator, "Bearer {s}", .{token});
     defer allocator.free(auth);
 
+    // Accept bare name, owner/repo, or a full GitHub URL.
+    const repo_spec = normalize_repo_input(repo_in);
+
     // owner/repo resolution mirrors the old script
     var owner: []u8 = undefined;
     var repo: []const u8 = undefined;
-    if (std.mem.indexOfScalar(u8, repo_in, '/')) |slash| {
-        owner = try allocator.dupe(u8, repo_in[0..slash]);
-        repo = repo_in[slash + 1 ..];
+    if (std.mem.indexOfScalar(u8, repo_spec, '/')) |slash| {
+        owner = try allocator.dupe(u8, repo_spec[0..slash]);
+        repo = repo_spec[slash + 1 ..];
     } else {
         owner = try github_owner_login(allocator, auth);
-        repo = if (repo_in.len == 0 or std.mem.eql(u8, repo_in, owner)) "qirtas-notes" else repo_in;
+        repo = if (repo_spec.len == 0 or std.mem.eql(u8, repo_spec, owner)) "qirtas-notes" else repo_spec;
     }
     defer allocator.free(owner);
+
+    // Normalize the repo name to a valid GitHub slug before it touches any URL.
+    const repo_clean = try sanitize_repo_name(allocator, repo);
+    defer allocator.free(repo_clean);
+    repo = repo_clean;
 
     // Ignore repo-creation failures — the repo may already exist (user created it manually).
     // If it truly doesn't exist, the first upload will fail with GithubRepoNotFound.
     github_ensure_repo(allocator, auth, repo) catch {};
 
-    var vid_buf: [16]u8 = undefined;
+    var vid_buf: [256]u8 = undefined;
     const vault_id = vault_id_hex(&vid_buf);
 
     var remote_map = try github_remote_list(allocator, auth, owner, repo, vault_id);

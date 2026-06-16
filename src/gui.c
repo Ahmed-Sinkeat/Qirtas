@@ -2515,7 +2515,7 @@ static void activate(GtkApplication *app, gpointer user_data) {
     gtk_box_append(GTK_BOX(gh_card), gui->github_token_entry);
 
     gui->github_repo_entry = gtk_entry_new();
-    gtk_entry_set_placeholder_text(GTK_ENTRY(gui->github_repo_entry), qirtas_tr("Repo name (default: qirtas-notes)"));
+    gtk_entry_set_placeholder_text(GTK_ENTRY(gui->github_repo_entry), qirtas_tr("Repo name, owner/repo, or URL (default: qirtas-notes)"));
     gtk_widget_set_hexpand(gui->github_repo_entry, TRUE);
     gtk_box_append(GTK_BOX(gh_card), gui->github_repo_entry);
 
@@ -2810,9 +2810,8 @@ static void activate(GtkApplication *app, gpointer user_data) {
 
     gtk_box_append(GTK_BOX(actions_box), gtk_separator_new(GTK_ORIENTATION_HORIZONTAL));
 
-    gtk_box_append(GTK_BOX(actions_box),
-        status_menu_item(qirtas_icon("findreplace"), qirtas_tr("Find / Replace…"), "Ctrl+F",
-                         G_CALLBACK(on_status_menu_find_replace), gui));
+    /* Find / Replace removed from this menu — it duplicates the in-editor
+     * search (Ctrl+F) already reachable from the toolbar. */
     gtk_box_append(GTK_BOX(actions_box),
         status_menu_item(qirtas_icon("fullscreen"), qirtas_tr("Fullscreen"), "F11",
                          G_CALLBACK(on_status_menu_fullscreen), gui));

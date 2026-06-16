@@ -555,7 +555,36 @@ void on_github_connect_clicked(GtkButton *btn, gpointer user_data) {
     if (gui->github_repo_entry) {
         repo = gtk_editable_get_text(GTK_EDITABLE(gui->github_repo_entry));
     }
-    const char *repo_final = (repo && repo[0] != '\0') ? repo : "qirtas-notes";
+
+    /* The repo field accepts a bare name ("qirtas-notes"), "owner/repo", or a
+     * full URL ("https://github.com/owner/repo"). For owner/repo and URLs we
+     * pass the text through untouched — the Zig side strips the scheme/host and
+     * normalizes. For a *bare* name we tidy it here (spaces -> '-', drop invalid
+     * chars) and reflect it back so the user sees exactly what will be used. */
+    const char *repo_final;
+    char repo_clean[256];
+    int looks_like_path = repo && (strchr(repo, '/') != NULL || strchr(repo, ':') != NULL);
+    if (repo && repo[0] != '\0' && looks_like_path) {
+        repo_final = repo; /* owner/repo or URL — Zig normalizes it */
+    } else {
+        size_t rc = 0;
+        if (repo) {
+            for (const char *p = repo; *p && rc < sizeof(repo_clean) - 1; p++) {
+                char ch = *p;
+                if ((ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') ||
+                    (ch >= '0' && ch <= '9') || ch == '.' || ch == '_' || ch == '-') {
+                    repo_clean[rc++] = ch;
+                } else if (ch == ' ') {
+                    repo_clean[rc++] = '-';
+                }
+            }
+        }
+        repo_clean[rc] = '\0';
+        repo_final = (rc > 0) ? repo_clean : "qirtas-notes";
+        if (gui->github_repo_entry && repo && strcmp(repo, repo_final) != 0) {
+            gtk_editable_set_text(GTK_EDITABLE(gui->github_repo_entry), repo_final);
+        }
+    }
 
     if (token && token[0] != '\0') {
         zig_github_connect_with_token(token, repo_final);
