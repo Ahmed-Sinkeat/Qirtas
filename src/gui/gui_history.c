@@ -54,10 +54,16 @@ static void history_prune(sqlite3 *db) {
         NULL, NULL, NULL);
 }
 
-/* Strip leading "./" so "./foo.md" and "foo.md" map to the same key. */
+/* Key history by the file's basename. The same file reaches this code under
+ * several spellings depending on how it was opened — "README.md",
+ * "./README.md", "./vault/README.md", or an absolute path — and they must all
+ * map to one history key. Recording happens from the active tab's path; the
+ * viewer is opened from the explorer row's path; basename is the one form both
+ * always agree on. (Trade-off: two same-named files in different folders share
+ * history — acceptable for a flat notes vault.) */
 static const char *norm_path(const char *p) {
-    while (p[0] == '.' && p[1] == '/') p += 2;
-    return p;
+    const char *slash = strrchr(p, '/');
+    return slash ? slash + 1 : p;
 }
 
 void gui_history_record(const char *path) {
