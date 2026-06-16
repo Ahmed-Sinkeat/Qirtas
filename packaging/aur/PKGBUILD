@@ -1,0 +1,46 @@
+# Maintainer: Ahmed Sinkeat <ahmedsinkeat2002@gmail.com>
+#
+# AUR package: builds Qirtas from the latest git HEAD. Publish this file to the
+# AUR (see README.md in this directory). Arch users then install with e.g.
+#   yay -S qirtas-git
+pkgname=qirtas-git
+pkgver=0.r0.0000000
+pkgrel=1
+pkgdesc="Focused markdown notebook — Zig backend, GTK4/Libadwaita frontend"
+arch=('x86_64')
+url="https://github.com/Ahmed-Sinkeat/Qirtas"
+license=('GPL3')
+depends=('gtk4' 'gtksourceview5' 'libadwaita' 'sqlite' 'curl' 'adwaita-icon-theme')
+makedepends=('git' 'zig')
+provides=('qirtas')
+conflicts=('qirtas')
+source=("$pkgname::git+https://github.com/Ahmed-Sinkeat/Qirtas.git")
+sha256sums=('SKIP')
+
+pkgver() {
+  cd "$srcdir/$pkgname"
+  # e.g. 0.r137.a1b2c3d  (commit count + short hash, monotonically increasing)
+  printf "0.r%s.%s" "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
+}
+
+build() {
+  cd "$srcdir/$pkgname"
+  # This build.zig sets preferred_optimize_mode, so release mode is --release=<mode>.
+  zig build --release=safe
+}
+
+package() {
+  cd "$srcdir/$pkgname"
+
+  install -Dm755 zig-out/bin/qirtas "$pkgdir/usr/bin/qirtas"
+
+  # Runtime assets — the binary looks for these under /usr/share/qirtas/<rel>.
+  install -d "$pkgdir/usr/share/qirtas/src/ui"
+  cp -r src/ui/themes "$pkgdir/usr/share/qirtas/src/ui/"
+  cp -r src/ui/icons  "$pkgdir/usr/share/qirtas/src/ui/"
+
+  install -Dm644 packaging/qirtas.desktop \
+    "$pkgdir/usr/share/applications/org.qirtas.notebook.desktop"
+  install -Dm644 src/ui/icons/qirtas-logo.png \
+    "$pkgdir/usr/share/icons/hicolor/512x512/apps/org.qirtas.notebook.png"
+}
