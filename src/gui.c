@@ -344,11 +344,31 @@ static void on_font_size_step_clicked(GtkButton *btn, gpointer user_data) {
     if (new_size > 26.0) new_size = 26.0;
     if (new_size == gui->current_font_size) return;
     gui->current_font_size = new_size;
+    qirtas_pref_set_int("font_size", (int)new_size);  /* persist as the new default */
     update_editor_font(gui);
     if (gui->font_size_value_lbl) {
         char buf[8];
         snprintf(buf, sizeof(buf), "%d", (int)gui->current_font_size);
         gtk_label_set_text(GTK_LABEL(gui->font_size_value_lbl), buf);
+    }
+}
+
+/* Persist the main window's current size + maximized state so it reopens the
+ * same way. Called from every user-initiated exit path (window close, Ctrl+Q,
+ * the unsaved-changes prompt). Reads the live allocation, so the window must
+ * still be realized — true for all those paths. */
+void gui_save_window_geometry(AppGui *gui) {
+    if (!gui || !gui->window) return;
+    GtkWindow *win = GTK_WINDOW(gui->window);
+    gboolean maximized = gtk_window_is_maximized(win);
+    qirtas_pref_set_int("window_maximized", maximized ? 1 : 0);
+    if (!maximized) {
+        int w = gtk_widget_get_width(GTK_WIDGET(win));
+        int h = gtk_widget_get_height(GTK_WIDGET(win));
+        if (w > 100 && h > 100) {
+            qirtas_pref_set_int("window_width", w);
+            qirtas_pref_set_int("window_height", h);
+        }
     }
 }
 
@@ -1359,7 +1379,14 @@ static void activate(GtkApplication *app, gpointer user_data) {
     /* ── Window ── */
     GtkWidget *window = adw_application_window_new(app);
     gtk_window_set_title(GTK_WINDOW(window), "Qirtas");
-    gtk_window_set_default_size(GTK_WINDOW(window), 1180, 760);
+    /* Restore the last window size (falls back to the original default). */
+    {
+        int win_w = qirtas_pref_get_int("window_width", 1180);
+        int win_h = qirtas_pref_get_int("window_height", 760);
+        if (win_w < 350) win_w = 1180;
+        if (win_h < 250) win_h = 760;
+        gtk_window_set_default_size(GTK_WINDOW(window), win_w, win_h);
+    }
     gtk_widget_set_size_request(window, 350, 250);
     gtk_window_set_decorated(GTK_WINDOW(window), FALSE);
 
@@ -1370,7 +1397,13 @@ static void activate(GtkApplication *app, gpointer user_data) {
     gui->window       = window;
     g_strlcpy(gui->current_en_font, "Inter", sizeof(gui->current_en_font));
     g_strlcpy(gui->current_ar_font, "Amiri", sizeof(gui->current_ar_font));
-    gui->current_font_size = 16.0;
+    /* Restore the saved editor font size (clamped to the stepper's range). */
+    {
+        int saved_fs = qirtas_pref_get_int("font_size", 16);
+        if (saved_fs < 10) saved_fs = 10;
+        if (saved_fs > 26) saved_fs = 26;
+        gui->current_font_size = (double)saved_fs;
+    }
     gui->search_visible = FALSE;
     gui->font_provider  = NULL;
     gui->css_provider   = NULL;
@@ -2228,11 +2261,16 @@ static void activate(GtkApplication *app, gpointer user_data) {
     };
     GtkWidget *theme_dropdown = gtk_drop_down_new_from_strings(themes);
 
+    /* Reflect the saved theme (pref is the source of truth, written by
+     * apply_theme on every change). */
+    char *cur_theme = qirtas_pref_get_string("theme");
+    const char *theme_for_idx = (cur_theme && cur_theme[0]) ? cur_theme : current_theme;
     int theme_idx = 0;
-    if (strcmp(current_theme, "qirtas") == 0) theme_idx = 0;
-    else if (strcmp(current_theme, "qirtas-dark") == 0) theme_idx = 1;
-    else if (strcmp(current_theme, "navy") == 0) theme_idx = 2;
-    else if (strcmp(current_theme, "custom") == 0) theme_idx = 3;
+    if (strcmp(theme_for_idx, "qirtas") == 0) theme_idx = 0;
+    else if (strcmp(theme_for_idx, "qirtas-dark") == 0) theme_idx = 1;
+    else if (strcmp(theme_for_idx, "navy") == 0) theme_idx = 2;
+    else if (strcmp(theme_for_idx, "custom") == 0) theme_idx = 3;
+    g_free(cur_theme);
     gtk_drop_down_set_selected(GTK_DROP_DOWN(theme_dropdown), theme_idx);
     
     g_signal_connect(theme_dropdown, "notify::selected", G_CALLBACK(on_theme_dropdown_changed), gui);
@@ -2993,9 +3031,20 @@ static void activate(GtkApplication *app, gpointer user_data) {
     g_object_set_data_full(G_OBJECT(window), "app-gui", gui, g_free);
 
     populate_explorer(gui);
+    /* Restore the last-used theme (saved by apply_theme on every change). */
+    {
+        char *saved_theme = qirtas_pref_get_string("theme");
+        if (saved_theme && saved_theme[0]) {
+            g_strlcpy(current_theme, saved_theme, sizeof(current_theme));
+        }
+        g_free(saved_theme);
+    }
     apply_theme(gui, current_theme);
     apply_focus_mode(gui);
     gtk_window_present(GTK_WINDOW(window));
+    if (qirtas_pref_get_int("window_maximized", 0)) {
+        gtk_window_maximize(GTK_WINDOW(window));
+    }
     zig_on_gui_ready();
 
     /* Restore Session: reopen every tab from last run, active file last */

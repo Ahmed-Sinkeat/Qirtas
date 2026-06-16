@@ -266,6 +266,8 @@ void apply_theme(AppGui *gui, const char *theme_name) {
         theme_name = "qirtas";
     }
     g_strlcpy(gui->current_theme, theme_name, sizeof(gui->current_theme));
+    /* Persist the choice so it is the default on next launch. */
+    qirtas_pref_set_string("theme", theme_name);
 
     AdwStyleManager *style_manager = adw_style_manager_get_default();
     if (strcmp(theme_name, "sepia") == 0 || strcmp(theme_name, "typewriter-light") == 0 || strcmp(theme_name, "qirtas") == 0 || strcmp(theme_name, "navy") == 0) {

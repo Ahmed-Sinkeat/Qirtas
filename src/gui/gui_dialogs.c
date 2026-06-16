@@ -152,6 +152,9 @@ void prompt_new_folder(AppGui *gui, const char *parent_dir) {
 
 gboolean on_window_close_request(GtkWindow *window, gpointer user_data) {
     AppGui *gui = (AppGui *)user_data;
+    /* Save the window geometry while the window is still realized — covers the
+     * normal close and the unsaved-changes prompt path (both enter here). */
+    gui_save_window_geometry(gui);
     /* Unsaved changes → prompt Save / Discard / Cancel and block the close
      * until the user decides. Cleanup itself runs from the shutdown signal. */
     if (gui && gui_get_buffer_modified()) {

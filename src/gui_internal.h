@@ -338,6 +338,7 @@ void on_status_menu_quit(GtkButton *btn, gpointer user_data);
 void on_status_menu_find_replace(GtkButton *btn, gpointer user_data);
 void on_status_menu_fullscreen(GtkButton *btn, gpointer user_data);
 void on_status_menu_history(GtkButton *btn, gpointer user_data);
+void gui_save_window_geometry(AppGui *gui);
 void on_status_menu_copy_file(GtkButton *btn, gpointer user_data);
 void on_status_menu_save_as(GtkButton *btn, gpointer user_data);
 void on_status_bar_open_file_clicked(GtkButton *btn, gpointer user_data);
