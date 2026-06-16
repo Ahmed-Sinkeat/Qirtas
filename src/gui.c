@@ -2154,6 +2154,20 @@ static void activate(GtkApplication *app, gpointer user_data) {
         }
     }
     gtk_source_language_manager_append_search_path(lm, "src/ui");
+    /* Installed locations (makepkg, AppImage, system install): the .lang and
+     * .style-scheme.xml files live at <data>/src/ui. Mirror the search order in
+     * resolve_resource_path() so highlighting survives a real install, not just
+     * a run from the build tree. */
+    {
+        const char *data_dir = g_getenv("QIRTAS_DATA_DIR");
+        if (data_dir && data_dir[0]) {
+            char p[1024];
+            snprintf(p, sizeof(p), "%s/src/ui", data_dir);
+            gtk_source_language_manager_append_search_path(lm, p);
+        }
+    }
+    gtk_source_language_manager_append_search_path(lm, "/usr/share/qirtas/src/ui");
+    gtk_source_language_manager_append_search_path(lm, "/usr/local/share/qirtas/src/ui");
     GtkSourceLanguage *lang = gtk_source_language_manager_get_language(lm, "qirtas_markdown");
     if (!lang) lang = gtk_source_language_manager_get_language(lm, "markdown");
     if (lang) gtk_source_buffer_set_language(src_buf, lang);
@@ -2172,6 +2186,19 @@ static void activate(GtkApplication *app, gpointer user_data) {
         }
     }
     gtk_source_style_scheme_manager_append_search_path(sm, "src/ui");
+    /* Installed locations (makepkg, AppImage, system install) — see the language
+     * manager above. Without these the custom schemes are missing after install:
+     * light mode falls back to a stock scheme, dark mode finds nothing. */
+    {
+        const char *data_dir = g_getenv("QIRTAS_DATA_DIR");
+        if (data_dir && data_dir[0]) {
+            char p[1024];
+            snprintf(p, sizeof(p), "%s/src/ui", data_dir);
+            gtk_source_style_scheme_manager_append_search_path(sm, p);
+        }
+    }
+    gtk_source_style_scheme_manager_append_search_path(sm, "/usr/share/qirtas/src/ui");
+    gtk_source_style_scheme_manager_append_search_path(sm, "/usr/local/share/qirtas/src/ui");
     GtkSourceStyleScheme *scheme =
         gtk_source_style_scheme_manager_get_scheme(sm, "qirtas-dark");
     if (!scheme) scheme = gtk_source_style_scheme_manager_get_scheme(sm, "adwaita-dark");

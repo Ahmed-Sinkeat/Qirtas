@@ -544,7 +544,6 @@ Qirtas/
 ├── build.zig.zon
 ├── src/
 │   ├── main.zig                         ← Zig app root, file I/O, undo, autosave, FFI exports
-│   ├── bip39.zig                        ← BIP-39 recovery phrase helpers
 │   ├── sync.zig                         ← Cloud sync (Google Drive, Dropbox, GitHub, local)
 │   ├── root.zig                         ← Zig module root
 │   ├── gui.c                            ← GTK layout, window setup, scroll, key handling

@@ -36,6 +36,12 @@ package() {
   install -d "$pkgdir/usr/share/qirtas/src/ui"
   cp -r "$root/src/ui/themes" "$pkgdir/usr/share/qirtas/src/ui/"
   cp -r "$root/src/ui/icons"  "$pkgdir/usr/share/qirtas/src/ui/"
+  # GtkSourceView language def + style schemes live at src/ui top level, not in
+  # themes/. Without these the editor loses syntax highlighting after install
+  # (light mode falls back to a stock scheme, dark mode finds none).
+  install -Dm644 -t "$pkgdir/usr/share/qirtas/src/ui" \
+    "$root/src/ui/qirtas_markdown.lang" \
+    "$root/src/ui"/*.style-scheme.xml
 
   # Desktop entry.
   install -Dm644 "$startdir/qirtas.desktop" \

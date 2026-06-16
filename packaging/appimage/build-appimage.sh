@@ -33,6 +33,10 @@ install -Dm755 "$root/zig-out/bin/qirtas" "$appdir/usr/bin/qirtas"
 install -d "$appdir/usr/share/qirtas/src/ui"
 cp -r "$root/src/ui/themes" "$appdir/usr/share/qirtas/src/ui/"
 cp -r "$root/src/ui/icons"  "$appdir/usr/share/qirtas/src/ui/"
+# GtkSourceView .lang + .style-scheme.xml live at src/ui top level (not themes/).
+# Without them the bundled app loses syntax highlighting at runtime.
+cp "$root/src/ui/qirtas_markdown.lang" "$root/src/ui"/*.style-scheme.xml \
+   "$appdir/usr/share/qirtas/src/ui/"
 
 install -Dm644 "$here/../qirtas.desktop" \
   "$appdir/usr/share/applications/org.qirtas.notebook.desktop"
@@ -59,6 +63,10 @@ dl linuxdeploy-plugin-gtk.sh \
 # ── 4. Bundle + produce the AppImage ────────────────────────────────────────
 echo "==> Running linuxdeploy (GTK plugin)"
 export DEPLOY_GTK_VERSION=4
+# linuxdeploy bundles an old binutils `strip` that chokes on RELR relocations
+# (section type 0x13, .relr.dyn) emitted by modern Arch toolchains, aborting the
+# build with "Unable to recognise the format of the input file". Skip stripping.
+export NO_STRIP=true
 ./linuxdeploy-x86_64.AppImage \
   --appdir "$appdir" \
   --plugin gtk \
