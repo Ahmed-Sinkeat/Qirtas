@@ -1,5 +1,43 @@
 const std = @import("std");
 
+// Build a test executable rooted at src/main.zig with the same C/GTK/sqlite
+// linkage as the app, optionally filtered to a subset of tests by name prefix.
+// `filters = &.{}` runs everything; `&.{"integration:"}` runs the integration
+// suite only. Keeps the three test steps (test / test-integration /
+// test-regression) from duplicating the link block.
+fn addQirtasTestExe(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    mod: *std.Build.Module,
+    gui_files: []const []const u8,
+    filters: []const []const u8,
+) *std.Build.Step.Compile {
+    const t = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/main.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "qirtas", .module = mod },
+            },
+        }),
+        .filters = filters,
+    });
+    t.root_module.linkSystemLibrary("gtk4", .{});
+    t.root_module.linkSystemLibrary("gtksourceview-5", .{});
+    t.root_module.linkSystemLibrary("libadwaita-1", .{});
+    t.root_module.linkSystemLibrary("sqlite3", .{});
+    t.root_module.addIncludePath(b.path("src"));
+    t.root_module.addCSourceFile(.{ .file = b.path("src/gui.c"), .flags = &.{} });
+    t.root_module.addCSourceFile(.{ .file = b.path("src/gui/gui_sync.c"), .flags = &.{} });
+    for (gui_files) |file_path| {
+        t.root_module.addCSourceFile(.{ .file = b.path(file_path), .flags = &.{} });
+    }
+    t.root_module.link_libc = true;
+    return t;
+}
+
 pub fn build(b: *std.Build) void {
     const modular_gui_files = [_][]const u8{
         "src/gui/gui_theme.c",
@@ -124,38 +162,22 @@ pub fn build(b: *std.Build) void {
         run_cmd.addArgs(args);
     }
 
-    const test_exe = b.addTest(.{
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/main.zig"),
-            .target = target,
-            .optimize = optimize,
-            .imports = &.{
-                .{ .name = "qirtas", .module = mod },
-            },
-        }),
-    });
-    test_exe.root_module.linkSystemLibrary("gtk4", .{});
-    test_exe.root_module.linkSystemLibrary("gtksourceview-5", .{});
-    test_exe.root_module.linkSystemLibrary("libadwaita-1", .{});
-    test_exe.root_module.linkSystemLibrary("sqlite3", .{});
-    test_exe.root_module.addIncludePath(b.path("src"));
-    test_exe.root_module.addCSourceFile(.{
-        .file = b.path("src/gui.c"),
-        .flags = &.{},
-    });
-    test_exe.root_module.addCSourceFile(.{
-        .file = b.path("src/gui/gui_sync.c"),
-        .flags = &.{},
-    });
-    inline for (modular_gui_files) |file_path| {
-        test_exe.root_module.addCSourceFile(.{
-            .file = b.path(file_path),
-            .flags = &.{},
-        });
-    }
-    test_exe.root_module.link_libc = true;
-
-    const test_step = b.step("test", "Run tests");
+    // ── Test suites ──────────────────────────────────────────────────────────
+    //   zig build test             → full suite (unit + integration); default.
+    //   zig build test-integration → integration round-trips only (name filter).
+    //   zig build test-regression  → full suite, the gate CI runs on every push.
+    // Integration tests are named "integration: ..."; the regression gate is the
+    // whole set, since any test going red is a regression worth blocking on.
+    const test_exe = addQirtasTestExe(b, target, optimize, mod, &modular_gui_files, &.{});
     const test_run = b.addRunArtifact(test_exe);
+    const test_step = b.step("test", "Run all tests (unit + integration)");
     test_step.dependOn(&test_run.step);
+
+    const itest_exe = addQirtasTestExe(b, target, optimize, mod, &modular_gui_files, &.{"integration:"});
+    const itest_run = b.addRunArtifact(itest_exe);
+    const itest_step = b.step("test-integration", "Run integration round-trip tests only");
+    itest_step.dependOn(&itest_run.step);
+
+    const reg_step = b.step("test-regression", "Full regression gate (all tests) — run in CI");
+    reg_step.dependOn(&test_run.step);
 }

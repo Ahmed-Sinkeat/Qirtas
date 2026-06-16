@@ -3428,14 +3428,50 @@ test "parse_iso8601_to_unix known timestamps" {
     try std.testing.expectError(error.InvalidDateFormat, parse_iso8601_to_unix("2024-02-29"));
 }
 
-test "make_conflict_filename" {
+test "make_conflict_filename keeps a timestamp so a 2nd conflict can't clobber the 1st" {
     const allocator = std.testing.allocator;
+    // Format is "<name>_conflict_<stamp><ext>" — the old fixed "notes_conflict.md"
+    // would let a second conflict overwrite the first copy. Assert the new shape
+    // without pinning the wall-clock stamp (which made this test flaky).
     const a = try make_conflict_filename(allocator, "notes.md");
     defer allocator.free(a);
-    try std.testing.expectEqualStrings("notes_conflict.md", a);
+    try std.testing.expect(std.mem.startsWith(u8, a, "notes_conflict_"));
+    try std.testing.expect(std.mem.endsWith(u8, a, ".md"));
+    try std.testing.expect(!std.mem.eql(u8, a, "notes_conflict.md"));
+
     const b = try make_conflict_filename(allocator, "README");
     defer allocator.free(b);
-    try std.testing.expectEqualStrings("README_conflict", b);
+    try std.testing.expect(std.mem.startsWith(u8, b, "README_conflict_"));
+    try std.testing.expect(std.mem.indexOfScalar(u8, b, '.') == null);
+}
+
+// ============================================================
+// INTEGRATION SUITE (sync primitives) — tests prefixed "integration:"
+// chain the real file + metadata helpers end-to-end. Run with
+// `zig build test-integration`.
+// ============================================================
+
+test "integration: write_file_mmap + read_file_content round-trip preserves UTF-8" {
+    const allocator = std.testing.allocator;
+    const path = "/tmp/qirtas-itest-sync-roundtrip.md";
+    defer _ = c.unlink(path);
+    const body = "# عنوان\nمحتوى عربي مع نص\nthird line\n";
+    try std.testing.expect(is_syncable_file(path));
+    try write_file_mmap(path, body);
+    const got = try read_file_content(allocator, path);
+    defer allocator.free(got);
+    try std.testing.expectEqualStrings(body, got);
+}
+
+test "integration: a conflict copy keeps its extension and stays syncable" {
+    const allocator = std.testing.allocator;
+    // A renamed conflict copy must itself remain a syncable file, otherwise the
+    // preserved local edits would silently drop out of the sync set.
+    const conflict = try make_conflict_filename(allocator, "report.md");
+    defer allocator.free(conflict);
+    try std.testing.expect(std.mem.endsWith(u8, conflict, ".md"));
+    try std.testing.expect(is_syncable_file(conflict));
+    try std.testing.expect(std.mem.indexOf(u8, conflict, "_conflict_") != null);
 }
 
 test "is_syncable_file filter" {

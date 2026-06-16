@@ -3,6 +3,16 @@
 Run before every push that touches the editor core (`src/main.zig` edit paths,
 `src/gui.c` buffer handlers, `src/gui/gui_conceal.c`, undo, save). ~10 minutes.
 
+> **Automated first.** Most editor-core logic now has automated coverage — run
+> these before the manual pass (CI runs them on every push too):
+> - `zig build test-regression` — full gate: every unit + integration test.
+> - `zig build test-integration` — integration round-trips only (load → edit →
+>   save → reload, encrypt-at-rest, sync file/conflict helpers).
+> - `zig build test` — same as the regression gate (default).
+>
+> The checklist below covers what the headless suites *can't*: GTK rendering,
+> real keystroke latency, and visual behavior.
+
 ## Performance
 - [ ] Open empty file, don't touch anything: CPU near 0% (cursor trail on AND off)
 - [ ] Open `test_large.md` (3,000+ lines Arabic), type a sentence mid-file: no visible lag

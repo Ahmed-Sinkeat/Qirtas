@@ -2376,3 +2376,94 @@ test "setActiveFilePath refuses oversized and empty paths" {
     try std.testing.expect(setActiveFilePath("notes/ملف.md"));
     try std.testing.expectEqualStrings("notes/ملف.md", active_file_path[0..active_file_path_len]);
 }
+
+// ============================================================
+// INTEGRATION SUITE — tests prefixed "integration:" chain the real
+// editing-core entry points end-to-end (load → edit → save → reload),
+// including the encrypt-at-rest path. Run with `zig build test-integration`;
+// `zig build test-regression` runs these plus every unit test as the CI gate.
+// ============================================================
+
+test "integration: encrypted save writes ciphertext, reload restores plaintext" {
+    const saved_key = active_master_key;
+    const saved_enc = active_file_is_encrypted;
+    defer {
+        active_master_key = saved_key;
+        active_file_is_encrypted = saved_enc;
+    }
+
+    const path = "/tmp/qirtas-itest-encrypted.md";
+    defer _ = c.unlink(path);
+
+    var key: [32]u8 = undefined;
+    try fillRandomBytes(&key);
+
+    // Author a document, mark it encrypted, save it.
+    try setTestDocument(path, "TOPSECRET سرّي\nsecond line\n"); // resets key=null, enc=false
+    active_master_key = key;
+    active_file_is_encrypted = true;
+    const plaintext = try std.testing.allocator.dupe(u8, testDocText());
+    defer std.testing.allocator.free(plaintext);
+    try std.testing.expectEqual(@as(c_int, 0), zig_save_document());
+
+    // On-disk bytes must be ciphertext — the plaintext marker must not survive.
+    const fd = c.open(path, c.O_RDONLY);
+    try std.testing.expect(fd >= 0);
+    var raw: [512]u8 = undefined;
+    const n = c.read(fd, &raw, raw.len);
+    _ = c.close(fd);
+    try std.testing.expect(n > 0);
+    try std.testing.expect(std.mem.indexOf(u8, raw[0..@intCast(n)], "TOPSECRET") == null);
+
+    // Reload through the real load path → decrypts back to the original.
+    var size: usize = 0;
+    const loaded = try load_file_mmap(path, &size);
+    defer unload_file_mmap(loaded, size);
+    try std.testing.expect(active_file_is_encrypted);
+    try std.testing.expectEqualStrings(plaintext, loaded[0..size]);
+}
+
+test "integration: plaintext edit then save then reload from disk matches in-memory text" {
+    const saved_key = active_master_key;
+    defer active_master_key = saved_key;
+    active_master_key = null; // force the plaintext load path
+
+    const path = "/tmp/qirtas-itest-plain.md";
+    defer _ = c.unlink(path);
+    try setTestDocument(path, "alpha\nbeta\n");
+    zig_insert_text(.{ .line = 0, .col = 5 }, " one");
+    zig_replace_range(.{ .line = 1, .col = 0 }, .{ .line = 1, .col = 4 }, "BETA");
+    const expected = try std.testing.allocator.dupe(u8, testDocText());
+    defer std.testing.allocator.free(expected);
+    try std.testing.expectEqual(@as(c_int, 0), zig_save_document());
+
+    var size: usize = 0;
+    const loaded = try load_file_mmap(path, &size);
+    defer unload_file_mmap(loaded, size);
+    try std.testing.expect(!active_file_is_encrypted);
+    try std.testing.expectEqualStrings(expected, loaded[0..size]);
+}
+
+test "integration: undo after a multi-edit session restores the loaded document" {
+    try setTestDocument("Untitled", "one two three\n");
+    const original = try std.testing.allocator.dupe(u8, testDocText());
+    defer std.testing.allocator.free(original);
+
+    // Baseline snapshot (mirrors load_file_and_update_gui), then two word edits,
+    // each sealed at a commit boundary.
+    zig_undo_push(0, 0);
+    zig_undo_commit();
+
+    zig_insert_text(.{ .line = 0, .col = 13 }, " four");
+    zig_undo_push(0, 18);
+    zig_undo_commit();
+    zig_insert_text(.{ .line = 0, .col = 18 }, " five");
+    zig_undo_push(0, 23);
+    zig_undo_commit();
+    try std.testing.expectEqualStrings("one two three four five\n", testDocText());
+
+    // Undo both edits → back to the exact loaded bytes.
+    zig_undo();
+    zig_undo();
+    try std.testing.expectEqualStrings(original, testDocText());
+}
