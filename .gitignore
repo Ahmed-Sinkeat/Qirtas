@@ -35,3 +35,11 @@ packaging/src/
 packaging/pkg/
 packaging/*.pkg.tar.zst
 packaging/*.pkg.tar.zst.sig
+
+# AppImage build artifacts
+packaging/appimage/build/
+packaging/appimage/*.AppImage
+
+# Flatpak build artifacts
+packaging/build-dir/
+packaging/.flatpak-builder/
