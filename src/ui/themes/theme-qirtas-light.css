@@ -41,4 +41,10 @@
   --dirty-dot-color: #213a63;
 
   --caret-color: #213a63;      /* the pen writes in navy ink */
+
+  --accent-ring: rgba(33, 58, 99, 0.12);   /* search-pill focus glow */
+  --menu-highlight-bg: #dfe6f1;            /* ⋮ menu — Export as PDF row */
+  --destructive-text: #9c3b32;             /* ⋮ menu — Quit row */
+  --destructive-hover: #f5e3df;            /* ⋮ menu — Quit row hover */
+  --switch-knob-off: #ffffff;              /* GtkSwitch off-state knob */
 }

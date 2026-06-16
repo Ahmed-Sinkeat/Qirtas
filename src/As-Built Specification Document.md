@@ -50,7 +50,12 @@ user-facing "encrypted" claim.
 
 ### 2.4 Cloud Sync: On-Demand Event-Driven
 
-Sync fires only on: Save, App Close, or "Sync Now". Supports Google Drive, Dropbox, GitHub (Device Flow), and Local folder sync. Since 2026-06-12 all four backends are native Zig HTTP/file code with unified 3-way conflict detection (`_conflict` copies, never silent loss); the external bash helper scripts are gone.
+Sync fires only on: Save, App Close, or "Sync Now". Supports Google Drive, Dropbox, GitHub, and Local folder sync. Since 2026-06-12 all four backends are native Zig HTTP/file code with unified 3-way conflict detection (`_conflict` copies, never silent loss); the external bash helper scripts are gone.
+
+**Auth, as of 2026-06-16:**
+- **GitHub** — primary path is a **Personal Access Token** the user pastes (`zig_github_connect_with_token` → verify via `GET /user` → store encrypted). A `repo`-scope PAT creates the repo and pushes with no app-permission limits. The browser **device flow** (bundled GitHub *App* client ID) remains a fallback, but its user-to-server token 404s on writes to repos the App isn't installed on — hence the PAT default.
+- **Google Drive / Dropbox** — OAuth loopback now uses **PKCE (S256)**: `zig_pkce_challenge()` generates a verifier (stored module-static), returns the base64url-SHA256 challenge for the auth URL; the verifier is replayed in the token exchange. Public clients require this or the exchange is rejected. App credentials still come from `QIRTAS_GOOGLE_CLIENT_ID` / `QIRTAS_DROPBOX_APP_KEY`.
+- **All sync HTTP** sends `Accept-Encoding: identity` (`accept_encoding = .omit`); gzipped JSON previously surfaced as `Error: SyntaxError`.
 
 ---
 
@@ -642,6 +647,8 @@ C and Zig communicate via C-linkage exports. The Zig backend is the source of tr
 | `zig_sync_connect()` / `zig_sync_submit_code(code)` / `zig_sync_disconnect()` | Google Drive OAuth lifecycle (Dropbox/GitHub have equivalents) |
 | `zig_save_sync_credentials(id, secret)` (+ dropbox/github variants) | Persist provider credentials (secrets encrypted) |
 | `zig_get_github_credentials_decrypted(...)` / `zig_get_dropbox_credentials_decrypted(...)` | Decrypted credential readback for the C flows |
+| `zig_github_connect_with_token(token, repo)` | Save a pasted GitHub PAT, then verify it via `GET /user` (background); updates the GitHub status label with the result |
+| `zig_pkce_challenge(out, out_max)` | Generate a fresh PKCE verifier (stored module-static for the pending exchange) and write the base64url-SHA256 S256 challenge into `out`; used by the Drive/Dropbox auth URLs |
 
 ---
 

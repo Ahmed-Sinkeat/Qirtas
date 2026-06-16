@@ -39,4 +39,10 @@
 
   --thread-color: #c9a86b;     /* gold thread along the card top edge */
   --caret-color: #ece8da;      /* bone-paper white caret */
+
+  --accent-ring: rgba(201, 168, 107, 0.14); /* search-pill focus glow */
+  --menu-highlight-bg: #322c1d;             /* ⋮ menu — Export as PDF row */
+  --destructive-text: #d98a80;              /* ⋮ menu — Quit row */
+  --destructive-hover: #3a2420;             /* ⋮ menu — Quit row hover */
+  --switch-knob-off: #8a8fa0;               /* GtkSwitch off-state knob */
 }

@@ -85,13 +85,6 @@ void update_editor_font(AppGui *gui) {
     gui_remeasure_line_height();
 }
 
-void on_font_size_changed(GtkSpinButton *spin, gpointer user_data) {
-    AppGui *gui = (AppGui *)user_data;
-    if (!gui || !spin) return;
-    gui->current_font_size = gtk_spin_button_get_value(spin);
-    update_editor_font(gui);
-}
-
 static void on_custom_font_dialog_response(GObject *source_object, GAsyncResult *res, gpointer user_data) {
     GtkFontDialog *dialog = GTK_FONT_DIALOG(source_object);
     GError *error = NULL;

@@ -32,6 +32,7 @@ static gboolean sync_status_is_busy(const char *status_text) {
     return status_text &&
            (strcmp(status_text, "Syncing...") == 0 ||
             strcmp(status_text, "Exchanging code...") == 0 ||
+            strcmp(status_text, "Verifying token...") == 0 ||
             strcmp(status_text, "Connecting...") == 0);
 }
 

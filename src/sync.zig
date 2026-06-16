@@ -214,6 +214,53 @@ pub export fn zig_sync_connect() callconv(.c) void {
     gui_update_sync_status(2, "Enter code below...");
 }
 
+// ── PKCE (RFC 7636) for the Drive/Dropbox loopback OAuth flows ──
+// Desktop OAuth clients have no usable secret, so the auth server can't tell a
+// real exchange from a stolen code. PKCE fixes this: at connect we generate a
+// random `verifier`, send code_challenge = base64url(sha256(verifier)) in the
+// auth URL, and prove possession by sending the `verifier` in the token
+// exchange. Without it Google/Dropbox reject the exchange (invalid_request).
+// Only one connect flow runs at a time, so a single slot suffices.
+var pkce_verifier: [64]u8 = undefined;
+var pkce_verifier_len: usize = 0;
+
+const PKCE_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~";
+
+fn pkce_fill_random(buf: []u8) void {
+    var i: usize = 0;
+    while (i < buf.len) {
+        const rc = std.os.linux.getrandom(buf[i..].ptr, buf.len - i, 0);
+        switch (std.posix.errno(rc)) {
+            .SUCCESS => i += @intCast(rc),
+            .INTR => continue,
+            else => break,
+        }
+    }
+    // Extremely rare: top up any shortfall so we never emit a zero verifier.
+    if (i < buf.len) {
+        const seed: usize = @intCast(c.time(null));
+        for (buf[i..], 0..) |*b, j| b.* = @truncate(seed +% j +% i);
+    }
+}
+
+/// Generate a fresh verifier, store it, and write the S256 challenge (base64url,
+/// no padding) into `out`. Returns challenge length (43), or 0 if out too small.
+pub export fn zig_pkce_challenge(out: [*]u8, out_max: usize) callconv(.c) usize {
+    var raw: [pkce_verifier.len]u8 = undefined;
+    pkce_fill_random(&raw);
+    for (&pkce_verifier, raw) |*v, r| v.* = PKCE_CHARS[r % PKCE_CHARS.len];
+    pkce_verifier_len = pkce_verifier.len;
+
+    var digest: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(pkce_verifier[0..], &digest, .{});
+
+    const Enc = std.base64.url_safe_no_pad.Encoder;
+    const need = Enc.calcSize(digest.len);
+    if (need > out_max) return 0;
+    _ = Enc.encode(out[0..need], &digest);
+    return need;
+}
+
 // FFI: Submit the auth code and exchange for tokens
 pub export fn zig_sync_submit_code(code_ptr: [*:0]const u8) callconv(.c) void {
     const code = std.mem.span(code_ptr);
@@ -270,21 +317,24 @@ fn exchange_token_impl(allocator: std.mem.Allocator, code: []const u8, client_id
     const uri = try std.Uri.parse("https://oauth2.googleapis.com/token");
     
     var req = try client.request(.POST, uri, .{
+        .headers = .{ .accept_encoding = .omit },
         .extra_headers = &[_]std.http.Header{
             .{ .name = "Content-Type", .value = "application/x-www-form-urlencoded" },
         },
     });
     defer req.deinit();
 
+    // PKCE: prove possession of the verifier generated at connect time.
+    const verifier = pkce_verifier[0..pkce_verifier_len];
     const body = if (client_secret.len > 0)
         try std.fmt.allocPrint(allocator,
-            "code={s}&client_id={s}&client_secret={s}&redirect_uri=http://localhost:12345&grant_type=authorization_code",
-            .{ code, client_id, client_secret },
+            "code={s}&client_id={s}&client_secret={s}&redirect_uri=http://localhost:12345&grant_type=authorization_code&code_verifier={s}",
+            .{ code, client_id, client_secret, verifier },
         )
     else
         try std.fmt.allocPrint(allocator,
-            "code={s}&client_id={s}&redirect_uri=http://localhost:12345&grant_type=authorization_code",
-            .{ code, client_id },
+            "code={s}&client_id={s}&redirect_uri=http://localhost:12345&grant_type=authorization_code&code_verifier={s}",
+            .{ code, client_id, verifier },
         );
     defer allocator.free(body);
 
@@ -363,6 +413,7 @@ fn refresh_token_if_needed(allocator: std.mem.Allocator, creds: *SyncCredentials
 
     const uri = try std.Uri.parse("https://oauth2.googleapis.com/token");
     var req = try client.request(.POST, uri, .{
+        .headers = .{ .accept_encoding = .omit },
         .extra_headers = &[_]std.http.Header{
             .{ .name = "Content-Type", .value = "application/x-www-form-urlencoded" },
         },
@@ -542,6 +593,9 @@ fn sync_error_message(err: anyerror) []const u8 {
         error.DbOpenFailed => "Error: database unavailable.",
         error.DbPrepareFailed => "Error: database query failed.",
         error.OpenDirFailed => "Error: cannot open folder.",
+        error.OpenFileFailed => "Error: cannot read local file.",
+        error.StatFileFailed => "Error: cannot stat local file.",
+        error.MmapFailed => "Error: cannot mmap local file.",
         error.CreateSyncDirectoryFailed => "Error: cannot create sync folder.",
         error.SyncTargetIsNotDirectory => "Error: sync target is not a directory.",
         error.TokenExchangeFailed => "Error: token exchange failed.",
@@ -556,6 +610,8 @@ fn sync_error_message(err: anyerror) []const u8 {
         error.GithubDownloadFailed => "Error: GitHub download failed.",
         error.GithubUploadFailed => "Error: GitHub upload failed.",
         error.GithubShaConflict => "Error: GitHub upload conflict, resync.",
+        error.GithubRepoNotFound => "Repo not found. Create it on GitHub first.",
+        error.GithubRepoCreateForbidden => "Cannot create repo. Create it on GitHub manually.",
         error.DropboxListFailed => "Error: Dropbox list failed.",
         error.DropboxDownloadFailed => "Error: Dropbox download failed.",
         error.DropboxUploadFailed => "Error: Dropbox upload failed.",
@@ -564,12 +620,16 @@ fn sync_error_message(err: anyerror) []const u8 {
         error.ConnectionReset => "Error: connection reset.",
         error.NetworkUnreachable => "Error: network unreachable.",
         error.HostLacksNetworkAddresses => "Error: no network addresses.",
-        else => "Error: sync failed.",
+        else => "",
     };
 }
 
 fn sync_error_message_z(err: anyerror, buf: []u8) [:0]const u8 {
-    return std.fmt.bufPrintZ(buf, "{s}", .{sync_error_message(err)}) catch unreachable;
+    const known = sync_error_message(err);
+    if (known.len > 0) return std.fmt.bufPrintZ(buf, "{s}", .{known}) catch unreachable;
+    // Unknown error — show the name so the user can report it
+    return std.fmt.bufPrintZ(buf, "Error: {s}", .{@errorName(err)}) catch
+        std.fmt.bufPrintZ(buf, "Error: sync failed.", .{}) catch unreachable;
 }
 
 fn sync_error_connection_state(err: anyerror) c_int {
@@ -598,6 +658,7 @@ fn download_file_from_drive(allocator: std.mem.Allocator, access_token: []const 
         defer allocator.free(auth_hdr);
 
         var req = client.request(.GET, uri, .{
+            .headers = .{ .accept_encoding = .omit },
             .extra_headers = &[_]std.http.Header{
                 .{ .name = "Authorization", .value = auth_hdr },
             },
@@ -682,6 +743,7 @@ fn patch_file_on_drive(allocator: std.mem.Allocator, access_token: []const u8, f
         defer allocator.free(auth_hdr);
 
         var req = client.request(.PATCH, uri, .{
+            .headers = .{ .accept_encoding = .omit },
             .extra_headers = &[_]std.http.Header{
                 .{ .name = "Authorization", .value = auth_hdr },
                 .{ .name = "Content-Type", .value = "text/markdown" },
@@ -749,6 +811,7 @@ fn rename_file_on_drive(allocator: std.mem.Allocator, access_token: []const u8, 
         defer allocator.free(body);
 
         var req = client.request(.PATCH, uri, .{
+            .headers = .{ .accept_encoding = .omit },
             .extra_headers = &[_]std.http.Header{
                 .{ .name = "Authorization", .value = auth_hdr },
                 .{ .name = "Content-Type", .value = "application/json" },
@@ -861,6 +924,7 @@ fn upload_file_to_drive(allocator: std.mem.Allocator, access_token: []const u8, 
         defer allocator.free(auth_hdr);
 
         var req = client.request(.POST, uri, .{
+            .headers = .{ .accept_encoding = .omit },
             .extra_headers = &[_]std.http.Header{
                 .{ .name = "Authorization", .value = auth_hdr },
                 .{ .name = "Content-Type", .value = "multipart/related; boundary=foo" },
@@ -953,6 +1017,7 @@ fn get_file_modified_time_from_drive(allocator: std.mem.Allocator, access_token:
         defer allocator.free(auth_hdr);
 
         var req = client.request(.GET, uri, .{
+            .headers = .{ .accept_encoding = .omit },
             .extra_headers = &[_]std.http.Header{
                 .{ .name = "Authorization", .value = auth_hdr },
             },
@@ -1308,6 +1373,7 @@ fn sync_now_impl(allocator: std.mem.Allocator) anyerror!void {
         defer allocator.free(auth_hdr);
 
         var req_search = client.request(.GET, uri_search, .{
+            .headers = .{ .accept_encoding = .omit },
             .extra_headers = &[_]std.http.Header{
                 .{ .name = "Authorization", .value = auth_hdr },
             },
@@ -1798,7 +1864,10 @@ fn http_fetch(
     defer client.deinit();
 
     const uri = try std.Uri.parse(url);
-    var req = try client.request(method, uri, .{ .extra_headers = headers });
+    var req = try client.request(method, uri, .{
+        .extra_headers = headers,
+        .headers = .{ .accept_encoding = .omit },
+    });
     defer req.deinit();
 
     if (body) |b| {
@@ -2174,21 +2243,24 @@ fn exchange_dropbox_token_impl(allocator: std.mem.Allocator, code: []const u8, c
     const uri = try std.Uri.parse("https://api.dropboxapi.com/oauth2/token");
     
     var req = try client.request(.POST, uri, .{
+        .headers = .{ .accept_encoding = .omit },
         .extra_headers = &[_]std.http.Header{
             .{ .name = "Content-Type", .value = "application/x-www-form-urlencoded" },
         },
     });
     defer req.deinit();
 
+    // PKCE: prove possession of the verifier generated at connect time.
+    const verifier = pkce_verifier[0..pkce_verifier_len];
     const body = if (client_secret.len > 0)
         try std.fmt.allocPrint(allocator,
-            "code={s}&client_id={s}&client_secret={s}&redirect_uri=http://localhost:5173&grant_type=authorization_code",
-            .{ code, client_id, client_secret },
+            "code={s}&client_id={s}&client_secret={s}&redirect_uri=http://localhost:5173&grant_type=authorization_code&code_verifier={s}",
+            .{ code, client_id, client_secret, verifier },
         )
     else
         try std.fmt.allocPrint(allocator,
-            "code={s}&client_id={s}&redirect_uri=http://localhost:5173&grant_type=authorization_code",
-            .{ code, client_id },
+            "code={s}&client_id={s}&redirect_uri=http://localhost:5173&grant_type=authorization_code&code_verifier={s}",
+            .{ code, client_id, verifier },
         );
     defer allocator.free(body);
 
@@ -2266,6 +2338,7 @@ fn refresh_dropbox_token_if_needed(allocator: std.mem.Allocator, creds: *Dropbox
 
     const uri = try std.Uri.parse("https://api.dropboxapi.com/oauth2/token");
     var req = try client.request(.POST, uri, .{
+        .headers = .{ .accept_encoding = .omit },
         .extra_headers = &[_]std.http.Header{
             .{ .name = "Content-Type", .value = "application/x-www-form-urlencoded" },
         },
@@ -2671,7 +2744,10 @@ fn get_github_credentials(allocator: std.mem.Allocator) !struct { token: []const
         if (tok == null or rep == null) return error.CredentialsNotFound;
 
         const encrypted = std.mem.span(tok);
-        const decrypted = try decryptToken(allocator, encrypted);
+        // Fall back to plaintext if decryption fails — tokens stored before
+        // encryption was added to zig_save_github_credentials are raw PATs.
+        const decrypted = decryptToken(allocator, encrypted) catch
+            try allocator.dupe(u8, encrypted);
         errdefer allocator.free(decrypted);
 
         return .{
@@ -2740,7 +2816,7 @@ pub export fn zig_github_disconnect() callconv(.c) void {
     if (c.sqlite3_open(dbp(), &db) == c.SQLITE_OK) {
         defer _ = c.sqlite3_close(db);
         _ = c.sqlite3_busy_timeout(db, 5000);
-        _ = c.sqlite3_exec(db, "UPDATE github_sync_tokens SET personal_token = NULL WHERE id = 1;", null, null, null);
+        _ = c.sqlite3_exec(db, "UPDATE github_sync_tokens SET personal_token = '' WHERE id = 1;", null, null, null);
     }
     gui_update_github_status(0, "Disconnected");
 }
@@ -2751,6 +2827,50 @@ pub export fn zig_github_now() callconv(.c) void {
     _ = std.Thread.spawn(.{}, github_sync_worker, .{}) catch {
         gui_update_github_status(1, "Connected");
     };
+}
+
+// Connect using a Personal Access Token the user pastes. This is the reliable
+// path: a classic PAT with `repo` scope (or a fine-grained token with Contents:
+// read+write) can create repos and push, sidestepping the GitHub App
+// install/permission limits that make the device-flow token unable to write.
+pub export fn zig_github_connect_with_token(token_ptr: [*:0]const u8, repo_ptr: [*:0]const u8) callconv(.c) void {
+    const token = std.mem.span(token_ptr);
+    if (token.len == 0) {
+        gui_update_github_status(0, "Paste a token first.");
+        return;
+    }
+    zig_save_github_credentials(token_ptr, repo_ptr);
+    gui_update_github_status(2, "Verifying token...");
+    _ = std.Thread.spawn(.{}, github_verify_worker, .{}) catch {
+        // Couldn't spawn — assume saved token is good; sync will surface errors.
+        gui_update_github_status(1, "Connected");
+    };
+}
+
+fn github_verify_worker() void {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    const creds = get_github_credentials(allocator) catch {
+        gui_update_github_status(0, "Could not read saved token.");
+        return;
+    };
+    const auth = std.fmt.allocPrint(allocator, "Bearer {s}", .{creds.token}) catch {
+        gui_update_github_status(1, "Connected");
+        return;
+    };
+    _ = github_owner_login(allocator, auth) catch |err| {
+        if (err == error.AuthenticationExpired) {
+            // Token reached GitHub but was rejected: bad/expired/missing scope.
+            zig_github_disconnect();
+            gui_update_github_status(0, "Token rejected. Needs 'repo' scope.");
+        } else {
+            gui_update_github_status(0, "Cannot reach GitHub. Check connection.");
+        }
+        return;
+    };
+    gui_update_github_status(1, "Connected");
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -2771,12 +2891,13 @@ const GhPutResp = struct {
 
 const GhRemote = struct { sha: []u8 };
 
-fn gh_headers(auth: []const u8) [4]std.http.Header {
+fn gh_headers(auth: []const u8) [5]std.http.Header {
     return .{
         .{ .name = "Authorization", .value = auth },
         .{ .name = "Accept", .value = "application/vnd.github+json" },
         .{ .name = "User-Agent", .value = "qirtas-sync" },
         .{ .name = "X-GitHub-Api-Version", .value = "2022-11-28" },
+        .{ .name = "Accept-Encoding", .value = "identity" },
     };
 }
 
@@ -2784,21 +2905,37 @@ fn github_owner_login(allocator: std.mem.Allocator, auth: []const u8) ![]u8 {
     const hdrs = gh_headers(auth);
     const res = try http_fetch(allocator, .GET, "https://api.github.com/user", &hdrs, null);
     defer allocator.free(res.body);
+    std.debug.print("GitHub /user status={} body_len={} body_prefix={s}\n", .{ res.status, res.body.len, res.body[0..@min(120, res.body.len)] });
     if (res.status == .unauthorized or res.status == .forbidden) return error.AuthenticationExpired;
     if (res.status != .ok) return error.GithubUserFailed;
-    const parsed = try std.json.parseFromSlice(GhUser, allocator, res.body, .{ .ignore_unknown_fields = true });
+    const parsed = std.json.parseFromSlice(GhUser, allocator, res.body, .{ .ignore_unknown_fields = true }) catch |err| {
+        std.debug.print("GitHub /user JSON parse failed {}: body={s}\n", .{ err, res.body });
+        return err;
+    };
     defer parsed.deinit();
     if (parsed.value.login.len == 0) return error.GithubUserFailed;
     return allocator.dupe(u8, parsed.value.login);
 }
 
-fn github_ensure_repo(allocator: std.mem.Allocator, auth: []const u8, repo_name: []const u8) void {
-    const hdrs = gh_headers(auth);
-    const body = std.fmt.allocPrint(allocator,
-        "{{\"name\":\"{s}\",\"private\":true,\"auto_init\":true}}", .{repo_name}) catch return;
+/// Returns error.GithubRepoCreateForbidden when the OAuth App lacks repo-creation
+/// permission. Caller should surface this to the user.
+fn github_ensure_repo(allocator: std.mem.Allocator, auth: []const u8, repo_name: []const u8) !void {
+    var base = gh_headers(auth);
+    var hdrs: [6]std.http.Header = undefined;
+    @memcpy(hdrs[0..5], &base);
+    hdrs[5] = .{ .name = "Content-Type", .value = "application/json" };
+    const body = try std.fmt.allocPrint(allocator,
+        "{{\"name\":\"{s}\",\"private\":true,\"auto_init\":true}}", .{repo_name});
     defer allocator.free(body);
-    const res = http_fetch(allocator, .POST, "https://api.github.com/user/repos", &hdrs, body) catch return;
-    allocator.free(res.body); // 201 created or 422 already-exists — both fine
+    const res = try http_fetch(allocator, .POST, "https://api.github.com/user/repos", &hdrs, body);
+    defer allocator.free(res.body);
+    // 201 = created, 422 = already exists — both fine
+    if (res.status == .created or res.status == .unprocessable_entity) return;
+    if (res.status == .forbidden or res.status == .unauthorized) return error.GithubRepoCreateForbidden;
+    // Any other non-success: log and return the forbidden sentinel so caller
+    // can surface a helpful "create the repo manually" message.
+    std.debug.print("GitHub ensure_repo unexpected status={} body={s}\n", .{ res.status, res.body[0..@min(120, res.body.len)] });
+    return error.GithubRepoCreateForbidden;
 }
 
 fn github_remote_list(allocator: std.mem.Allocator, auth: []const u8, owner: []const u8, repo: []const u8, vault_id: []const u8) !std.StringHashMap(GhRemote) {
@@ -2809,11 +2946,15 @@ fn github_remote_list(allocator: std.mem.Allocator, auth: []const u8, owner: []c
     defer allocator.free(url);
     const res = try http_fetch(allocator, .GET, url, &hdrs, null);
     defer allocator.free(res.body);
+    std.debug.print("GitHub remote_list status={} body_len={} body_prefix={s}\n", .{ res.status, res.body.len, res.body[0..@min(120, res.body.len)] });
     if (res.status == .not_found) return map; // vault subfolder doesn't exist yet
     if (res.status == .unauthorized or res.status == .forbidden) return error.AuthenticationExpired;
     if (res.status != .ok) return error.GithubListFailed;
 
-    const parsed = try std.json.parseFromSlice([]GhEntry, allocator, res.body, .{ .ignore_unknown_fields = true });
+    const parsed = std.json.parseFromSlice([]GhEntry, allocator, res.body, .{ .ignore_unknown_fields = true }) catch |err| {
+        std.debug.print("GitHub remote_list JSON parse failed {}: body={s}\n", .{ err, res.body });
+        return err;
+    };
     defer parsed.deinit();
     for (parsed.value) |e| {
         if (!std.mem.eql(u8, e.type, "file")) continue;
@@ -2864,12 +3005,16 @@ fn github_upload(allocator: std.mem.Allocator, auth: []const u8, owner: []const 
             "{{\"message\":\"qirtas sync\",\"content\":\"{s}\"}}", .{b64});
     defer allocator.free(body);
 
-    const hdrs = gh_headers(auth);
-    const res = try http_fetch(allocator, .PUT, url, &hdrs, body);
+    var hdrs = gh_headers(auth);
+    var put_hdrs: [6]std.http.Header = undefined;
+    @memcpy(put_hdrs[0..5], &hdrs);
+    put_hdrs[5] = .{ .name = "Content-Type", .value = "application/json" };
+    const res = try http_fetch(allocator, .PUT, url, &put_hdrs, body);
     defer allocator.free(res.body);
     if (res.status != .ok and res.status != .created) {
         std.debug.print("GitHub upload {s} failed {}: {s}\n", .{ filename, res.status, res.body });
         if (res.status == .conflict) return error.GithubShaConflict;
+        if (res.status == .not_found) return error.GithubRepoNotFound;
         return error.GithubUploadFailed;
     }
     const parsed = try std.json.parseFromSlice(GhPutResp, allocator, res.body, .{ .ignore_unknown_fields = true });
@@ -2895,7 +3040,9 @@ fn github_sync_impl(allocator: std.mem.Allocator, token: []const u8, repo_in: []
     }
     defer allocator.free(owner);
 
-    github_ensure_repo(allocator, auth, repo);
+    // Ignore repo-creation failures — the repo may already exist (user created it manually).
+    // If it truly doesn't exist, the first upload will fail with GithubRepoNotFound.
+    github_ensure_repo(allocator, auth, repo) catch {};
 
     var vid_buf: [16]u8 = undefined;
     const vault_id = vault_id_hex(&vid_buf);

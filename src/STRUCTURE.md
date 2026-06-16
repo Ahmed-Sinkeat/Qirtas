@@ -375,3 +375,5 @@ Both C and Zig communicate via memory-mapped C linkage.
 - `void zig_force_save(void)`: Triggers immediate data flush to disk.
 - `void zig_set_editor_border(int enabled)` / `int zig_get_editor_border(void)`: Configures layout margins.
 - `int zig_dropbox_check_status(void)` / `int zig_github_check_status(void)`: Check cloud connection status.
+- `void zig_github_connect_with_token(const char *token, const char *repo)`: Connect GitHub with a pasted Personal Access Token (saves + verifies via `GET /user`). Preferred over the device flow, which uses a GitHub App token that can't write to repos it isn't installed on.
+- `unsigned long zig_pkce_challenge(char *out, unsigned long out_max)`: Generate a PKCE verifier (kept module-static for the pending exchange) and return the S256 base64url challenge for the Google Drive / Dropbox auth URLs.

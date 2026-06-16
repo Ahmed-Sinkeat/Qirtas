@@ -131,6 +131,10 @@ static const TrPair tr_table[] = {
     { "Connected",               "متصل" },
     { "Offline",                 "غير متصل" },
     { "Sync Failed",             "فشلت المزامنة" },
+    { "Tighter rows in the sidebar", "صفوف أكثر تقاربًا في الشريط الجانبي" },
+    { "The floating paper card outline", "الإطار العائم لبطاقة الورقة" },
+    { "Dim everything but the active line", "تعتيم كل شيء إلا السطر النشط" },
+    { "Ink-smear caret effect", "أثر انسياب الحبر للمؤشر" },
 };
 
 const char *qirtas_tr(const char *en) {

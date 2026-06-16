@@ -4,10 +4,14 @@ Four sync providers, all **on-demand** (fire on Save, app close, or the ● Sync
 
 | Provider | Mechanism | Where files go |
 |---|---|---|
-| Google Drive | OAuth loopback (port 12345) + Drive `appDataFolder` API, native Zig HTTP | Hidden app-data folder in your Drive |
-| Dropbox | OAuth loopback (port 5173), native Zig HTTP (Dropbox API v2) | `/qirtas` folder in your Dropbox app scope |
-| GitHub | Device flow (code shown in dialog), native Zig HTTP (Contents API) | Repo set via the repo-name field (default `qirtas-notes`, created private+auto-init if missing), one commit per changed file |
+| Google Drive | OAuth loopback (port 12345) + PKCE (S256) + Drive `appDataFolder` API, native Zig HTTP | Hidden app-data folder in your Drive |
+| Dropbox | OAuth loopback (port 5173) + PKCE (S256), native Zig HTTP (Dropbox API v2) | `/qirtas` folder in your Dropbox app scope |
+| GitHub | **Personal Access Token (recommended)** or browser device flow, native Zig HTTP (Contents API) | Repo set via the repo-name field (default `qirtas-notes`, created private+auto-init if missing), one commit per changed file |
 | Local folder | 3-way compared file copy | `~/QirtasSync` (override: `QIRTAS_LOCAL_SYNC_DIR`) |
+
+> **Easiest paths for non-technical users:** **GitHub via Personal Access Token** (paste one token, nothing to configure) or the **Local folder** (no accounts at all). Google Drive and Dropbox require you to register your own OAuth app first (see §1).
+
+> **All provider HTTP requests send `Accept-Encoding: identity`** (`accept_encoding = .omit`). GitHub/Google/Dropbox gzip responses by default, and the native Zig HTTP client does not auto-decompress on the raw reader — gzipped JSON used to surface as `Error: SyntaxError`. Fixed across every sync call (2026-06-16).
 
 Synced file types: `.md .txt .zig .zon .c .h` in the **current working directory** of the app.
 Tokens are stored in the vault DB encrypted with ChaCha20Poly1305 under a key derived from `/etc/machine-id` (= tokens don't survive copying the DB to another machine — by design).
@@ -16,7 +20,7 @@ Tokens are stored in the vault DB encrypted with ChaCha20Poly1305 under a key de
 
 ## 1. One-time setup (the part that was missing)
 
-Qirtas does **not** ship OAuth app credentials. Until you provide them, Google Drive and Dropbox cannot connect at all — the Connect button will say `Set QIRTAS_GOOGLE_CLIENT_ID` / `Set QIRTAS_DROPBOX_APP_KEY`. GitHub ships with a usable client ID (device flow needs no secret).
+Qirtas does **not** ship OAuth app credentials for Google Drive or Dropbox. Until you provide them those two cannot connect — the Connect button will say `Needs Google setup — see Help below` / `Needs Dropbox setup — see Help below`. **GitHub needs no setup: paste a Personal Access Token (see below).**
 
 ### Google Drive
 
@@ -44,17 +48,29 @@ QIRTAS_GOOGLE_CLIENT_ID="1234-abc.apps.googleusercontent.com" qirtas
 QIRTAS_DROPBOX_APP_KEY="abcd1234" qirtas
 ```
 
-### GitHub
+### GitHub — Personal Access Token (recommended)
 
-Device flow needs only a client ID (no client secret). Qirtas ships with a usable default client ID; override with:
+This is the reliable path. A PAT with the `repo` scope can **both create the repo and push to it**, with no OAuth-app registration and no install/permission dance.
+
+1. On the GitHub card, click **"Get a token from GitHub →"** (opens `github.com/settings/tokens/new` with the `repo` scope pre-selected). Or, for a fine-grained token, grant **Contents: Read and write** on the target repo.
+2. Click **Generate token**, copy it (`ghp_…` classic, or `github_pat_…` fine-grained).
+3. Paste it into the **token field** on the GitHub card. Optionally set a repo name (defaults to `qirtas-notes`).
+4. Click **Connect to GitHub** → it verifies the token against `GET /user` → **Connected**.
+5. **Sync Now** creates the repo if missing (private, `auto_init`) and uploads each changed file as a commit.
+
+The token is stored encrypted in the vault DB (same ChaCha20-Poly1305 as all other secrets).
+
+### GitHub — browser device flow (fallback)
+
+Leave the token field **empty** and click Connect to use the browser device flow instead. Qirtas ships a default GitHub **App** client ID; override with:
 
 ```sh
-QIRTAS_GITHUB_CLIENT_ID="Iv1.xxxxxxxxxxxxxxxx" qirtas
+QIRTAS_GITHUB_CLIENT_ID="Iv23li…" qirtas
 ```
 
-To register your own OAuth App: GitHub → Settings → Developer settings → OAuth Apps → New OAuth App. Enable **Device Flow** in the app settings. No callback/redirect URL is needed for device flow.
+Connect → a code dialog appears → enter it at github.com/login/device.
 
-Connect → a code dialog appears → enter it at github.com/login/device. Optionally type a repo name in the field on the GitHub card before connecting (defaults to `qirtas-notes`); if the repo doesn't exist it's created as private with `auto_init`.
+> **Caveat:** the bundled client ID is a **GitHub App**, whose user-to-server token can only write to repos the App is installed on with **Contents: write** permission. If sync fails with `404 Not Found` on upload even though the repo exists, the App lacks write access to it — use the Personal Access Token path above instead. Repo creation via the App token returns `403 "Resource not accessible by integration"` and is skipped (a PAT does not have this limit).
 
 ### Local folder
 
@@ -70,13 +86,17 @@ The status text on each sync card is the primary diagnostic. Run the app from a 
 
 | Status text | What actually happened | Fix |
 |---|---|---|
-| `Set QIRTAS_GOOGLE_CLIENT_ID` / `Set QIRTAS_DROPBOX_APP_KEY` | No OAuth app ID configured (the placeholder is still in place) | Do §1 setup |
+| `Needs Google setup — see Help below` / `Needs Dropbox setup — see Help below` | No OAuth app ID configured (the placeholder is still in place) | Do §1 setup (`QIRTAS_GOOGLE_CLIENT_ID` / `QIRTAS_DROPBOX_APP_KEY`) |
+| `Paste a token first.` (GitHub) | Clicked Connect with an empty token field, and device-flow fallback couldn't start | Paste a Personal Access Token, or leave empty to use the browser flow |
+| `Verifying token...` (stuck) (GitHub) | `GET /user` with the pasted token is hanging | Check network; if it never resolves the token line will switch to an error |
+| `Token rejected. Needs 'repo' scope.` (GitHub) | The pasted token reached GitHub but was refused (expired, revoked, or missing the `repo` / Contents:write scope) | Generate a new token with the `repo` scope (classic) or Contents: Read+write (fine-grained) |
+| `Cannot reach GitHub. Check connection.` (GitHub) | Token verification couldn't reach api.github.com | Check network/proxy |
 | `Waiting for browser...` (stuck) | Browser never hit the local callback port — auth page abandoned, wrong redirect URI in the provider console, or the browser is sandboxed (Flatpak/Snap) and can't reach localhost | Finish the consent page; verify redirect URI is byte-exact (`http://localhost:12345` / `:5173`); try a non-sandboxed browser |
-| `Connection timed out` | Loopback listener waited 5 min, no callback | Same as above — redo Connect |
-| `Port 12345 busy` / `Port 5173 busy` | Another process owns the callback port (5173 is Vite's default dev port!) | `ss -tlnp \| grep 5173` — stop that process, reconnect |
-| `Error: token exchange failed.` | Google/Dropbox rejected the code→token exchange. Most common causes: redirect URI mismatch between auth request and exchange (fixed 2026-06-12 — both now `http://localhost:12345`), expired/reused code, wrong app type (must be **Web application** for Google) | Reconnect once; if persistent, check terminal for the HTTP body, verify app type + URI in the console |
-| `Connection failed` (GitHub) | Device-code request to github.com failed — offline, or `curl` not installed (GitHub flow shells out to curl) | `which curl`; check network |
-| `Generating code...` (stuck) | Same as above | Same |
+| `Sign-in timed out. Try again.` | Loopback listener waited 5 min, no callback | Same as above — redo Connect |
+| `Sign-in port busy. Close other apps, retry.` | Another process owns the callback port (5173 is Vite's default dev port!) | `ss -tlnp \| grep 5173` — stop that process, reconnect |
+| `Error: token exchange failed.` | Google/Dropbox rejected the code→token exchange. Now that PKCE (S256) is sent, the common remaining causes are: expired/reused code, wrong app type, or a PKCE method mismatch in the provider console | Reconnect once; if persistent, check terminal for the HTTP body, verify app type + redirect URI in the console |
+| `Couldn't reach GitHub. Check connection.` (GitHub device flow) | Device-code request to github.com failed — offline, or `curl` not installed (the device flow shells out to curl) | `which curl`; check network |
+| `Couldn't start sign-in. Try again.` | The local OAuth callback socket couldn't be created or bound | Retry; check no firewall blocks localhost |
 
 ### Sync-phase messages
 
@@ -155,3 +175,6 @@ backends still duplicate + resurrect (see limitation 6 below).
 6. Deletion does not propagate: removing a file on one side resurrects it from the other on next sync. ~~Renames~~ **Partially fixed for Google Drive (2026-06-15):** a pure rename (same content, new filename) is detected via MD5 hash match and applied as a rename on Drive — no duplicate, no resurrection. A true *deletion* (nothing replaces the file) still resurrects on next sync, on every backend. Dropbox/GitHub/Local: renames still behave like delete+create (duplicate + resurrection).
 7. Tokens are machine-bound (`/etc/machine-id` key derivation): restoring vault.db onto new hardware silently invalidates all sync credentials → `Error: missing credentials.` after decryption fails.
 8. Diagnostics print to stdout only — launch from a terminal (`zig build run` or `./zig-out/bin/qirtas`) when investigating.
+9. ~~gzip responses broke JSON parsing~~ **Fixed (2026-06-16):** every sync HTTP call now sends `Accept-Encoding: identity` (`accept_encoding = .omit` on the request options). Previously gzipped API responses parsed as `Error: SyntaxError`.
+10. ~~Google Drive / Dropbox OAuth missing PKCE~~ **Fixed (2026-06-16):** public-client token exchanges now send `code_challenge`/`code_challenge_method=S256` (auth URL) + `code_verifier` (exchange), generated by `zig_pkce_challenge()` in `sync.zig`. Without PKCE the providers rejected the exchange. **You must register the redirect URI's app as a "Desktop"/native (PKCE) client, or keep the Web-application client and ensure PKCE is allowed.**
+11. ~~GitHub App token cannot write~~ **Worked around (2026-06-16):** the bundled GitHub *App* client ID yields a user-to-server token that 404s on writes to repos it isn't installed on. The GitHub card now accepts a **Personal Access Token** (`zig_github_connect_with_token()`), which creates the repo and pushes with no app-permission limits. Device flow remains as a fallback.

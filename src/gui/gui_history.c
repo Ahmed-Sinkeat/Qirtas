@@ -54,8 +54,15 @@ static void history_prune(sqlite3 *db) {
         NULL, NULL, NULL);
 }
 
+/* Strip leading "./" so "./foo.md" and "foo.md" map to the same key. */
+static const char *norm_path(const char *p) {
+    while (p[0] == '.' && p[1] == '/') p += 2;
+    return p;
+}
+
 void gui_history_record(const char *path) {
     if (!path || !*path || strcmp(path, "Untitled") == 0) return;
+    path = norm_path(path);
 
     const char *text = zig_get_document_text();
     if (!text) return;
@@ -185,6 +192,7 @@ static void on_history_row_activated(GtkListBox *box, GtkListBoxRow *row, gpoint
  * flow. Snapshots are recorded by gui_history_record() after each save. */
 void show_file_history(AppGui *gui, const char *path) {
     if (!gui || !path || !*path) return;
+    path = norm_path(path);
 
     sqlite3 *db = NULL;
     if (sqlite3_open(DB_PATH, &db) != SQLITE_OK) {
