@@ -2808,6 +2808,10 @@ static void activate(GtkApplication *app, gpointer user_data) {
         status_menu_item(qirtas_icon("saveas"), qirtas_tr("Save As…"), "Ctrl+Shift+S",
                          G_CALLBACK(on_status_menu_save_as), gui));
 
+    gtk_box_append(GTK_BOX(actions_box),
+        status_menu_item(qirtas_icon("history"), qirtas_tr("File History"), NULL,
+                         G_CALLBACK(on_status_menu_history), gui));
+
     gtk_box_append(GTK_BOX(actions_box), gtk_separator_new(GTK_ORIENTATION_HORIZONTAL));
 
     /* Find / Replace removed from this menu — it duplicates the in-editor
