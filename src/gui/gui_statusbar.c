@@ -27,6 +27,7 @@ void popdown_ancestor_popover(GtkWidget *w) {
 void on_status_menu_quit(GtkButton *btn, gpointer user_data) {
     (void)user_data;
     popdown_ancestor_popover(GTK_WIDGET(btn));
+    gui_save_window_geometry(global_gui);
     g_application_quit(g_application_get_default());
 }
 
@@ -88,6 +89,7 @@ void on_restart_clicked(GtkButton *btn, gpointer user_data) {
         gchar *argv[] = { exe, NULL };
         g_spawn_async(NULL, argv, NULL, G_SPAWN_DEFAULT, NULL, NULL, NULL, NULL);
     }
+    gui_save_window_geometry(global_gui);
     g_application_quit(g_application_get_default());
 }
 
