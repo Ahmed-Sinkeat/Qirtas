@@ -125,9 +125,12 @@ stored in the vault DB (`file_metadata` for Drive, `dropbox_sync_meta`,
 - changed locally only → upload/copy out
 - changed remotely only → download/copy in (open buffer reloads if clean)
 - changed on BOTH sides → contents are compared first; if they actually
-  differ, your local version is preserved as `<name>_conflict.<ext>` and the
-  remote version takes the original filename. The status card shows
-  `Synced ✓ (N conflicts saved)`. Merge by hand.
+  differ, your local version is preserved as
+  `<name>_conflict_<YYYY-MM-DD_HHMMSS>.<ext>` and the remote version takes the
+  original filename. The status card shows `Synced ✓ (N conflicts saved)`.
+  Merge by hand. The timestamp makes every conflict copy unique, so a second
+  conflict on the same file never overwrites the first (2026-06-16; the old
+  fixed `<name>_conflict.<ext>` name did clobber the previous copy).
 
 No backend silently discards edits anymore. History: before 2026-06-12 the
 Dropbox script downloaded remote over local unconditionally and Local was
@@ -138,7 +141,7 @@ GitHub bonus: every upload is a commit, so even conflict losers remain
 recoverable from repo history.
 
 ---|---|---|
-| **Google Drive** | True 3-way detection (local mtime + Drive modifiedTime vs `file_metadata.last_modified` in the vault DB). Cloud version takes the original filename, your local version is preserved as `<name>_conflict.<ext>`. Merge by hand. | No — both versions kept |
+| **Google Drive** | True 3-way detection (local mtime + Drive modifiedTime vs `file_metadata.last_modified` in the vault DB). Cloud version takes the original filename, your local version is preserved as `<name>_conflict_<timestamp>.<ext>`. Merge by hand. | No — both versions kept |
 | **Dropbox** | **No conflict detection at all.** The script downloads every remote `.md`/`.txt` over your local files FIRST, then uploads. Any local edit made since the other machine's last upload is **silently overwritten by the remote copy**, and the overwritten file is then re-uploaded. | **YES — local edits since last sync are destroyed** |
 | **GitHub** | `git pull --rebase --strategy-option=theirs` — on conflicting lines the **remote side silently wins**, then your (now-merged) state is pushed. Non-conflicting changes survive; conflicting hunks of your local edit are lost. Old versions remain recoverable in git history. | Partially — conflicting hunks lost from working copy, recoverable via `git log` in `~/.config/qirtas/github_sync` |
 | **Local folder** | Newest mtime wins, full-file copy, no conflict copies, no both-changed detection. If both sides changed, the older edit is **silently overwritten**. | **YES — older side's edits are destroyed** |

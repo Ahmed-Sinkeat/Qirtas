@@ -538,11 +538,31 @@ fn is_syncable_file(filename: []const u8) bool {
            std.mem.endsWith(u8, filename, ".h");
 }
 
+/// Name for the preserved local copy when a file conflicts. Includes a local
+/// timestamp so a *second* conflict on the same file doesn't overwrite the
+/// first copy (the old fixed "<name>_conflict.<ext>" did exactly that). Format:
+/// "<name>_conflict_YYYY-MM-DD_HHMMSS.<ext>" — filesystem-, sync-, and
+/// URL-safe (no '/', ':' or spaces, unlike a literal date/time).
 fn make_conflict_filename(allocator: std.mem.Allocator, filename: []const u8) ![]const u8 {
+    var stamp_buf: [24]u8 = undefined;
+    var stamp: []const u8 = "conflict";
+    const now: c.time_t = c.time(null);
+    var tmv: c.struct_tm = undefined;
+    if (c.localtime_r(&now, &tmv) != null) {
+        stamp = std.fmt.bufPrint(&stamp_buf, "{d:0>4}-{d:0>2}-{d:0>2}_{d:0>2}{d:0>2}{d:0>2}", .{
+            @as(u32, @intCast(tmv.tm_year + 1900)),
+            @as(u32, @intCast(tmv.tm_mon + 1)),
+            @as(u32, @intCast(tmv.tm_mday)),
+            @as(u32, @intCast(tmv.tm_hour)),
+            @as(u32, @intCast(tmv.tm_min)),
+            @as(u32, @intCast(tmv.tm_sec)),
+        }) catch "conflict";
+    }
+
     if (std.mem.lastIndexOfScalar(u8, filename, '.')) |dot_idx| {
-        return try std.fmt.allocPrint(allocator, "{s}_conflict{s}", .{ filename[0..dot_idx], filename[dot_idx..] });
+        return try std.fmt.allocPrint(allocator, "{s}_conflict_{s}{s}", .{ filename[0..dot_idx], stamp, filename[dot_idx..] });
     } else {
-        return try std.fmt.allocPrint(allocator, "{s}_conflict", .{filename});
+        return try std.fmt.allocPrint(allocator, "{s}_conflict_{s}", .{ filename, stamp });
     }
 }
 
