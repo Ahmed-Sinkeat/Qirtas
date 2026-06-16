@@ -11,7 +11,6 @@ Qirtas/
 ├── build.zig.zon
 ├── src/
 │   ├── main.zig                         ← Zig app root, file I/O, undo, autosave, FFI exports
-│   ├── bip39.zig                        ← BIP-39 recovery phrase helpers
 │   ├── sync.zig                         ← Cloud sync logic (Google Drive, Dropbox, GitHub, local)
 │   ├── root.zig                         ← Zig module root
 │   ├── gui.c                            ← Entry/FFI layer + redesign UI shell: run_gui,
@@ -160,7 +159,6 @@ system_keys schema, active-file-path bounds check). Run it before pushing anythi
 | Sync status dot states | `QirtasSyncState` enum in `src/gui_shared.h`, `gui_set_sync_state` in `src/gui/gui_sync_status.c` |
 | Undo stack (heap snapshots, capped at 64 MB total), save/restore, text edit APIs | `src/main.zig` |
 | Undo keybinding routing (GTK built-in undo is disabled — keep it that way) | `on_editor_key_pressed` in `src/gui/gui_editor.c`, `set_enable_undo(FALSE)` in `src/gui.c` |
-| BIP-39 recovery phrase helpers | `src/bip39.zig` |
 | Cloud sync logic | `src/sync.zig` |
 | GTK UI layout, window setup, key handling | `src/gui.c` |
 | Cloud sync handshake (OAuth/network) | `src/gui/gui_sync.c` |
