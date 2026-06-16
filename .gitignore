@@ -29,3 +29,9 @@ src/ىى.md
 
 # Stale rescue copies / leftover stubs swept up during clobber cleanup
 /_archive/
+
+# Arch packaging build artifacts (makepkg)
+packaging/src/
+packaging/pkg/
+packaging/*.pkg.tar.zst
+packaging/*.pkg.tar.zst.sig
