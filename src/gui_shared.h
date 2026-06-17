@@ -22,8 +22,13 @@ extern void zig_undo_clear(void);
 extern int zig_save_document(void);
 extern const char *zig_get_document_text(void);
 extern void zig_free_document_text(const char *ptr);
-/* Portable text logic (src/markdown.zig). 1 = RTL paragraph, 0 = LTR. */
-extern int zig_detect_rtl(const char *text);
+/* Portable text logic (src/markdown.zig). */
+extern int zig_detect_rtl(const char *text);          /* 1 = RTL paragraph, 0 = LTR */
+extern int zig_heading_level(const char *line);       /* ATX heading level 1-6, else 0 */
+extern int zig_fuzzy_score(const char *haystack, const char *needle); /* -1 = no match */
+/* Build Arabic-tolerant search regex from NFKC-normalized input. Returns a
+ * Zig-allocated string — free with zig_free_document_text, NOT g_free. */
+extern char *zig_arabic_search_regex(const char *normalized_input);
 
 /* Zig -> C FFI */
 void gui_set_text(const char *text, int len);
