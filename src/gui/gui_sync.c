@@ -109,20 +109,49 @@ static int run_curl_post(const char *url, const char *body, char *response_buf, 
  * GITHUB DEVICE FLOW IMPLEMENTATION
  * ────────────────────────────────────────────────────────── */
 
+/* Shared, refcounted auth state. The poll worker thread and the dialog both
+ * hold a ref; whoever drops the last ref frees it. Replaces the earlier design
+ * that tied the cancel flag's lifetime to the dialog GObject and handed the
+ * same raw pointer to a detached worker (cross-thread use-after-free when the
+ * dialog closed before auth completed). `cancelled` is touched from both
+ * threads via g_atomic; `dialog` is touched only on the main thread (set at
+ * creation, nulled in the destroy handler, read in the idle callback). */
+typedef struct {
+    gint refcount;     /* atomic */
+    gint cancelled;    /* atomic: 0 = running, 1 = cancelled */
+    GtkWidget *dialog; /* main-thread only; nulled on destroy */
+} GithubAuthState;
+
+static GithubAuthState *github_auth_state_new(void) {
+    GithubAuthState *s = g_new0(GithubAuthState, 1);
+    s->refcount = 1;
+    return s;
+}
+
+static GithubAuthState *github_auth_state_ref(GithubAuthState *s) {
+    g_atomic_int_inc(&s->refcount);
+    return s;
+}
+
+static void github_auth_state_unref(GithubAuthState *s) {
+    if (g_atomic_int_dec_and_test(&s->refcount)) {
+        g_free(s);
+    }
+}
+
 typedef struct {
     AppGui *gui;
     char *device_code;
     char *user_code;
     char *verification_uri;
-    gboolean *cancelled;
-    GtkWidget *dialog;
+    GithubAuthState *state;
 } GithubPollData;
 
 typedef struct {
     AppGui *gui;
     char *token;
     gboolean success;
-    GtkWidget *dialog_to_close;
+    GithubAuthState *state;
 } UIUpdateData;
 
 static gboolean update_github_ui_idle(gpointer user_data) {
@@ -138,10 +167,11 @@ static gboolean update_github_ui_idle(gpointer user_data) {
     } else {
         gui_update_github_status(0, "Disconnected");
     }
-    if (ud->dialog_to_close && GTK_IS_WINDOW(ud->dialog_to_close)) {
-        gtk_window_destroy(GTK_WINDOW(ud->dialog_to_close));
+    if (ud->state && ud->state->dialog && GTK_IS_WINDOW(ud->state->dialog)) {
+        gtk_window_destroy(GTK_WINDOW(ud->state->dialog));
     }
     g_free(ud->token);
+    if (ud->state) github_auth_state_unref(ud->state);
     g_free(ud);
     return FALSE;
 }
@@ -151,13 +181,13 @@ static gpointer github_poll_thread_func(gpointer user_data) {
     int elapsed = 0;
     
     while (elapsed < 900) {
-        if (*(pd->cancelled)) {
+        if (g_atomic_int_get(&pd->state->cancelled)) {
             break;
         }
         
         g_usleep(5000000); // Sleep 5 seconds
         
-        if (*(pd->cancelled)) {
+        if (g_atomic_int_get(&pd->state->cancelled)) {
             break;
         }
         
@@ -186,7 +216,7 @@ static gpointer github_poll_thread_func(gpointer user_data) {
                     ud->gui = pd->gui;
                     ud->token = access_token;
                     ud->success = TRUE;
-                    ud->dialog_to_close = pd->dialog;
+                    ud->state = github_auth_state_ref(pd->state);
                     g_idle_add(update_github_ui_idle, ud);
                     break;
                 }
@@ -198,14 +228,17 @@ static gpointer github_poll_thread_func(gpointer user_data) {
     g_free(pd->device_code);
     g_free(pd->user_code);
     g_free(pd->verification_uri);
+    github_auth_state_unref(pd->state);
     g_free(pd);
     return NULL;
 }
 
 static void on_dialog_destroy(GtkWidget *widget, gpointer user_data) {
     (void)widget;
-    gboolean *cancelled = (gboolean *)user_data;
-    *cancelled = TRUE;
+    GithubAuthState *state = (GithubAuthState *)user_data;
+    g_atomic_int_set(&state->cancelled, 1);
+    state->dialog = NULL;
+    github_auth_state_unref(state); /* drop the dialog's ref */
 }
 
 static void on_open_activation_clicked(GtkButton *btn, gpointer user_data) {
@@ -261,7 +294,11 @@ static gboolean show_github_dialog_idle(gpointer user_data) {
     
     GtkWidget *btn_open = gtk_button_new_with_label("Open Activation Page");
     gtk_widget_add_css_class(btn_open, "pop-btn");
-    g_signal_connect(btn_open, "clicked", G_CALLBACK(on_open_activation_clicked), dd->verification_uri);
+    /* Hand the button its own copy with a destroy notify — the owning struct
+     * (and dd->verification_uri) is freed at the end of this idle callback, but
+     * the button outlives it. Binding the raw pointer left a dangling closure. */
+    g_signal_connect_data(btn_open, "clicked", G_CALLBACK(on_open_activation_clicked),
+                          g_strdup(dd->verification_uri), (GClosureNotify)g_free, 0);
     gtk_box_append(GTK_BOX(vbox), btn_open);
     
     GtkWidget *btn_cancel = gtk_button_new_with_label("Cancel");
@@ -269,25 +306,23 @@ static gboolean show_github_dialog_idle(gpointer user_data) {
     g_signal_connect_swapped(btn_cancel, "clicked", G_CALLBACK(gtk_window_destroy), dialog);
     gtk_box_append(GTK_BOX(vbox), btn_cancel);
     
-    gboolean *cancelled = g_new0(gboolean, 1);
-    *cancelled = FALSE;
-    g_object_set_data_full(G_OBJECT(dialog), "cancelled-ptr", cancelled, g_free);
-    g_signal_connect(dialog, "destroy", G_CALLBACK(on_dialog_destroy), cancelled);
-    
+    GithubAuthState *state = github_auth_state_new(); /* dialog's ref */
+    state->dialog = dialog;
+    g_signal_connect(dialog, "destroy", G_CALLBACK(on_dialog_destroy), state);
+
     gtk_window_present(GTK_WINDOW(dialog));
-    
+
     // Automatically trigger browser open
     gtk_show_uri(NULL, dd->verification_uri, 0);
-    
+
     // Start polling thread
     GithubPollData *pd = g_new0(GithubPollData, 1);
     pd->gui = gui;
     pd->device_code = g_strdup(dd->device_code);
     pd->user_code = g_strdup(dd->user_code);
     pd->verification_uri = g_strdup(dd->verification_uri);
-    pd->cancelled = cancelled;
-    pd->dialog = dialog;
-    
+    pd->state = github_auth_state_ref(state); /* worker's ref */
+
     g_thread_new("github_poll", github_poll_thread_func, pd);
     
     g_free(dd->device_code);

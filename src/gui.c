@@ -3391,15 +3391,14 @@ void gui_trigger_autosave(void) {
 
     gui_set_sync_status("Saving...");
 
-    GtkTextIter start_iter, end_iter;
-    gtk_text_buffer_get_bounds(buf, &start_iter, &end_iter);
-    char *page_text = gtk_text_buffer_get_text(buf, &start_iter, &end_iter, FALSE);
-
-    /* Full-buffer model: the buffer holds the whole document, so save the
-     * full line range [0, line_count) rather than an active page window. */
-    extern int zig_save_active_page(int start_line, int end_line, const char *text);
-    int status = zig_save_active_page(0, gtk_text_buffer_get_line_count(buf), page_text);
-    g_free(page_text);
+    /* Serialize the source of truth (Zig's doc_buf), NOT the decorated GTK view.
+     * View-only child anchors (HR / table header / code-fence pill) replace the
+     * raw markdown on screen, and gtk_text_buffer_get_text() omits those anchors
+     * — so serializing the view returned an empty string for every decorated
+     * line and silently destroyed it on save. zig_save_document writes doc_buf,
+     * which retains the raw markdown for those lines. */
+    extern int zig_save_document(void);
+    int status = zig_save_document();
 
     if (status == 0) {
         gui_set_sync_status("Saved");

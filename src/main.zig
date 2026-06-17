@@ -115,6 +115,8 @@ extern fn qirtas_bench_outline_gate() c_int;
 extern fn qirtas_bench_wordcount() c_int;
 extern fn gui_set_text(text: [*]const u8, len: c_int) void;
 extern fn gui_set_title(title: [*:0]const u8) void;
+extern fn gui_show_toast(msg: [*:0]const u8) void;
+extern fn gui_set_sync_status(status: [*:0]const u8) void;
 
 // UI language picked in settings (0 = English, 1 = Arabic). Owned by gui.c.
 extern var qirtas_app_language: c_int;
@@ -180,7 +182,25 @@ var doc_buf: std.ArrayList(u8) = .empty;
 var active_mmap_ptr: ?[*]const u8 = null;
 var active_mmap_size: usize = 0;
 var active_file_is_encrypted: bool = true;
+// Set when a file carries the encrypted-format magic header but cannot be
+// decrypted (no key / wrong key after a machine migration). Such a file is
+// shown read-only and NEVER overwritten — otherwise autosave would clobber the
+// recoverable ciphertext with garbage. Cleared on every successful load.
+var active_load_failed: bool = false;
 var line_offsets: std.ArrayList(usize) = .empty;
+
+// On-disk encrypted-file format header. Files written before this header
+// existed are "legacy" and detected by tag-verified trial decryption (see
+// load_file_mmap / decryptWithMasterKey). The magic deliberately starts with a
+// high byte + control bytes (PNG-style) so it can never be the start of a real
+// UTF-8 markdown document, making "is this file encrypted?" unambiguous.
+const ENC_MAGIC = [_]u8{ 0x89, 'Q', 'I', 'R', 0x0D, 0x0A, 0x1A, 0x0A };
+const ENC_VERSION: u8 = 1;
+const ENC_HEADER_LEN = ENC_MAGIC.len + 1; // magic + 1 version byte
+
+fn blobHasMagic(blob: []const u8) bool {
+    return blob.len >= ENC_MAGIC.len and std.mem.eql(u8, blob[0..ENC_MAGIC.len], &ENC_MAGIC);
+}
 
 // Global reference to the IO instance
 pub var global_io: Io = undefined;
@@ -311,32 +331,46 @@ pub fn encryptWithMasterKey(allocator: std.mem.Allocator, key: [32]u8, plaintext
     try fillRandomBytes(&nonce);
 
     const cipher = std.crypto.aead.chacha_poly.ChaCha20Poly1305;
-    const out_len = 12 + plaintext.len + 16;
+    // Layout: MAGIC(8) || VERSION(1) || nonce(12) || ciphertext || tag(16).
+    const out_len = ENC_HEADER_LEN + 12 + plaintext.len + 16;
     const raw_buf = try allocator.alloc(u8, out_len);
     errdefer allocator.free(raw_buf);
 
-    @memcpy(raw_buf[0..12], &nonce);
+    @memcpy(raw_buf[0..ENC_MAGIC.len], &ENC_MAGIC);
+    raw_buf[ENC_MAGIC.len] = ENC_VERSION;
+    const body = raw_buf[ENC_HEADER_LEN..];
+    @memcpy(body[0..12], &nonce);
     var tag: [16]u8 = undefined;
-    cipher.encrypt(raw_buf[12 .. 12 + plaintext.len], &tag, plaintext, "", nonce, key);
-    @memcpy(raw_buf[12 + plaintext.len ..], &tag);
+    cipher.encrypt(body[12 .. 12 + plaintext.len], &tag, plaintext, "", nonce, key);
+    @memcpy(body[12 + plaintext.len ..], &tag);
     return raw_buf;
 }
 
 pub fn decryptWithMasterKey(allocator: std.mem.Allocator, key: [32]u8, blob: []const u8) ![]u8 {
-    if (blob.len < 28) return error.InvalidFileFormat;
+    // Strip the format header if present. Headerless blobs are legacy files
+    // (written before the header existed); they decrypt the same way since the
+    // AEAD tag still validates the key — only the framing changed.
+    var body = blob;
+    if (blobHasMagic(blob)) {
+        if (blob.len < ENC_HEADER_LEN) return error.InvalidFileFormat;
+        if (blob[ENC_MAGIC.len] != ENC_VERSION) return error.UnsupportedVersion;
+        body = blob[ENC_HEADER_LEN..];
+    }
+
+    if (body.len < 28) return error.InvalidFileFormat;
 
     var nonce: [12]u8 = undefined;
-    @memcpy(&nonce, blob[0..12]);
+    @memcpy(&nonce, body[0..12]);
 
-    const ct_len = blob.len - 12 - 16;
+    const ct_len = body.len - 12 - 16;
     var tag: [16]u8 = undefined;
-    @memcpy(&tag, blob[12 + ct_len ..]);
+    @memcpy(&tag, body[12 + ct_len ..]);
 
     const pt_buf = try allocator.alloc(u8, ct_len);
     errdefer allocator.free(pt_buf);
 
     const cipher = std.crypto.aead.chacha_poly.ChaCha20Poly1305;
-    try cipher.decrypt(pt_buf, blob[12 .. 12 + ct_len], tag, "", nonce, key);
+    try cipher.decrypt(pt_buf, body[12 .. 12 + ct_len], tag, "", nonce, key);
     return pt_buf;
 }
 
@@ -1313,6 +1347,7 @@ fn load_file_mmap(filename: [*:0]const u8, size: *usize) ![*]const u8 {
     if (file_size == 0) {
         size.* = 0;
         active_file_is_encrypted = false;
+        active_load_failed = false;
         return "";
     }
 
@@ -1322,17 +1357,45 @@ fn load_file_mmap(filename: [*:0]const u8, size: *usize) ![*]const u8 {
 
     const mmap_slice: [*]const u8 = @ptrCast(ptr);
     const mmap_content = mmap_slice[0..file_size];
+    const gpa = std.heap.page_allocator;
+
+    if (blobHasMagic(mmap_content)) {
+        // Definitively a Qirtas-encrypted file. It MUST decrypt — never fall
+        // through to loading the raw ciphertext as plaintext, because the 2.5s
+        // autosave would then atomically overwrite the recoverable original
+        // with garbage. On failure (no key, or wrong key after a machine
+        // migration) mark the load failed so every save path refuses to write.
+        if (active_master_key) |key| {
+            if (decryptWithMasterKey(gpa, key, mmap_content) catch null) |buf| {
+                active_file_is_encrypted = true;
+                active_load_failed = false;
+                size.* = buf.len;
+                return buf.ptr;
+            }
+        }
+        active_file_is_encrypted = true; // it is encrypted; we just can't read it
+        active_load_failed = true;
+        size.* = 0;
+        return "";
+    }
+
+    // No magic header: either genuine plaintext, or a legacy (pre-header)
+    // encrypted file. Try a trial decrypt only when a key is present — the AEAD
+    // tag means this succeeds only on real legacy ciphertext, so true plaintext
+    // still loads as plaintext. (The legacy migration hole remains for old
+    // files until they're re-saved with the new header.)
     if (active_master_key) |key| {
-        const pt_buf = decryptWithMasterKey(std.heap.page_allocator, key, mmap_content) catch null;
-        if (pt_buf) |buf| {
+        if (decryptWithMasterKey(gpa, key, mmap_content) catch null) |buf| {
             active_file_is_encrypted = true;
+            active_load_failed = false;
             size.* = buf.len;
             return buf.ptr;
         }
     }
 
-    const plain_buf = try std.heap.page_allocator.dupe(u8, mmap_content);
+    const plain_buf = try gpa.dupe(u8, mmap_content);
     active_file_is_encrypted = false;
+    active_load_failed = false;
     size.* = plain_buf.len;
     return plain_buf.ptr;
 }
@@ -1499,7 +1562,15 @@ fn load_file_and_update_gui(filename: []const u8) !void {
     defer gpa.free(title_z);
 
     gui_set_title(title_z.ptr);
-    gui_set_sync_state(SYNC_SYNCED);
+    if (active_load_failed) {
+        // Encrypted file we can't read (wrong key / machine migration). The
+        // editor shows it empty but every save path is blocked, so the
+        // original ciphertext on disk stays intact and recoverable.
+        gui_show_toast("Cannot decrypt — wrong key. File is read-only; original left untouched.");
+        gui_set_sync_status("Read-only — cannot decrypt");
+    } else {
+        gui_set_sync_state(SYNC_SYNCED);
+    }
     gui_show_editor();
 
     // Baseline undo snapshot: without it the first edit can never be undone
@@ -1523,6 +1594,13 @@ fn autosave_callback(user_data: ?*anyopaque) callconv(.c) void {
 }
 
 pub export fn zig_get_text_for_line_range(start_line: c_int, end_line: c_int, out_len: *c_int) callconv(.c) ?[*]const u8 {
+    // Symmetric with zig_save_active_page's guard: a negative line @intCast to
+    // usize wraps to a huge index. ReleaseSmall's bounds check happens to catch
+    // it, but ReleaseSafe/Debug panic. Reject up front.
+    if (start_line < 0 or end_line < 0) {
+        out_len.* = 0;
+        return "";
+    }
     const start_idx = @as(usize, @intCast(start_line));
     const end_idx = @as(usize, @intCast(end_line));
     
@@ -1562,6 +1640,7 @@ pub export fn zig_get_text_for_line_range(start_line: c_int, end_line: c_int, ou
 
 pub export fn zig_save_active_page(start_line: c_int, end_line: c_int, text: [*:0]const u8) callconv(.c) c_int {
     if (start_line < 0 or end_line < 0) return 1;
+    if (active_load_failed) return 1; // undecryptable file is read-only
     if (active_file_is_encrypted and active_master_key == null) return 1;
 
     const gpa = std.heap.page_allocator;
@@ -2073,6 +2152,7 @@ pub export fn zig_replace_range(start: Position, end: Position, text: [*:0]const
 }
 
 pub export fn zig_save_document() callconv(.c) c_int {
+    if (active_load_failed) return 1; // undecryptable file is read-only
     if (active_file_path_len == 0) return 1;
     const path = active_file_path[0..active_file_path_len];
     if (std.mem.eql(u8, path, "Untitled")) return 0;
@@ -2088,6 +2168,14 @@ pub export fn zig_save_document() callconv(.c) c_int {
     } else {
         atomicWriteFile(path, content) catch return 1;
     }
+
+    // Keep the search index fresh — autosave now routes through here, so this
+    // is the single place every doc_buf write lands. Index failure is
+    // non-fatal: the bytes are already on disk.
+    const path_z = gpa.dupeZ(u8, path) catch return 0;
+    defer gpa.free(path_z);
+    gui_index_file(path_z.ptr);
+
     return 0;
 }
 
@@ -2095,6 +2183,15 @@ pub export fn zig_get_document_text() ?[*:0]const u8 {
     const content = if (active_mmap_ptr) |ptr| ptr[0..active_mmap_size] else "";
     const gpa = std.heap.page_allocator;
     const content_z = gpa.dupeZ(u8, content) catch return null;
+    // zig_free_document_text derives the length with mem.len(), which stops at
+    // the first interior NUL — a binary paste containing '\0' would then be
+    // freed with a smaller length than was allocated (page_allocator size
+    // mismatch). Replace any embedded NUL so freed-length == allocated-length.
+    // The C consumers treat this as a NUL-terminated string anyway, so an
+    // interior NUL would already truncate their view.
+    for (content_z[0..content.len]) |*b| {
+        if (b.* == 0) b.* = ' ';
+    }
     return content_z.ptr;
 }
 
@@ -2263,6 +2360,7 @@ fn setTestDocument(path: []const u8, content: []const u8) !void {
     try std.testing.expect(setActiveFilePath(path));
     active_file_is_encrypted = false;
     active_master_key = null;
+    active_load_failed = false;
     try update_document_content_in_memory(content);
 }
 
@@ -2431,6 +2529,67 @@ test "integration: encrypted save writes ciphertext, reload restores plaintext" 
     defer unload_file_mmap(loaded, size);
     try std.testing.expect(active_file_is_encrypted);
     try std.testing.expectEqualStrings(plaintext, loaded[0..size]);
+}
+
+test "integration: encrypted file with wrong key is read-only, save refuses, ciphertext survives" {
+    const saved_key = active_master_key;
+    const saved_enc = active_file_is_encrypted;
+    const saved_failed = active_load_failed;
+    defer {
+        active_master_key = saved_key;
+        active_file_is_encrypted = saved_enc;
+        active_load_failed = saved_failed;
+    }
+
+    const path = "/tmp/qirtas-itest-wrongkey.md";
+    defer _ = c.unlink(path);
+
+    var good_key: [32]u8 = undefined;
+    try fillRandomBytes(&good_key);
+
+    // Author and save an encrypted file with the good key.
+    try setTestDocument(path, "TOPSECRET سرّي\n");
+    active_master_key = good_key;
+    active_file_is_encrypted = true;
+    try std.testing.expectEqual(@as(c_int, 0), zig_save_document());
+
+    // Capture the on-disk ciphertext as written.
+    const before = try std.testing.allocator.alloc(u8, 4096);
+    defer std.testing.allocator.free(before);
+    const fd0 = c.open(path, c.O_RDONLY);
+    try std.testing.expect(fd0 >= 0);
+    const before_n = c.read(fd0, before.ptr, before.len);
+    _ = c.close(fd0);
+    try std.testing.expect(before_n > 0);
+    // It must carry the magic header.
+    try std.testing.expect(blobHasMagic(before[0..@intCast(before_n)]));
+
+    // Simulate a machine migration: a different (wrong) master key.
+    var wrong_key: [32]u8 = undefined;
+    try fillRandomBytes(&wrong_key);
+    active_master_key = wrong_key;
+
+    var size: usize = 0;
+    const loaded = try load_file_mmap(path, &size);
+    defer unload_file_mmap(loaded, size);
+
+    // Must NOT load the ciphertext as plaintext, and must mark the load failed.
+    try std.testing.expect(active_load_failed);
+    try std.testing.expectEqual(@as(usize, 0), size);
+
+    // Every save path must refuse while load-failed — the original is read-only.
+    try std.testing.expectEqual(@as(c_int, 1), zig_save_document());
+    try std.testing.expectEqual(@as(c_int, 1), zig_save_active_page(0, 1, "garbage"));
+
+    // The ciphertext on disk must be byte-for-byte untouched.
+    const after = try std.testing.allocator.alloc(u8, 4096);
+    defer std.testing.allocator.free(after);
+    const fd1 = c.open(path, c.O_RDONLY);
+    try std.testing.expect(fd1 >= 0);
+    const after_n = c.read(fd1, after.ptr, after.len);
+    _ = c.close(fd1);
+    try std.testing.expectEqual(before_n, after_n);
+    try std.testing.expectEqualStrings(before[0..@intCast(before_n)], after[0..@intCast(after_n)]);
 }
 
 test "integration: plaintext edit then save then reload from disk matches in-memory text" {
