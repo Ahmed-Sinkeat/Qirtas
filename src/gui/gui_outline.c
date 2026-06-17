@@ -35,9 +35,8 @@ void gui_outline_refresh(AppGui *gui) {
         if (!gtk_text_iter_ends_line(&le)) gtk_text_iter_forward_to_line_end(&le);
         gchar *text = gtk_text_buffer_get_text(buf, &ls, &le, TRUE);
 
-        int level = 0;
-        while (text[level] == '#') level++;
-        if (level >= 1 && level <= 6 && text[level] == ' ' && text[level + 1] != '\0') {
+        int level = zig_heading_level(text); /* portable parse (src/markdown.zig) */
+        if (level >= 1) {
             GtkWidget *btn = gtk_button_new();
             gtk_widget_add_css_class(btn, "tree-row");
             GtkWidget *lbl = gtk_label_new(text + level + 1);

@@ -77,13 +77,7 @@ typedef struct {
     gboolean       is_paragraph;
 } IdleFormatData;
 
-typedef struct {
-    GtkWidget *popover;
-    GtkWidget *box_actions;
-    GtkWidget *box_input;
-    GtkWidget *entry_name;
-    AppGui *gui;
-} AddPopoverWidgets;
+/* AddPopoverWidgets now lives in gui_internal.h (shared with gui_dialogs.c). */
 
 static char *transform_paragraph_block(const char *block, const char *prefix, gint start_line) {
     if (!block) return g_strdup("");
@@ -492,6 +486,39 @@ static void on_insert_hr_clicked(GtkButton *btn, gpointer user_data) {
     insert_horizontal_rule(buf);
 }
 
+/* Insert a fenced code block around the selection (or an empty block) and drop
+ * the cursor right after the opening ``` so the writer can type the language
+ * (bash, rust, …). The pill renders once the cursor leaves the fence line — see
+ * parse_and_render_code_pills(). */
+static void on_insert_code_block_clicked(GtkButton *btn, gpointer user_data) {
+    (void)btn;
+    PopoverData *pd = (PopoverData *)user_data;
+    GtkTextBuffer *buf = pd->buf;
+    close_open_submenu(pd);
+    gtk_popover_popdown(GTK_POPOVER(pd->popover));
+    if (global_source_view) gtk_widget_grab_focus(global_source_view);
+
+    gint s = pd->saved_start, e = pd->saved_end;
+    gchar *sel = NULL;
+    if (s != e) {
+        GtkTextIter is, ie;
+        gtk_text_buffer_get_iter_at_offset(buf, &is, s);
+        gtk_text_buffer_get_iter_at_offset(buf, &ie, e);
+        sel = gtk_text_buffer_get_text(buf, &is, &ie, TRUE);
+    }
+    const char *body = sel ? sel : "";
+    gboolean body_nl = (body[0] != '\0' && body[strlen(body) - 1] == '\n');
+    char *block = g_strconcat("```\n", body, body_nl ? "" : "\n", "```\n", NULL);
+
+    Position sp = gui_buffer_replace(buf, s, e, block);
+    Position cur = advance_position(sp, "```"); /* land just after the backticks */
+    gui_set_cursor_position(cur.line + 1, cur.col);
+    if (global_gui) global_gui->code_pill_dirty = TRUE;
+
+    g_free(block);
+    g_free(sel);
+}
+
 static GtkWidget *build_format_submenu_box(PopoverData *pd) {
     GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 2);
     gtk_widget_set_margin_start(box, 4);
@@ -510,6 +537,11 @@ static GtkWidget *build_format_submenu_box(PopoverData *pd) {
             btn = flyout_item(f_labels[i], f_prefixes[i], f_suffixes[i], G_CALLBACK(on_format_clicked), pd);
         }
         gtk_box_append(GTK_BOX(box), btn);
+        if (i == 4) { /* right after inline "Code": the fenced-block + pill action */
+            GtkWidget *cb = flyout_item("Code block", NULL, NULL,
+                                        G_CALLBACK(on_insert_code_block_clicked), pd);
+            gtk_box_append(GTK_BOX(box), cb);
+        }
     }
     return box;
 }
@@ -568,6 +600,125 @@ static void on_paragraph_row_clicked(GtkButton *btn, gpointer user_data) {
     open_submenu(pd, GTK_WIDGET(btn), build_paragraph_submenu_box(pd));
 }
 
+/* ---- Insert-table size picker (right-click → Table) -------------------- */
+
+typedef struct {
+    PopoverData *pd;
+    GtkWidget   *cells[4][4];
+    GtkWidget   *label;
+} TablePicker;
+
+/* Markdown for an rows×cols table: a "Title" header row, a delimiter, then
+ * (rows-1) "Text" body rows. */
+static char *make_table_md(int rows, int cols) {
+    GString *s = g_string_new("");
+    g_string_append_c(s, '|');
+    for (int c = 0; c < cols; c++) g_string_append(s, " Title |");
+    g_string_append_c(s, '\n');
+    g_string_append_c(s, '|');
+    for (int c = 0; c < cols; c++) g_string_append(s, "-------|");
+    g_string_append_c(s, '\n');
+    for (int r = 1; r < rows; r++) {
+        g_string_append_c(s, '|');
+        for (int c = 0; c < cols; c++) g_string_append(s, " Text |");
+        g_string_append_c(s, '\n');
+    }
+    return g_string_free(s, FALSE);
+}
+
+static void table_picker_highlight(TablePicker *tp, int rr, int cc) {
+    for (int r = 0; r < 4; r++)
+        for (int c = 0; c < 4; c++) {
+            if (r <= rr && c <= cc) gtk_widget_add_css_class(tp->cells[r][c], "tpick-hot");
+            else                    gtk_widget_remove_css_class(tp->cells[r][c], "tpick-hot");
+        }
+    char buf[16];
+    snprintf(buf, sizeof buf, "%d × %d", rr + 1, cc + 1);
+    gtk_label_set_text(GTK_LABEL(tp->label), buf);
+}
+
+static void on_table_cell_enter(GtkEventControllerMotion *m, gdouble x, gdouble y, gpointer user_data) {
+    (void)x; (void)y; (void)user_data;
+    GtkWidget *cell = gtk_event_controller_get_widget(GTK_EVENT_CONTROLLER(m));
+    TablePicker *tp = g_object_get_data(G_OBJECT(cell), "tp");
+    int r = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(cell), "r"));
+    int c = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(cell), "c"));
+    if (tp) table_picker_highlight(tp, r, c);
+}
+
+static void on_table_cell_clicked(GtkButton *btn, gpointer user_data) {
+    (void)user_data;
+    GtkWidget *cell = GTK_WIDGET(btn);
+    TablePicker *tp = g_object_get_data(G_OBJECT(cell), "tp");
+    if (!tp) return;
+    int rows = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(cell), "r")) + 1;
+    int cols = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(cell), "c")) + 1;
+    /* Capture everything before tearing down the menu (frees tp). */
+    PopoverData *pd = tp->pd;
+    GtkTextBuffer *buf = pd->buf;
+    gint ss = pd->saved_start, se = pd->saved_end;
+
+    close_open_submenu(pd);
+    gtk_popover_popdown(GTK_POPOVER(pd->popover));
+    if (global_source_view) gtk_widget_grab_focus(global_source_view);
+
+    GtkTextIter at;
+    gtk_text_buffer_get_iter_at_offset(buf, &at, ss);
+    const char *prefix = gtk_text_iter_starts_line(&at) ? "" : "\n";
+    char *md = make_table_md(rows, cols);
+    char *full = g_strconcat(prefix, md, NULL);
+    Position sp = gui_buffer_replace(buf, ss, se, full);
+    Position tstart = advance_position(sp, prefix); /* first table line */
+    /* Land on the table so reveal-on-cursor keeps it raw for editing; it grids
+     * once the cursor leaves. */
+    gui_set_cursor_position(tstart.line + 1, 0);
+    if (global_gui) global_gui->table_dirty = TRUE;
+    g_free(md);
+    g_free(full);
+}
+
+static GtkWidget *build_table_picker_box(PopoverData *pd) {
+    GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 4);
+    gtk_widget_set_margin_start(box, 8);
+    gtk_widget_set_margin_end(box, 8);
+    gtk_widget_set_margin_top(box, 8);
+    gtk_widget_set_margin_bottom(box, 8);
+
+    TablePicker *tp = g_new0(TablePicker, 1);
+    tp->pd = pd;
+
+    GtkWidget *grid = gtk_grid_new();
+    gtk_grid_set_row_spacing(GTK_GRID(grid), 2);
+    gtk_grid_set_column_spacing(GTK_GRID(grid), 2);
+    for (int r = 0; r < 4; r++)
+        for (int c = 0; c < 4; c++) {
+            GtkWidget *cell = gtk_button_new();
+            gtk_widget_add_css_class(cell, "tpick-cell");
+            g_object_set_data(G_OBJECT(cell), "tp", tp);
+            g_object_set_data(G_OBJECT(cell), "r", GINT_TO_POINTER(r));
+            g_object_set_data(G_OBJECT(cell), "c", GINT_TO_POINTER(c));
+            GtkEventController *mc = gtk_event_controller_motion_new();
+            g_signal_connect(mc, "enter", G_CALLBACK(on_table_cell_enter), NULL);
+            gtk_widget_add_controller(cell, mc);
+            g_signal_connect(cell, "clicked", G_CALLBACK(on_table_cell_clicked), NULL);
+            tp->cells[r][c] = cell;
+            gtk_grid_attach(GTK_GRID(grid), cell, c, r, 1, 1);
+        }
+
+    tp->label = gtk_label_new("1 × 1");
+    gtk_widget_add_css_class(tp->label, "tpick-label");
+    gtk_box_append(GTK_BOX(box), grid);
+    gtk_box_append(GTK_BOX(box), tp->label);
+    g_object_set_data_full(G_OBJECT(box), "tp", tp, g_free);
+    table_picker_highlight(tp, 1, 1); /* default 2×2 preview */
+    return box;
+}
+
+static void on_table_row_clicked(GtkButton *btn, gpointer user_data) {
+    PopoverData *pd = (PopoverData *)user_data;
+    open_submenu(pd, GTK_WIDGET(btn), build_table_picker_box(pd));
+}
+
 static void on_ctx_cut_clicked(GtkButton *btn, gpointer user_data) {
     (void)btn;
     PopoverData *pd = (PopoverData *)user_data;
@@ -586,6 +737,7 @@ static void on_ctx_copy_clicked(GtkButton *btn, gpointer user_data) {
     if (global_source_view) gtk_widget_grab_focus(global_source_view);
     GdkClipboard *clipboard = gtk_widget_get_clipboard(global_source_view);
     gtk_text_buffer_copy_clipboard(pd->buf, clipboard);
+    gui_show_toast(qirtas_tr("Copied"));
 }
 
 static void on_ctx_paste_clicked(GtkButton *btn, gpointer user_data) {
@@ -599,8 +751,9 @@ static void on_ctx_paste_clicked(GtkButton *btn, gpointer user_data) {
         gtk_text_buffer_get_iter_at_offset(pd->buf, &it, pd->saved_start);
         gtk_text_buffer_place_cursor(pd->buf, &it);
     }
-    GdkClipboard *clipboard = gtk_widget_get_clipboard(global_source_view);
-    gtk_text_buffer_paste_clipboard(pd->buf, clipboard, NULL, TRUE);
+    /* Plain text only — never GTK's rich-text paste (see gui_paste_plain_text).
+     * Any active selection is left intact so the plain insert replaces it. */
+    gui_paste_plain_text(global_gui);
 }
 
 static void on_popover_destroy(GtkWidget *widget, gpointer user_data) {
@@ -691,6 +844,10 @@ void on_editor_right_click(GtkGestureClick *gesture, gint n_press, gdouble x, gd
     GtkWidget *paragraph_row = ctx_submenu_row("format-justify-fill-symbolic", qirtas_tr("Paragraph"));
     g_signal_connect(paragraph_row, "clicked", G_CALLBACK(on_paragraph_row_clicked), pd);
     gtk_box_append(GTK_BOX(main_box), paragraph_row);
+
+    GtkWidget *table_row = ctx_submenu_row("view-grid-symbolic", qirtas_tr("Table"));
+    g_signal_connect(table_row, "clicked", G_CALLBACK(on_table_row_clicked), pd);
+    gtk_box_append(GTK_BOX(main_box), table_row);
 
     gtk_box_append(GTK_BOX(main_box), gtk_separator_new(GTK_ORIENTATION_HORIZONTAL));
     gtk_box_append(GTK_BOX(main_box),

@@ -3,6 +3,16 @@
 Run before every push that touches the editor core (`src/main.zig` edit paths,
 `src/gui.c` buffer handlers, `src/gui/gui_conceal.c`, undo, save). ~10 minutes.
 
+> **Automated first.** Most editor-core logic now has automated coverage — run
+> these before the manual pass (CI runs them on every push too):
+> - `zig build test-regression` — full gate: every unit + integration test.
+> - `zig build test-integration` — integration round-trips only (load → edit →
+>   save → reload, encrypt-at-rest, sync file/conflict helpers).
+> - `zig build test` — same as the regression gate (default).
+>
+> The checklist below covers what the headless suites *can't*: GTK rendering,
+> real keystroke latency, and visual behavior.
+
 ## Performance
 - [ ] Open empty file, don't touch anything: CPU near 0% (cursor trail on AND off)
 - [ ] Open `test_large.md` (3,000+ lines Arabic), type a sentence mid-file: no visible lag
@@ -19,6 +29,22 @@ Run before every push that touches the editor core (`src/main.zig` edit paths,
 - [ ] Type, kill the app (`kill -9`) within 2s, reopen: at most ~2.5s of typing lost
 - [ ] `file_history` table in vault DB gains a row after editing + pause (≥5 min since last)
 - [ ] Encrypted vault: same two checks pass
+
+## Code blocks
+- [ ] Open a file with a ` ```bash ` block: header pill shows **Bash**, body is monospace on a card, closing ``` hidden
+- [ ] Copy button copies the code (paste elsewhere) and flips to a checkmark
+- [ ] Paste a fenced block (e.g. from a chat): pill appears within ~0.5s
+- [ ] Format menu → **Code block**: cursor lands after ```` ``` ````; type `rust`, move into body → pill shows **Rust**
+- [ ] Save a pilled file and reopen: the raw ``` fences are intact on disk (no corruption)
+- [ ] Both light and dark themes: pill + body readable
+
+## Tables
+- [ ] Open a file with a `| a | b |` + `|---|---|` table: renders as a bordered grid, bold header, alignment from the delimiter colons
+- [ ] Move the cursor into the table: reverts to raw `| … |` markdown; move out: re-grids
+- [ ] Stress: arrow up/down through the table repeatedly — no crash (regression: widget teardown re-entrancy)
+- [ ] Edit a cell while raw, move out: grid reflects the edit
+- [ ] Save + reopen: the `|` pipes are intact on disk
+- [ ] Arabic doc: table lays out RTL (first column on the right)
 
 ## Arabic
 - [ ] Type Arabic in a fresh line: paragraph flips RTL immediately

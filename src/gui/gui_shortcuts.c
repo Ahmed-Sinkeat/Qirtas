@@ -16,7 +16,8 @@ static AppShortcut app_shortcuts[] = {
     { "zoom_in", "Zoom In", "<Control>equal", 0, 0 },
     { "zoom_out", "Zoom Out", "<Control>minus", 0, 0 },
     { "reset_zoom", "Reset Zoom", "<Control>0", 0, 0 },
-    { "fullscreen", "Fullscreen / Focus Mode", "F11", 0, 0 },
+    { "fullscreen", "Fullscreen", "F11", 0, 0 },
+    { "focus_mode", "Focus mode", "<Control><Shift>f", 0, 0 },
     { "copy", "Copy selected text", "<Control>c", 0, 0 },
     { "cut", "Cut selected text", "<Control>x", 0, 0 },
     { "paste", "Paste text", "<Control>v", 0, 0 },
@@ -47,8 +48,8 @@ static AppShortcut app_shortcuts[] = {
     { "replace_text", "Replace text", "<Control>h", 0, 0 },
     { "close_tab", "Close file / tab", "<Control>w", 0, 0 },
     { "open_settings", "Open settings", "<Control>comma", 0, 0 },
-    { "shortcuts_ref", "Shortcuts reference", "<Control>question", 0, 0 },
-    { "toggle_sidebar", "Toggle Sidebar", "<Control><Shift>backslash", 0, 0 },
+    { "shortcuts_ref", "Shortcuts reference", "<Control><Shift>slash", 0, 0 },
+    { "toggle_sidebar", "Toggle Sidebar", "F9", 0, 0 },
     { "toggle_read_mode", "Toggle read mode", "<Control>e", 0, 0 },
     { "inline_code", "Inline code", "<Control>k", 0, 0 },
     { "highlight", "Highlight", "<Control><Shift>h", 0, 0 },
@@ -314,10 +315,15 @@ static void on_kb_window_destroy(GtkWidget *widget, gpointer user_data) {
 
 void show_keybindings_window(AppGui *gui) {
     GtkWidget *dialog = gtk_window_new();
-    gtk_window_set_title(GTK_WINDOW(dialog), "Keyboard Shortcuts");
+    gtk_window_set_title(GTK_WINDOW(dialog), qirtas_tr("Keyboard Shortcuts"));
     gtk_window_set_default_size(GTK_WINDOW(dialog), 550, 600);
-    gtk_window_set_transient_for(GTK_WINDOW(dialog), GTK_WINDOW(gui->window));
-    gtk_window_set_modal(GTK_WINDOW(dialog), TRUE);
+    /* Float above the settings window if it's open, else the main window. */
+    GtkWindow *parent = (gui->settings_window && gtk_widget_get_visible(gui->settings_window))
+                            ? GTK_WINDOW(gui->settings_window) : GTK_WINDOW(gui->window);
+    gtk_window_set_transient_for(GTK_WINDOW(dialog), parent);
+    /* Non-modal: a modal shortcuts window blocked editing AND prevented the
+     * settings window from closing until it was dismissed. */
+    gtk_window_set_modal(GTK_WINDOW(dialog), FALSE);
     gtk_window_set_destroy_with_parent(GTK_WINDOW(dialog), TRUE);
     gtk_widget_add_css_class(dialog, "kb-dialog");
 
@@ -335,7 +341,7 @@ void show_keybindings_window(AppGui *gui) {
 
     /* Helper: add section header */
     #define KB_SECTION(label_text) { \
-        GtkWidget *_s = gtk_label_new(label_text); \
+        GtkWidget *_s = gtk_label_new(qirtas_tr(label_text)); \
         gtk_widget_add_css_class(_s, "kb-section-label"); \
         gtk_widget_set_halign(_s, GTK_ALIGN_START); \
         gtk_box_append(GTK_BOX(vbox), _s); \
@@ -358,7 +364,7 @@ void show_keybindings_window(AppGui *gui) {
         gtk_widget_add_css_class(_k, "kb-key"); \
         gtk_widget_set_halign(_k, GTK_ALIGN_START); \
         if (_curr_shortcut) g_free(_curr_shortcut); \
-        GtkWidget *_d = gtk_label_new(description); \
+        GtkWidget *_d = gtk_label_new(qirtas_tr(description)); \
         gtk_widget_add_css_class(_d, "kb-desc"); \
         gtk_widget_set_halign(_d, GTK_ALIGN_START); \
         gtk_widget_set_hexpand(_d, TRUE); \
@@ -396,7 +402,8 @@ void show_keybindings_window(AppGui *gui) {
     KB_ROW("Ctrl + = / +",   "Zoom In", "zoom_in");
     KB_ROW("Ctrl + -",       "Zoom Out", "zoom_out");
     KB_ROW("Ctrl + 0",       "Reset Zoom", "reset_zoom");
-    KB_ROW("F11",            "Fullscreen / Focus Mode", "fullscreen");
+    KB_ROW("F11",            "Fullscreen", "fullscreen");
+    KB_ROW("Ctrl + Shift+F", "Focus mode", "focus_mode");
 
     KB_SECTION("3. ADVANCED EDITING")
     KB_ROW("Ctrl + C",       "Copy selected text", "copy");
@@ -432,8 +439,8 @@ void show_keybindings_window(AppGui *gui) {
     KB_ROW("Ctrl + H",       "Replace text", "replace_text");
     KB_ROW("Ctrl + W / F4",  "Close file / tab", "close_tab");
     KB_ROW("Ctrl + ,",       "Open settings", "open_settings");
-    KB_ROW("Ctrl + ?",       "Shortcuts reference", "shortcuts_ref");
-    KB_ROW("Ctrl + \\",      "Toggle Sidebar", "toggle_sidebar");
+    KB_ROW("Ctrl + Shift+/", "Shortcuts reference", "shortcuts_ref");
+    KB_ROW("F9",             "Toggle Sidebar", "toggle_sidebar");
 
     #undef KB_SECTION
     #undef KB_ROW

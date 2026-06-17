@@ -305,6 +305,92 @@ void populate_explorer(AppGui *gui) {
     }
 }
 
+/* ── Inline "New Folder" row (Obsidian-style) ──────────────────────────────
+ * Instead of a modal dialog, drop an editable row at the top of the tree with
+ * a folder icon + text field. Enter creates the folder (zig_create_folder
+ * repopulates the tree, which removes this row); Escape or an empty name
+ * cancels. */
+typedef struct {
+    AppGui   *gui;
+    GtkWidget *row;        /* the inline row, removed on cancel */
+    char     *parent_dir;  /* NULL = vault root */
+    gboolean  done;        /* guard against double commit/cancel */
+} NewFolderData;
+
+static void new_folder_data_free(gpointer data) {
+    NewFolderData *d = (NewFolderData *)data;
+    g_free(d->parent_dir);
+    g_free(d);
+}
+
+static void new_folder_cancel(NewFolderData *d) {
+    if (d->done) return;
+    d->done = TRUE;
+    if (d->row && GTK_IS_WIDGET(d->row)) {
+        GtkWidget *parent = gtk_widget_get_parent(d->row);
+        if (parent && GTK_IS_BOX(parent)) gtk_box_remove(GTK_BOX(parent), d->row);
+    }
+}
+
+static void on_new_folder_activate(GtkEntry *entry, gpointer user_data) {
+    NewFolderData *d = (NewFolderData *)user_data;
+    if (d->done) return;
+    const char *name = gtk_editable_get_text(GTK_EDITABLE(entry));
+    if (!name || !name[0]) { new_folder_cancel(d); return; }
+    d->done = TRUE;
+    extern void zig_create_folder(const char *name);
+    if (d->parent_dir && d->parent_dir[0]) {
+        char *full = g_strdup_printf("%s/%s", d->parent_dir, name);
+        zig_create_folder(full);   /* mkdir + gui_refresh_explorer repopulates */
+        g_free(full);
+    } else {
+        zig_create_folder(name);
+    }
+    /* The deferred explorer refresh rebuilds the tree, dropping this row. */
+}
+
+static gboolean on_new_folder_key(GtkEventControllerKey *ctrl, guint keyval,
+                                  guint keycode, GdkModifierType state, gpointer user_data) {
+    (void)ctrl; (void)keycode; (void)state;
+    if (keyval == GDK_KEY_Escape) {
+        new_folder_cancel((NewFolderData *)user_data);
+        return TRUE;
+    }
+    return FALSE;
+}
+
+void explorer_begin_new_folder(AppGui *gui, const char *parent_dir) {
+    if (!gui || !gui->explorer_listbox) return;
+
+    NewFolderData *d = g_new0(NewFolderData, 1);
+    d->gui = gui;
+    d->parent_dir = parent_dir ? g_strdup(parent_dir) : NULL;
+
+    GtkWidget *row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 4);
+    gtk_widget_add_css_class(row, "tree-row");
+    d->row = row;
+
+    GtkWidget *icon = gtk_image_new_from_icon_name("folder-new-symbolic");
+    gtk_widget_add_css_class(icon, "tree-icon-folder");
+    gtk_box_append(GTK_BOX(row), icon);
+
+    GtkWidget *entry = gtk_entry_new();
+    gtk_entry_set_placeholder_text(GTK_ENTRY(entry), qirtas_tr("Folder name"));
+    gtk_widget_set_hexpand(entry, TRUE);
+    gtk_box_append(GTK_BOX(row), entry);
+
+    /* Tie the data lifetime to the entry; freed when the row is destroyed. */
+    g_object_set_data_full(G_OBJECT(entry), "nf_data", d, new_folder_data_free);
+    g_signal_connect(entry, "activate", G_CALLBACK(on_new_folder_activate), d);
+
+    GtkEventController *key = gtk_event_controller_key_new();
+    g_signal_connect(key, "key-pressed", G_CALLBACK(on_new_folder_key), d);
+    gtk_widget_add_controller(entry, key);
+
+    gtk_box_prepend(GTK_BOX(gui->explorer_listbox), row);
+    gtk_widget_grab_focus(entry);
+}
+
 /* Recursively walk the tree GtkBox and show/hide file rows matching query */
 static int tree_filter_walk(GtkWidget *box, const char *query, int *match_count) {
     GtkWidget *child = gtk_widget_get_first_child(box);

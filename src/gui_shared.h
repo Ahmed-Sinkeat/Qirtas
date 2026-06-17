@@ -22,6 +22,20 @@ extern void zig_undo_clear(void);
 extern int zig_save_document(void);
 extern const char *zig_get_document_text(void);
 extern void zig_free_document_text(const char *ptr);
+/* Portable text logic (src/markdown.zig). */
+extern int zig_detect_rtl(const char *text);          /* 1 = RTL paragraph, 0 = LTR */
+extern int zig_heading_level(const char *line);       /* ATX heading level 1-6, else 0 */
+extern int zig_fuzzy_score(const char *haystack, const char *needle); /* -1 = no match */
+/* Build Arabic-tolerant search regex from NFKC-normalized input. Returns a
+ * Zig-allocated string — free with zig_free_document_text, NOT g_free. */
+extern char *zig_arabic_search_regex(const char *normalized_input);
+/* Markdown table structure (src/markdown.zig). */
+extern int zig_table_is_delimiter(const char *line);  /* 1 = delimiter row */
+extern int zig_table_is_row(const char *line);         /* 1 = plausible table row */
+extern int zig_table_aligns(const char *delim, int *out_codes, int max); /* per-col 0/1/2; returns count */
+/* Fenced code blocks (src/markdown.zig). */
+extern int zig_fence_only(const char *line);                          /* 1 = closing/bare fence */
+extern int zig_code_fence_lang(const char *line, char *out, int max); /* 1 = opening fence; out = language */
 
 /* Zig -> C FFI */
 void gui_set_text(const char *text, int len);
@@ -76,8 +90,10 @@ extern void zig_save_github_credentials(const char *token, const char *repo);
 extern int zig_get_github_credentials_decrypted(char *token_buf, int token_buf_max, char *repo_buf, int repo_buf_max);
 extern int zig_get_dropbox_credentials_decrypted(char *client_id_buf, int client_id_max, char *client_secret_buf, int client_secret_max);
 extern void zig_github_now(void);
+extern void zig_github_connect_with_token(const char *token, const char *repo);
 extern int zig_github_check_status(void);
 extern void zig_github_disconnect(void);
 extern void zig_local_sync_now(void);
+extern unsigned long zig_pkce_challenge(char *out, unsigned long out_max);
 extern void zig_set_editor_border(int enabled);
 extern int zig_get_editor_border(void);

@@ -1,6 +1,7 @@
 #include "gui_internal.h"
 #include <string.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <unistd.h>
 
 static char custom_theme_path[1024] = "";
@@ -14,22 +15,46 @@ static const char *CSS_FALLBACK_MINIMAL =
     ".tree-row   { padding: 4px 8px; border-radius: 6px; }\n"
     ".bottom-bar { padding: 4px 12px; }\n";
 
+/* Resolve a bundled resource (CSS, logo, icons) given a repo-relative path like
+ * "src/ui/themes/base.css". Search order:
+ *   1. $QIRTAS_DATA_DIR/<rel>            (explicit override)
+ *   2. <exe>/../../<rel>                 (running from the build tree)
+ *   3. <exe>/<rel>                       (assets alongside the binary)
+ *   4. /usr/share/qirtas/<rel>,
+ *      /usr/local/share/qirtas/<rel>     (system install)
+ * Falls back to the bare relative path if nothing exists, so callers still get
+ * a non-NULL string (load then fails into the minimal CSS / placeholder). */
 static char *resolve_resource_path(const char *rel_path) {
     static char abs_path[2048];
+
+    const char *data_dir = getenv("QIRTAS_DATA_DIR");
+    if (data_dir && data_dir[0]) {
+        snprintf(abs_path, sizeof(abs_path), "%s/%s", data_dir, rel_path);
+        if (access(abs_path, F_OK) == 0) return abs_path;
+    }
+
     char exe_path[1024] = {0};
     ssize_t exe_len = readlink("/proc/self/exe", exe_path, sizeof(exe_path) - 1);
     if (exe_len > 0) {
         exe_path[exe_len] = '\0';
         char *last_slash = strrchr(exe_path, '/');
         if (last_slash) *last_slash = '\0';
-        
+
         snprintf(abs_path, sizeof(abs_path), "%s/../../%s", exe_path, rel_path);
-        
-        if (access(abs_path, F_OK) != 0) {
-            snprintf(abs_path, sizeof(abs_path), "%s/%s", exe_path, rel_path);
-        }
-        return abs_path;
+        if (access(abs_path, F_OK) == 0) return abs_path;
+
+        snprintf(abs_path, sizeof(abs_path), "%s/%s", exe_path, rel_path);
+        if (access(abs_path, F_OK) == 0) return abs_path;
     }
+
+    static const char *const sys_prefixes[] = {
+        "/usr/share/qirtas", "/usr/local/share/qirtas",
+    };
+    for (size_t i = 0; i < sizeof(sys_prefixes) / sizeof(sys_prefixes[0]); i++) {
+        snprintf(abs_path, sizeof(abs_path), "%s/%s", sys_prefixes[i], rel_path);
+        if (access(abs_path, F_OK) == 0) return abs_path;
+    }
+
     strncpy(abs_path, rel_path, sizeof(abs_path) - 1);
     abs_path[sizeof(abs_path) - 1] = '\0';
     return abs_path;
@@ -60,8 +85,8 @@ void update_editor_font(AppGui *gui) {
      * must be honored HERE (emitting it only in the theme provider made
      * the setting a no-op). */
     char caret_value[64];
-    if (gui->use_custom_pointer_color) {
-        gchar *rgba_str = gdk_rgba_to_string(&gui->custom_pointer_color);
+    if (gui->cursor.use_custom_pointer_color) {
+        gchar *rgba_str = gdk_rgba_to_string(&gui->cursor.custom_pointer_color);
         g_strlcpy(caret_value, rgba_str, sizeof(caret_value));
         g_free(rgba_str);
     } else {
@@ -83,13 +108,6 @@ void update_editor_font(AppGui *gui) {
         caret_value);
     gtk_css_provider_load_from_string(gui->font_provider, css);
     gui_remeasure_line_height();
-}
-
-void on_font_size_changed(GtkSpinButton *spin, gpointer user_data) {
-    AppGui *gui = (AppGui *)user_data;
-    if (!gui || !spin) return;
-    gui->current_font_size = gtk_spin_button_get_value(spin);
-    update_editor_font(gui);
 }
 
 static void on_custom_font_dialog_response(GObject *source_object, GAsyncResult *res, gpointer user_data) {
@@ -248,6 +266,8 @@ void apply_theme(AppGui *gui, const char *theme_name) {
         theme_name = "qirtas";
     }
     g_strlcpy(gui->current_theme, theme_name, sizeof(gui->current_theme));
+    /* Persist the choice so it is the default on next launch. */
+    qirtas_pref_set_string("theme", theme_name);
 
     AdwStyleManager *style_manager = adw_style_manager_get_default();
     if (strcmp(theme_name, "sepia") == 0 || strcmp(theme_name, "typewriter-light") == 0 || strcmp(theme_name, "qirtas") == 0 || strcmp(theme_name, "navy") == 0) {
@@ -326,8 +346,8 @@ void apply_theme(AppGui *gui, const char *theme_name) {
 
     if (gui->css_provider) {
         gchar *caret_css = NULL;
-        if (gui->use_custom_pointer_color) {
-            gchar *rgba_str = gdk_rgba_to_string(&gui->custom_pointer_color);
+        if (gui->cursor.use_custom_pointer_color) {
+            gchar *rgba_str = gdk_rgba_to_string(&gui->cursor.custom_pointer_color);
             caret_css = g_strdup_printf(
                 "textview, textview.sourceview, .editor-source {\n"
                 "  caret-color: %s;\n"
@@ -377,6 +397,65 @@ void apply_theme(AppGui *gui, const char *theme_name) {
             "  min-height: 1px;\n"
             "  margin-top: 16px;\n"
             "  margin-bottom: 16px;\n"
+            "}\n"
+            /* Fenced-code-block header pill. Theme-agnostic: a translucent grey
+             * fill works on light and dark, and the label/button inherit the
+             * view's text colour via opacity rather than a hard-coded colour. */
+            ".code-pill {\n"
+            "  background-color: rgba(127,127,127,0.12);\n"
+            "  border-radius: 8px;\n"
+            "  padding: 1px 6px 1px 12px;\n"
+            "  margin-top: 8px;\n"
+            "  margin-bottom: 2px;\n"
+            "}\n"
+            ".code-pill-lang {\n"
+            "  font-size: 0.82em;\n"
+            "  font-weight: 600;\n"
+            "  letter-spacing: 0.04em;\n"
+            "  opacity: 0.65;\n"
+            "}\n"
+            ".code-pill-copy {\n"
+            "  min-height: 22px;\n"
+            "  min-width: 22px;\n"
+            "  padding: 2px;\n"
+            "  opacity: 0.7;\n"
+            "}\n"
+            ".code-pill-copy:hover { opacity: 1; }\n"
+            /* Rendered markdown table. Translucent borders/fills read on light
+             * and dark; cell text inherits the view colour. */
+            ".md-table {\n"
+            "  border: 1px solid rgba(127,127,127,0.35);\n"
+            "  border-radius: 6px;\n"
+            "  margin-top: 6px;\n"
+            "  margin-bottom: 6px;\n"
+            "}\n"
+            ".md-table-cell {\n"
+            "  padding: 4px 12px;\n"
+            "  border-right: 1px solid rgba(127,127,127,0.18);\n"
+            "  border-bottom: 1px solid rgba(127,127,127,0.18);\n"
+            "}\n"
+            ".md-table-header {\n"
+            "  font-weight: 700;\n"
+            "  background-color: rgba(127,127,127,0.12);\n"
+            "}\n"
+            /* Insert-table size picker (right-click → Table). */
+            ".tpick-cell {\n"
+            "  min-width: 20px;\n"
+            "  min-height: 20px;\n"
+            "  padding: 0;\n"
+            "  border: 1px solid rgba(127,127,127,0.5);\n"
+            "  border-radius: 2px;\n"
+            "  background-image: none;\n"
+            "  background-color: transparent;\n"
+            "}\n"
+            ".tpick-cell.tpick-hot { background-color: rgba(127,127,127,0.55); }\n"
+            ".tpick-label { font-size: 0.85em; opacity: 0.7; }\n"
+            ".copy-toast {\n"
+            "  background-color: rgba(0,0,0,0.82);\n"
+            "  color: #ffffff;\n"
+            "  padding: 6px 14px;\n"
+            "  border-radius: 14px;\n"
+            "  font-size: 0.9em;\n"
             "}\n",
             css_body,
             caret_css,

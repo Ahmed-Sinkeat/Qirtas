@@ -596,8 +596,8 @@ static gboolean export_with_theme(AppGui *gui, const PrintTheme *t, const char *
     }
 
     const char *title = "Qirtas Document";
-    if (gui->active_tab_index != -1 && gui->active_tab_index < gui->num_tabs)
-        title = gui->open_tabs[gui->active_tab_index];
+    if (gui->tabs.active != -1 && gui->tabs.active < gui->tabs.count)
+        title = gui->tabs.paths[gui->tabs.active];
     cairo_pdf_surface_set_metadata(surface, CAIRO_PDF_METADATA_TITLE, title);
     cairo_pdf_surface_set_metadata(surface, CAIRO_PDF_METADATA_CREATOR, "Qirtas");
 

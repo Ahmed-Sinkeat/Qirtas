@@ -9,6 +9,7 @@ zig-out/
 *.before_*
 test_run.log
 crash_run.log
+log.txt
 test_*.md
 2026-*-this-session-*.txt
 
@@ -29,3 +30,17 @@ src/ىى.md
 
 # Stale rescue copies / leftover stubs swept up during clobber cleanup
 /_archive/
+
+# Arch packaging build artifacts (makepkg)
+packaging/src/
+packaging/pkg/
+packaging/*.pkg.tar.zst
+packaging/*.pkg.tar.zst.sig
+
+# AppImage build artifacts
+packaging/appimage/build/
+packaging/appimage/*.AppImage
+
+# Flatpak build artifacts
+packaging/build-dir/
+packaging/.flatpak-builder/
