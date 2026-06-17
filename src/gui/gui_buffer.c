@@ -502,6 +502,10 @@ static gboolean buffer_stats_timeout_cb(gpointer user_data) {
         gui->code_pill_dirty = FALSE;
         parse_and_render_code_pills(buf, gui);
     }
+    if (gui->table_dirty) {
+        gui->table_dirty = FALSE;
+        parse_and_render_tables(buf, gui);
+    }
 
     QIRTAS_PERF_END("buffer_stats_timeout_cb");
     return G_SOURCE_REMOVE;
@@ -819,6 +823,8 @@ void on_insert_text_after(GtkTextBuffer *buf, GtkTextIter *location, gchar *text
     /* A backtick may have closed a fenced code block (typed or pasted from a
      * chat UI). Flag it so the stats debounce re-runs the code-pill pass. */
     if (memchr(text, '`', len)) gui->code_pill_dirty = TRUE;
+    /* A pipe may have completed/extended a markdown table row. */
+    if (memchr(text, '|', len)) gui->table_dirty = TRUE;
     mark_outline_dirty(gui, buf, start_line, end_line, start_col);
 
     /* Incremental word count: the inserted text turned the old single line

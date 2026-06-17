@@ -203,6 +203,11 @@ typedef struct {
      * FALSE keeps the O(document) pill scan off the hot path for normal edits. */
     gboolean code_pill_dirty;
 
+    /* TRUE when an edit inserted a '|' — a markdown table row may have been
+     * typed or pasted. The stats debounce then re-runs the table render pass.
+     * See gui_table.c (reveal-on-cursor grid rendering). */
+    gboolean table_dirty;
+
     /* TRUE when an edit since the last debounce may have changed the heading
      * outline (line added/removed, or a heading line touched). The stats
      * debounce rebuilds gui_outline_refresh only when set — a plain keystroke
@@ -428,6 +433,10 @@ void on_theme_dropdown_changed(GObject *gobject, GParamSpec *pspec, gpointer use
 void check_and_insert_hr(GtkTextBuffer *buf, AppGui *gui);
 void parse_and_render_hrs(GtkTextBuffer *buf, AppGui *gui);
 void parse_and_render_code_pills(GtkTextBuffer *buf, AppGui *gui);
+void parse_and_render_tables(GtkTextBuffer *buf, AppGui *gui);
+gboolean gui_table_reveal_at_cursor(GtkTextBuffer *buf, AppGui *gui);
+void gui_table_on_cursor_moved(GtkTextBuffer *buf, AppGui *gui);
+void gui_table_reset_reveal(GtkTextBuffer *buf);
 void apply_theme(AppGui *gui, const char *theme_name);
 gboolean qirtas_theme_is_dark(const char *theme_name);
 void gui_update_brand_logo(AppGui *gui);

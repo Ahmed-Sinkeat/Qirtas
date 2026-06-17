@@ -38,6 +38,14 @@ Run before every push that touches the editor core (`src/main.zig` edit paths,
 - [ ] Save a pilled file and reopen: the raw ``` fences are intact on disk (no corruption)
 - [ ] Both light and dark themes: pill + body readable
 
+## Tables
+- [ ] Open a file with a `| a | b |` + `|---|---|` table: renders as a bordered grid, bold header, alignment from the delimiter colons
+- [ ] Move the cursor into the table: reverts to raw `| … |` markdown; move out: re-grids
+- [ ] Stress: arrow up/down through the table repeatedly — no crash (regression: widget teardown re-entrancy)
+- [ ] Edit a cell while raw, move out: grid reflects the edit
+- [ ] Save + reopen: the `|` pipes are intact on disk
+- [ ] Arabic doc: table lays out RTL (first column on the right)
+
 ## Arabic
 - [ ] Type Arabic in a fresh line: paragraph flips RTL immediately
 - [ ] Search نقية finds نقيه (and vice versa)

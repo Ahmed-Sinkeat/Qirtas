@@ -19,6 +19,10 @@ extern void on_insert_text_before(GtkTextBuffer *buf, GtkTextIter *location, gch
 extern void on_insert_text_after(GtkTextBuffer *buf, GtkTextIter *location, gchar *text, gint len, gpointer user_data);
 extern void on_delete_range_after(GtkTextBuffer *buf, GtkTextIter *start, GtkTextIter *end, gpointer user_data);
 extern void on_buffer_changed(GtkTextBuffer *buf, gpointer user_data);
+/* Blocked alongside the others: our delete/insert moves the cursor mark and
+ * fires mark-set synchronously; on_mark_set's conceal pass then runs on a
+ * half-mutated buffer with stale iterators. */
+extern void on_mark_set(GtkTextBuffer *buf, GtkTextIter *location, GtkTextMark *mark, gpointer user_data);
 
 /* A line that is only a code fence: optional leading whitespace, 3+ backticks,
  * then optional trailing whitespace. Used for the CLOSING fence. */
@@ -161,6 +165,7 @@ void parse_and_render_code_pills(GtkTextBuffer *buf, AppGui *gui) {
     g_signal_handlers_block_by_func(buf, on_insert_text_after, gui);
     g_signal_handlers_block_by_func(buf, on_delete_range_after, gui);
     g_signal_handlers_block_by_func(buf, on_buffer_changed, gui);
+    g_signal_handlers_block_by_func(buf, on_mark_set, gui);
 
     GtkTextTag *hide = fence_hide_tag(buf);
     GtkTextTag *body = code_body_tag(buf);
@@ -271,6 +276,7 @@ void parse_and_render_code_pills(GtkTextBuffer *buf, AppGui *gui) {
     g_signal_handlers_unblock_by_func(buf, on_insert_text_after, gui);
     g_signal_handlers_unblock_by_func(buf, on_delete_range_after, gui);
     g_signal_handlers_unblock_by_func(buf, on_buffer_changed, gui);
+    g_signal_handlers_unblock_by_func(buf, on_mark_set, gui);
 
     /* A block was left raw because the cursor was on its fence — re-arm so the
      * next edit (the writer typing/leaving the line) renders it. */
