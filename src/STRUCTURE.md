@@ -34,6 +34,7 @@ Qirtas/
 │       ├── gui_wiki.c                   ← Wiki-link parsing and navigation, idle guard
 │       ├── gui_hr.c                     ← Horizontal rule renderer
 │       ├── gui_codeblock.c              ← Fenced-code-block pill (language label + copy button)
+│       ├── gui_table.c                  ← Markdown table grid render, reveal-on-cursor
 │       ├── gui_search.c                 ← Inline search bar overlay
 │       ├── gui_explorer.c               ← File tree (rows, right-click menu, search filter)
 │       ├── gui_outline.c                ← Document outline / table-of-contents panel

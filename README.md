@@ -36,6 +36,10 @@ logos — dark ink on bright paper, bone-white ink on black.
   monospace, and the closing fence is hidden. Type a block, paste one from a
   chat, or insert it from the format menu (**Code block**) and type the
   language; your file stays plain ` ``` ` markdown on disk
+- **Tables render as a grid** — a bordered table with a bold header and
+  per-column alignment from the `:--`/`:-:`/`--:` delimiter. Move the cursor in
+  and it reverts to raw `| … |` markdown to edit; move out and it re-renders.
+  Direction-aware (lays out RTL in Arabic context). Saved as plain pipes
 - **First-class Arabic** — full RTL layout mode, per-paragraph direction by
   first strong character (markdown syntax doesn't fool it), Arabic font
   selection, normalized search (alef forms, ة/ه, ى/ي, tashkeel-insensitive —

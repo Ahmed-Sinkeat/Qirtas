@@ -201,6 +201,8 @@ void update_editor_font(AppGui *gui);
 void check_and_insert_hr(GtkTextBuffer *buf, AppGui *gui);
 void parse_and_render_hrs(GtkTextBuffer *buf, AppGui *gui);
 void parse_and_render_code_pills(GtkTextBuffer *buf, AppGui *gui);
+void parse_and_render_tables(GtkTextBuffer *buf, AppGui *gui);
+void gui_table_reset_reveal(GtkTextBuffer *buf);
 static char *replace_anchors_with_hrs(const char *src);
 void apply_paragraph_alignment(GtkTextBuffer *buf, GtkJustification justification);
 void move_current_line(GtkTextBuffer *buf, gboolean up);
@@ -3264,6 +3266,10 @@ void gui_set_text(const char *text, int len) {
     if (!global_source_view || !global_gui) return;
     GtkTextBuffer *buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(global_source_view));
 
+    /* Drop any table reveal state tied to the outgoing document before the
+     * content swap, so its mark can't re-grid a stale range. */
+    gui_table_reset_reveal(buf);
+
     /* Wholesale content swap: invalidate any deferred conceal/wiki/HR passes
      * queued against the OUTGOING document. Their generation guard cancels them
      * instead of letting them run apply_tag/insert with now-stale iterators
@@ -3282,6 +3288,7 @@ void gui_set_text(const char *text, int len) {
 
     parse_and_render_hrs(buf, global_gui);
     parse_and_render_code_pills(buf, global_gui);
+    parse_and_render_tables(buf, global_gui);
     /* A freshly loaded file is not a user edit — don't mark it dirty (was
      * lighting the unsaved dot on every tab the moment it opened). */
     gtk_text_buffer_set_modified(buf, FALSE);

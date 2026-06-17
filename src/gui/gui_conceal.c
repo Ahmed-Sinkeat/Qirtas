@@ -693,6 +693,9 @@ void on_mark_set(GtkTextBuffer *buf, GtkTextIter *location, GtkTextMark *mark, g
         cursor_trail_wake(gui);
         /* Defer tag updates to idle so Pango layout is stable and doesn't get stale byte-index cache. */
         update_conceal_markdown(buf);
+        /* Reveal a markdown table to raw text when the cursor enters it, and
+         * re-grid it when the cursor leaves (deferred to idle internally). */
+        gui_table_on_cursor_moved(buf, gui);
 
         if (!gtk_widget_get_realized(gui->source_view)) return;
         if (gui->primary_button_down && !gui->mouse_dragging) return;
