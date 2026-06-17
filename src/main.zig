@@ -1,6 +1,16 @@
 const std = @import("std");
 const Io = std.Io;
 const sync = @import("sync.zig");
+/// Portable markdown/text logic (see docs/PORTABILITY.md). Referenced here so
+/// its C-ABI exports are linked into the binary and its tests run under
+/// `zig build test`.
+pub const markdown = @import("markdown.zig");
+comptime {
+    _ = markdown;
+}
+test {
+    _ = markdown; // pull markdown.zig's tests into `zig build test`
+}
 
 /// XDG-correct config directory: $XDG_CONFIG_HOME/qirtas, falling back to
 /// $HOME/.config/qirtas, then /tmp/qirtas. Computed once.

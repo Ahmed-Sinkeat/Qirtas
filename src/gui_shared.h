@@ -22,6 +22,8 @@ extern void zig_undo_clear(void);
 extern int zig_save_document(void);
 extern const char *zig_get_document_text(void);
 extern void zig_free_document_text(const char *ptr);
+/* Portable text logic (src/markdown.zig). 1 = RTL paragraph, 0 = LTR. */
+extern int zig_detect_rtl(const char *text);
 
 /* Zig -> C FFI */
 void gui_set_text(const char *text, int len);

@@ -1,0 +1,77 @@
+# Portability plan — grow the Zig core (Windows + Android)
+
+Goal: ship Qirtas on **Linux** (now), **Windows** (later), **Android** (later, Kotlin/Compose UI).
+This doc is the standing plan for *how* — read it before adding markdown/text logic.
+
+## The one rule
+
+> **Logic goes in Zig. C only renders.**
+> Every editor decoration = **parse (Zig, portable, tested)** + **render (per-platform)**.
+
+```
+Zig:      parse_tables(text) → [{row, col, align, cell}]   ← one shared brain
+Linux C:  spans → GtkGrid + GtkTextTags
+Android:  spans → Jetpack Compose (via JNI)
+```
+
+Today the markdown parser lives in **C** (`gui_conceal.c`, `gui_table.c`, `gui_export.c`…), so an Android
+Kotlin UI would have to re-implement the whole parser — a second brain that drifts. Moving parsers to Zig
+gives every platform one parser.
+
+## Where we are (measured)
+
+| Layer | Lines | % | GTK? |
+|---|---|---|---|
+| Zig core (`main.zig`, `sync.zig`) | 5,993 | 29% | none |
+| C/GTK UI (`gui.c` + `gui/*.c`) | 14,852 | 71% | 2,840 gtk/pango/cairo calls |
+
+FFI seam already exists: Zig exports **63** `zig_*` C-ABI functions; the Zig core calls **24** `gui_*`
+callbacks (the UI contract each platform implements). `aarch64-linux-android` is a Zig target; the same
+`export fn … callconv(.c)` functions bind from Kotlin with `external fun` over JNI.
+
+Moving the ~2,768 movable lines below grows the portable core to **~42%** and, more importantly, puts the
+**markdown parser** in the shared core.
+
+## Platform notes
+
+- **Windows** — GTK4 + libadwaita + GtkSourceView run on Windows (gvsbuild/MSYS2). No decoupling needed;
+  effort is build/packaging only. The Zig core cross-compiles trivially.
+- **Android** — GTK does **not** run on Android. Reuse the Zig core via JNI; build a new Kotlin/Compose UI.
+  This plan is what makes that UI cheap (it renders spans, doesn't re-parse markdown).
+
+## Move order (checklist)
+
+Do it **incrementally, one parser per feature** — never big-bang. No Linux-visible change; this is a
+portability + testability investment. Each move also becomes a `zig build test-regression` unit (closes the
+C-untested gap).
+
+### Tier 1 — pure logic, low risk (batch now)
+- [x] `gui_rtl.c` → `detect_rtl` / `is_arabic_char` (~75 lines) — Arabic core, high Android value *(template move — see src/markdown.zig)*
+- [ ] `gui_i18n.c` → translation table + `qirtas_tr` (~145 lines, pure data)
+- [ ] `gui_index.c` → SQLite FTS + file indexing (~210 lines, already FFI'd from Zig sync)
+- [ ] `gui_search.c` → Arabic search normalization (~45 lines)
+- [ ] `gui_outline.c` → heading extraction (~35 lines)
+- [ ] `gui_switcher.c` → fuzzy match + dir walk (~68 lines)
+- [ ] `gui_shortcuts.c` → shortcut-string parse (~67 lines)
+
+### Tier 2 — the markdown parsers (the real prize, ~1,420 lines)
+- [ ] `gui_conceal.c` → marker parsing (~520) — biggest; extract regex/offset layer first
+- [ ] `gui_buffer.c` → word count, UTF-8 boundaries, heading detect (~320)
+- [ ] `gui_wiki.c` → `[[link]]` parse (~180)
+- [ ] `gui_table.c` → `split_row` / `is_delimiter_row` / alignment (~180)
+- [ ] `gui_export.c` → `parse_blocks` / `parse_inline` (~155)
+- [ ] `gui_codeblock.c` → fence/language parse (~65)
+
+### Keep 100% C (don't bother — pure GTK plumbing)
+`gui.c` (3512), `gui_theme.c`, `gui_layout.c`, `gui_tabs.c`, `gui_statusbar.c`, `gui_hr.c`.
+
+## Per-feature migration recipe
+
+1. Write the pure parser in Zig (e.g. `src/markdown.zig`), returning a span/struct list. Export with
+   `pub export fn … callconv(.c)` + a C-ABI struct in `gui_shared.h`.
+2. Replace the C parsing code with a call to the Zig function; keep the GTK render code as-is.
+3. Add Zig tests (`integration:`/unit) — the parser is now covered by `zig build test-regression`.
+4. Verify the Linux render is unchanged (smoke checklist).
+5. The same `zig_*` export is the Android JNI entry point — no extra work for Kotlin reuse.
+
+API tip: return a **batch** (whole span list per pass), not per-char FFI, so the boundary stays cheap.
