@@ -31,6 +31,11 @@ logos — dark ink on bright paper, bone-white ink on black.
   (`**`, `#`, links fade away outside the cursor line), heading scaling,
   task/bullet/numbered list continuation, horizontal rules, wiki-links
   (`[[note]]`) with hover navigation
+- **Fenced code blocks render as a card** — a header pill shows the language
+  (` ```bash ` → **Bash**) with a one-click copy button, the body is set in
+  monospace, and the closing fence is hidden. Type a block, paste one from a
+  chat, or insert it from the format menu (**Code block**) and type the
+  language; your file stays plain ` ``` ` markdown on disk
 - **First-class Arabic** — full RTL layout mode, per-paragraph direction by
   first strong character (markdown syntax doesn't fool it), Arabic font
   selection, normalized search (alef forms, ة/ه, ى/ي, tashkeel-insensitive —
@@ -62,9 +67,11 @@ Requires Zig (recent), GTK4, Libadwaita, GtkSourceView 5, and SQLite3
 (`curl` is only needed for the GitHub connect dialog).
 
 ```sh
-zig build          # build
-zig build run      # run
-zig build test     # test suite
+zig build               # build
+zig build run           # run
+zig build test          # full test suite (unit + integration)
+zig build test-integration  # integration round-trips only
+zig build test-regression   # regression gate (what CI runs on every push)
 ```
 
 Config and the vault DB live in `$XDG_CONFIG_HOME/qirtas/`

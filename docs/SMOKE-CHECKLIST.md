@@ -30,6 +30,14 @@ Run before every push that touches the editor core (`src/main.zig` edit paths,
 - [ ] `file_history` table in vault DB gains a row after editing + pause (≥5 min since last)
 - [ ] Encrypted vault: same two checks pass
 
+## Code blocks
+- [ ] Open a file with a ` ```bash ` block: header pill shows **Bash**, body is monospace on a card, closing ``` hidden
+- [ ] Copy button copies the code (paste elsewhere) and flips to a checkmark
+- [ ] Paste a fenced block (e.g. from a chat): pill appears within ~0.5s
+- [ ] Format menu → **Code block**: cursor lands after ```` ``` ````; type `rust`, move into body → pill shows **Rust**
+- [ ] Save a pilled file and reopen: the raw ``` fences are intact on disk (no corruption)
+- [ ] Both light and dark themes: pill + body readable
+
 ## Arabic
 - [ ] Type Arabic in a fresh line: paragraph flips RTL immediately
 - [ ] Search نقية finds نقيه (and vice versa)

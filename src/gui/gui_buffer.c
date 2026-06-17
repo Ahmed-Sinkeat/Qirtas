@@ -495,6 +495,14 @@ static gboolean buffer_stats_timeout_cb(gpointer user_data) {
                    _outline_ms, _outline_rebuilt ? "rebuilt" : "skipped",
                    char_count, line_count, word_count);
     }
+    /* A code fence was just typed/pasted: render its pill now (self-blocks the
+     * buffer handlers, so it's safe outside the load path). Gated on the flag so
+     * normal edits never pay for the full-buffer scan. */
+    if (gui->code_pill_dirty) {
+        gui->code_pill_dirty = FALSE;
+        parse_and_render_code_pills(buf, gui);
+    }
+
     QIRTAS_PERF_END("buffer_stats_timeout_cb");
     return G_SOURCE_REMOVE;
 }
@@ -808,6 +816,9 @@ void on_insert_text_after(GtkTextBuffer *buf, GtkTextIter *location, gchar *text
     int end_line = gtk_text_iter_get_line(location);
     update_paragraph_direction_lines(buf, start_line, end_line);
     mark_conceal_dirty(gui, start_line, end_line);
+    /* A backtick may have closed a fenced code block (typed or pasted from a
+     * chat UI). Flag it so the stats debounce re-runs the code-pill pass. */
+    if (memchr(text, '`', len)) gui->code_pill_dirty = TRUE;
     mark_outline_dirty(gui, buf, start_line, end_line, start_col);
 
     /* Incremental word count: the inserted text turned the old single line

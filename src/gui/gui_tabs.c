@@ -462,6 +462,7 @@ static gboolean reload_finalize_idle(gpointer data) {
     if (!global_gui || !global_gui->source_view) return G_SOURCE_REMOVE;
     GtkTextBuffer *buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(global_gui->source_view));
     parse_and_render_hrs(buf, global_gui);
+    parse_and_render_code_pills(buf, global_gui);
     update_all_paragraphs_direction(buf);
     apply_wiki_link_tags(buf);
     gui_outline_refresh(global_gui);

@@ -486,6 +486,39 @@ static void on_insert_hr_clicked(GtkButton *btn, gpointer user_data) {
     insert_horizontal_rule(buf);
 }
 
+/* Insert a fenced code block around the selection (or an empty block) and drop
+ * the cursor right after the opening ``` so the writer can type the language
+ * (bash, rust, …). The pill renders once the cursor leaves the fence line — see
+ * parse_and_render_code_pills(). */
+static void on_insert_code_block_clicked(GtkButton *btn, gpointer user_data) {
+    (void)btn;
+    PopoverData *pd = (PopoverData *)user_data;
+    GtkTextBuffer *buf = pd->buf;
+    close_open_submenu(pd);
+    gtk_popover_popdown(GTK_POPOVER(pd->popover));
+    if (global_source_view) gtk_widget_grab_focus(global_source_view);
+
+    gint s = pd->saved_start, e = pd->saved_end;
+    gchar *sel = NULL;
+    if (s != e) {
+        GtkTextIter is, ie;
+        gtk_text_buffer_get_iter_at_offset(buf, &is, s);
+        gtk_text_buffer_get_iter_at_offset(buf, &ie, e);
+        sel = gtk_text_buffer_get_text(buf, &is, &ie, TRUE);
+    }
+    const char *body = sel ? sel : "";
+    gboolean body_nl = (body[0] != '\0' && body[strlen(body) - 1] == '\n');
+    char *block = g_strconcat("```\n", body, body_nl ? "" : "\n", "```\n", NULL);
+
+    Position sp = gui_buffer_replace(buf, s, e, block);
+    Position cur = advance_position(sp, "```"); /* land just after the backticks */
+    gui_set_cursor_position(cur.line + 1, cur.col);
+    if (global_gui) global_gui->code_pill_dirty = TRUE;
+
+    g_free(block);
+    g_free(sel);
+}
+
 static GtkWidget *build_format_submenu_box(PopoverData *pd) {
     GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 2);
     gtk_widget_set_margin_start(box, 4);
@@ -504,6 +537,11 @@ static GtkWidget *build_format_submenu_box(PopoverData *pd) {
             btn = flyout_item(f_labels[i], f_prefixes[i], f_suffixes[i], G_CALLBACK(on_format_clicked), pd);
         }
         gtk_box_append(GTK_BOX(box), btn);
+        if (i == 4) { /* right after inline "Code": the fenced-block + pill action */
+            GtkWidget *cb = flyout_item("Code block", NULL, NULL,
+                                        G_CALLBACK(on_insert_code_block_clicked), pd);
+            gtk_box_append(GTK_BOX(box), cb);
+        }
     }
     return box;
 }
