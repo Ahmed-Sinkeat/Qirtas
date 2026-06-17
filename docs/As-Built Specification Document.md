@@ -378,16 +378,27 @@ Three layers between a keystroke and durable storage:
    `gui_trigger_autosave()` 2.5 s after typing stops. The 30 s autosave
    thread stays as the backstop. Worst-case loss on `kill -9`: ~2.5 s of
    typing. Verified by smoke checklist (`docs/SMOKE-CHECKLIST.md`).
+   `gui_trigger_autosave` serializes the Zig source-of-truth (`doc_buf`) via
+   `zig_save_document()` — **not** the GTK view; serializing the view dropped
+   view-only child anchors (HR / table header / code-fence) and silently lost
+   those lines (`docs/ISSUES.md` #4, fixed 2026-06-17).
 2. **Atomic writes.** All save paths go through `atomicWriteFile`
-   (tmp → fsync → rename), see §9.
+   (tmp → fsync → rename), see §9. Encrypted files carry a magic+version header
+   (`ENC_MAGIC`/`ENC_VERSION`); a header-bearing file that fails to decrypt is
+   loaded read-only (`active_load_failed`) and every save path refuses to write
+   over it, so a wrong-key/migration open can no longer destroy the original
+   (`docs/ISSUES.md` #1, fixed 2026-06-17).
 3. **Snapshot history.** After each successful autosave,
    `gui_history_record` (`src/gui/gui_history.c`) stores a full document
    snapshot in the vault DB `file_history` table — at most one per
    300 s per file, skipping unchanged content. Tiered pruning: keep all
    from last 24 h, one/hour for 7 days, one/day for 30 days, drop older.
-   **Caveat:** snapshots are plaintext even in encrypted vaults; must be
-   encrypted with the master key before a restore UI ships. No restore
-   UI exists yet — recovery is manual SQL.
+   Snapshots are **encrypted** at rest: `gui_history_record` calls
+   `zig_history_encrypt` (ChaCha20-Poly1305 under the master key) before the
+   `INSERT`, and a null master key means no row is written — never plaintext.
+   A point-and-click restore UI ships (`show_file_history`, reachable from the
+   status-bar and explorer "File History" menu items); recovery is no longer
+   manual SQL.
 
 Related hardening, same date:
 
@@ -708,11 +719,16 @@ recovery round-trip; no fuzzing of `parse_json_value` in `gui_sync.c`.
 | Cursor position char/byte unit mismatch | **Fixed.** See §4.4. |
 | `Gtk-ERROR: Byte index N is off the end of the line` crash on mouse hover | **Fixed.** See §4.5 — `editor_get_iter_at_widget_point()` no longer calls the buggy `gtk_text_view_get_iter_at_position()`. |
 | `GET_RANGE` debug print in `main.zig` | **Removed.** |
-| `gui.c` size | Reduced from 5139 → 4155 lines by extracting PDF export and shortcuts; has since regrown to ~4900 with the prefs system, status menu, localization table, icon table, and debounced autosave. Candidates for extraction: `tr_table`/`qirtas_tr`/`qirtas_icon` → `gui_i18n.c`, settings window construction → `gui_settings.c`. `gui.c` remains exempted from the modular file size check in `build.zig`. |
+| `gui.c` size | Reduced from 5139 → 4155 lines by extracting PDF export and shortcuts; **currently 3512 lines** after further extraction. Candidates for extraction: `tr_table`/`qirtas_tr`/`qirtas_icon` → `gui_i18n.c`, settings window construction → `gui_settings.c`. Note: `gui.c` is not "exempted" by any whitelist — the size check in `build.zig` only iterates the `modular_gui_files` array (the `src/gui/*.c` files) and `gui.c` is never enumerated. The check is also advisory: it prints a WARNING above 600 lines and never fails the build. |
 | Crash-investigation harness (`simulate_crash_cb`, SIGUSR1 wiring) | **Removed.** |
-| `test_*.md` files in root | **Fixed (2026-06-12).** `test_large.md` untracked from git (was tracked, making the `test_*.md` ignore pattern inert); kept on disk as profiling scratch. |
-| `.bak` and `.step*` files in `src/` | Backup artifacts from the refactor, still present — recommend deleting once this branch is verified stable. |
-| Scratch files tracked in `src/` (`english.txt` stale code dump, `sa.md`, `test.md`, `Wiki link.md`, `ىى.md`) | **Fixed (2026-06-12).** Untracked and gitignored; kept on disk. Root cause (app writes into its own source tree when opened as a vault) still open — needs external-files/vault separation. |
+| `test_*.md` files in root | **Fixed (2026-06-17).** The 2026-06-12 untrack never landed — `test_large.md` was still tracked. Now `git rm --cached`'d so the `test_*.md` ignore pattern is active; kept on disk as profiling scratch. |
+| `.bak` and `.step*` files in `src/` | **Resolved.** No `.bak`/`.step*` files exist anywhere in the tree; the `.gitignore` patterns remain as guards. |
+| Scratch files tracked in `src/` (`english.txt` stale code dump, `sa.md`, `test.md`, `Wiki link.md`, `ىى.md`) | **Fixed (2026-06-17).** The 2026-06-12 untrack never landed — all five were still git-tracked despite being in `.gitignore`. Now deleted from the tree. Root cause (app writes into its own source tree when opened as a vault) still **open** — needs external-files/vault separation. See `docs/ISSUES.md` #3. |
 | Sync status passed as English strings over FFI, classified by `strcmp` | **Fixed (2026-06-12).** Replaced with `QirtasSyncState` enum — see §4a-quinquies. |
 | `active_file_path` unchecked `@memcpy` overflow on long (esp. Arabic) paths | **Fixed (2026-06-12).** Buffer grown 256 → 1024 bytes, single bounds-checked setter refuses over-long paths, regression test added. |
-| `file_history` snapshots plaintext in encrypted vaults | **Open.** Must encrypt with master key before version-restore UI ships. |
+| `file_history` snapshots plaintext in encrypted vaults | **Closed / not a real issue.** Snapshots are encrypted with the master key (`zig_history_encrypt`, ChaCha20-Poly1305) before insert; verified by the "file_history snapshot encrypt/decrypt" round-trip test. The original concern was a misreading. |
+| Decrypt-failure loads ciphertext as plaintext, autosave then overwrites it | **Fixed (2026-06-17).** Encrypted format now carries a magic+version header (`ENC_MAGIC`/`ENC_VERSION`). A header-bearing file that can't be decrypted (no/wrong key) is loaded read-only via `active_load_failed`; both save paths refuse to write, leaving the ciphertext intact. Legacy headerless files load via tag-verified trial decrypt and self-upgrade on next save. Regression test added. See `docs/ISSUES.md` #1. |
+| Autosave serialized the decorated GTK view, dropping HR/table/code-fence child anchors | **Fixed (2026-06-17).** `gui_trigger_autosave` now calls `zig_save_document()` (serializes `doc_buf`) instead of `gtk_text_buffer_get_text`, which omitted child anchors and silently destroyed those lines. `zig_save_document` also re-indexes so search stays fresh. See `docs/ISSUES.md` #4. |
+| GitHub device-flow use-after-free (`cancelled` flag + dialog pointer across the poll thread) | **Fixed (2026-06-17).** Replaced the widget-lifetime-tied bool and raw dialog pointer with a refcounted `GithubAuthState` in `gui_sync.c`; `cancelled` is `g_atomic_int`, the dialog pointer is main-thread-only. See `docs/ISSUES.md` #2. |
+| GitHub device-flow use-after-free (`verification_uri` bound raw to the activation button) | **Fixed (2026-06-17).** Button gets its own `g_strdup` copy with a `g_free` destroy notify (`g_signal_connect_data`). See `docs/ISSUES.md` #5. |
+| `zig_get_text_for_line_range` missing negative-line guard; `zig_get_document_text`/`_free` NUL-length mismatch | **Fixed (2026-06-17).** Added the symmetric negative guard; `zig_get_document_text` replaces interior NULs so freed length matches allocated length. See `docs/ISSUES.md` low-severity list. |

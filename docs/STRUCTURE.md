@@ -140,10 +140,12 @@ system_keys schema, active-file-path bounds check). Run it before pushing anythi
 - Sync conflict behavior is unified (2026-06-12): all four backends do                                                                              
   3-way detection with per-file metadata and `_conflict` copies — no
   silent edit loss. Details in `docs/SYNC.md`.
-- `file_history` snapshots (`src/gui/gui_history.c`) are stored **plaintext**
-  in the vault DB — including for encrypted vaults. Must be encrypted with the
-  master key before any version-restore UI ships; users will assume history
-  inherits the vault's promises.
+- `file_history` snapshots (`src/gui/gui_history.c`) are **encrypted** at rest:
+  every snapshot runs through `zig_history_encrypt` (ChaCha20-Poly1305 under the
+  vault master key) before the `INSERT`, and a null master key means no row is
+  written rather than a plaintext one. The version-restore UI (`show_file_history`)
+  decrypts on read. History inherits the vault's encryption. (Earlier docs
+  claimed plaintext — that was wrong; see `docs/ISSUES.md`.)
 - Sync status crosses the C/Zig FFI as the `QirtasSyncState` enum
   (`gui_set_sync_state`), never as strings — string matching broke silently
   once text passed through `qirtas_tr` for Arabic users.
@@ -349,7 +351,7 @@ Both C and Zig communicate via memory-mapped C linkage.
 - `void gui_get_cursor_position(int *line, int *col)`: Retrieves current cursor position. `col` is a **character** offset (`gtk_text_iter_get_line_offset`), matching `Position.col` everywhere else in the codebase.
 - `void gui_set_cursor_position(int line, int col)`: Restores cursor. `col` is clamped to `gtk_text_iter_get_chars_in_line()` (character count, not byte count) before calling `gtk_text_buffer_get_iter_at_line_offset`.
 - `void gui_refresh_explorer(void)`: Refreshes directory tree explorer on idle.
-- `void gui_trigger_autosave(void)`: Invokes active page save logic in Zig backend.
+- `void gui_trigger_autosave(void)`: Serializes the Zig source-of-truth (`doc_buf`) to disk via `zig_save_document()`. It does **not** read the GTK view — view-only child anchors (HR / table / code-fence pill) would be dropped by `gtk_text_buffer_get_text`, silently losing those lines (was `docs/ISSUES.md` #4, fixed 2026-06-17).
 - `void gui_run_on_main_thread(void (*callback)(void *), void *user_data)`: Runs C functions safely from Zig threads.
 - `void gui_update_sync_status(int connected, const char *status_text)`: Updates Google sync status.
 - `void gui_update_dropbox_status(int connected, const char *status_text)`: Updates Dropbox status.
