@@ -600,6 +600,125 @@ static void on_paragraph_row_clicked(GtkButton *btn, gpointer user_data) {
     open_submenu(pd, GTK_WIDGET(btn), build_paragraph_submenu_box(pd));
 }
 
+/* ---- Insert-table size picker (right-click → Table) -------------------- */
+
+typedef struct {
+    PopoverData *pd;
+    GtkWidget   *cells[4][4];
+    GtkWidget   *label;
+} TablePicker;
+
+/* Markdown for an rows×cols table: a "Title" header row, a delimiter, then
+ * (rows-1) "Text" body rows. */
+static char *make_table_md(int rows, int cols) {
+    GString *s = g_string_new("");
+    g_string_append_c(s, '|');
+    for (int c = 0; c < cols; c++) g_string_append(s, " Title |");
+    g_string_append_c(s, '\n');
+    g_string_append_c(s, '|');
+    for (int c = 0; c < cols; c++) g_string_append(s, "-------|");
+    g_string_append_c(s, '\n');
+    for (int r = 1; r < rows; r++) {
+        g_string_append_c(s, '|');
+        for (int c = 0; c < cols; c++) g_string_append(s, " Text |");
+        g_string_append_c(s, '\n');
+    }
+    return g_string_free(s, FALSE);
+}
+
+static void table_picker_highlight(TablePicker *tp, int rr, int cc) {
+    for (int r = 0; r < 4; r++)
+        for (int c = 0; c < 4; c++) {
+            if (r <= rr && c <= cc) gtk_widget_add_css_class(tp->cells[r][c], "tpick-hot");
+            else                    gtk_widget_remove_css_class(tp->cells[r][c], "tpick-hot");
+        }
+    char buf[16];
+    snprintf(buf, sizeof buf, "%d × %d", rr + 1, cc + 1);
+    gtk_label_set_text(GTK_LABEL(tp->label), buf);
+}
+
+static void on_table_cell_enter(GtkEventControllerMotion *m, gdouble x, gdouble y, gpointer user_data) {
+    (void)x; (void)y; (void)user_data;
+    GtkWidget *cell = gtk_event_controller_get_widget(GTK_EVENT_CONTROLLER(m));
+    TablePicker *tp = g_object_get_data(G_OBJECT(cell), "tp");
+    int r = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(cell), "r"));
+    int c = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(cell), "c"));
+    if (tp) table_picker_highlight(tp, r, c);
+}
+
+static void on_table_cell_clicked(GtkButton *btn, gpointer user_data) {
+    (void)user_data;
+    GtkWidget *cell = GTK_WIDGET(btn);
+    TablePicker *tp = g_object_get_data(G_OBJECT(cell), "tp");
+    if (!tp) return;
+    int rows = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(cell), "r")) + 1;
+    int cols = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(cell), "c")) + 1;
+    /* Capture everything before tearing down the menu (frees tp). */
+    PopoverData *pd = tp->pd;
+    GtkTextBuffer *buf = pd->buf;
+    gint ss = pd->saved_start, se = pd->saved_end;
+
+    close_open_submenu(pd);
+    gtk_popover_popdown(GTK_POPOVER(pd->popover));
+    if (global_source_view) gtk_widget_grab_focus(global_source_view);
+
+    GtkTextIter at;
+    gtk_text_buffer_get_iter_at_offset(buf, &at, ss);
+    const char *prefix = gtk_text_iter_starts_line(&at) ? "" : "\n";
+    char *md = make_table_md(rows, cols);
+    char *full = g_strconcat(prefix, md, NULL);
+    Position sp = gui_buffer_replace(buf, ss, se, full);
+    Position tstart = advance_position(sp, prefix); /* first table line */
+    /* Land on the table so reveal-on-cursor keeps it raw for editing; it grids
+     * once the cursor leaves. */
+    gui_set_cursor_position(tstart.line + 1, 0);
+    if (global_gui) global_gui->table_dirty = TRUE;
+    g_free(md);
+    g_free(full);
+}
+
+static GtkWidget *build_table_picker_box(PopoverData *pd) {
+    GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 4);
+    gtk_widget_set_margin_start(box, 8);
+    gtk_widget_set_margin_end(box, 8);
+    gtk_widget_set_margin_top(box, 8);
+    gtk_widget_set_margin_bottom(box, 8);
+
+    TablePicker *tp = g_new0(TablePicker, 1);
+    tp->pd = pd;
+
+    GtkWidget *grid = gtk_grid_new();
+    gtk_grid_set_row_spacing(GTK_GRID(grid), 2);
+    gtk_grid_set_column_spacing(GTK_GRID(grid), 2);
+    for (int r = 0; r < 4; r++)
+        for (int c = 0; c < 4; c++) {
+            GtkWidget *cell = gtk_button_new();
+            gtk_widget_add_css_class(cell, "tpick-cell");
+            g_object_set_data(G_OBJECT(cell), "tp", tp);
+            g_object_set_data(G_OBJECT(cell), "r", GINT_TO_POINTER(r));
+            g_object_set_data(G_OBJECT(cell), "c", GINT_TO_POINTER(c));
+            GtkEventController *mc = gtk_event_controller_motion_new();
+            g_signal_connect(mc, "enter", G_CALLBACK(on_table_cell_enter), NULL);
+            gtk_widget_add_controller(cell, mc);
+            g_signal_connect(cell, "clicked", G_CALLBACK(on_table_cell_clicked), NULL);
+            tp->cells[r][c] = cell;
+            gtk_grid_attach(GTK_GRID(grid), cell, c, r, 1, 1);
+        }
+
+    tp->label = gtk_label_new("1 × 1");
+    gtk_widget_add_css_class(tp->label, "tpick-label");
+    gtk_box_append(GTK_BOX(box), grid);
+    gtk_box_append(GTK_BOX(box), tp->label);
+    g_object_set_data_full(G_OBJECT(box), "tp", tp, g_free);
+    table_picker_highlight(tp, 1, 1); /* default 2×2 preview */
+    return box;
+}
+
+static void on_table_row_clicked(GtkButton *btn, gpointer user_data) {
+    PopoverData *pd = (PopoverData *)user_data;
+    open_submenu(pd, GTK_WIDGET(btn), build_table_picker_box(pd));
+}
+
 static void on_ctx_cut_clicked(GtkButton *btn, gpointer user_data) {
     (void)btn;
     PopoverData *pd = (PopoverData *)user_data;
@@ -725,6 +844,10 @@ void on_editor_right_click(GtkGestureClick *gesture, gint n_press, gdouble x, gd
     GtkWidget *paragraph_row = ctx_submenu_row("format-justify-fill-symbolic", qirtas_tr("Paragraph"));
     g_signal_connect(paragraph_row, "clicked", G_CALLBACK(on_paragraph_row_clicked), pd);
     gtk_box_append(GTK_BOX(main_box), paragraph_row);
+
+    GtkWidget *table_row = ctx_submenu_row("view-grid-symbolic", qirtas_tr("Table"));
+    g_signal_connect(table_row, "clicked", G_CALLBACK(on_table_row_clicked), pd);
+    gtk_box_append(GTK_BOX(main_box), table_row);
 
     gtk_box_append(GTK_BOX(main_box), gtk_separator_new(GTK_ORIENTATION_HORIZONTAL));
     gtk_box_append(GTK_BOX(main_box),
