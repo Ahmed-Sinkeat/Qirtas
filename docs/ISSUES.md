@@ -255,17 +255,18 @@ external-files / vault separation so the app can never write into its own repo.
   (`gui_history.c`).
 
 - **🟡 Live HR insert diverges the view from `doc_buf` (line count + content).**
-  `check_and_insert_hr` (`gui_hr.c:56-135`) fires from `on_buffer_changed` on
-  every keystroke. When it recognizes `--- ` / `---\n` it blocks the signal
-  handlers, deletes the marker text from the **view**, inserts an anchor, and in
-  the trailing-space case **appends a `\n` to the view only** (~124-128). Because
-  the handlers are blocked, none of this reaches `doc_buf`. The view and `doc_buf`
-  then disagree both in content (anchor vs `---`) and, in the space case, in line
-  count. Every later edit maps view `(line,col)` → `doc_buf` byte offset
-  (`iter_to_position` → `zig_replace_range`), so a line-count skew shifts edits
-  onto the wrong line. This is the same view/`doc_buf` divergence issue #4 turns
-  into data loss; worth fixing together (keep the marker line 1:1 with `doc_buf`,
-  never inject view-only newlines).
+  ✅ FIXED 2026-06-17 (line-count skew). `check_and_insert_hr` (`gui_hr.c`) no
+  longer injects a view-only `\n` after the HR anchor. The handlers are blocked
+  during the swap, so that newline never reached `doc_buf` and left the view one
+  line longer — every later edit then mapped view `(line,col)` onto the wrong
+  `doc_buf` line (`iter_to_position` → `zig_replace_range`). Replacing the marker
+  with a single-char anchor keeps the view's line count identical to `doc_buf`,
+  so the mapping stays correct. (The data-loss aspect was already closed by #4:
+  autosave now serializes `doc_buf`, which keeps the raw `---`.)
+  **Residual (cosmetic, not fixed):** the per-line *content* still differs (anchor
+  vs `---`), and a `--- ` trailing-space trigger leaves `--- ` in `doc_buf`, which
+  `parse_and_render_hrs` (exact-`---` match) won't re-render after reload. No data
+  loss, no mapping skew — the marker just shows as literal text until retyped.
 
 - **🟢 LOW — `zig_get_text_for_line_range` missing the negative-line guard its
   sibling has.** ✅ FIXED 2026-06-17. Added the symmetric

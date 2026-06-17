@@ -104,8 +104,6 @@ void check_and_insert_hr(GtkTextBuffer *buf, AppGui *gui) {
         g_signal_handlers_block_by_func(buf, on_buffer_changed, gui);
 
         gtk_text_buffer_delete(buf, &replace_start, &replace_end);
-        /* replace_start is valid right after delete; remember its offset. */
-        int anchor_off = gtk_text_iter_get_offset(&replace_start);
 
         GtkTextChildAnchor *anchor = gtk_text_child_anchor_new();
         gtk_text_buffer_insert_child_anchor(buf, &replace_start, anchor);
@@ -117,15 +115,14 @@ void check_and_insert_hr(GtkTextBuffer *buf, AppGui *gui) {
 
         gtk_text_view_add_child_at_anchor(GTK_TEXT_VIEW(gui->source_view), separator, anchor);
 
-        /* Position just after the inserted anchor (1 char), via offset. */
-        GtkTextIter next_char;
-        gtk_text_buffer_get_iter_at_offset(buf, &next_char, anchor_off + 1);
-        gunichar nc = gtk_text_iter_get_char(&next_char);
-        if (nc != '\n' && nc != '\r') {
-            GtkTextIter ins;
-            gtk_text_buffer_get_iter_at_offset(buf, &ins, anchor_off + 1);
-            gtk_text_buffer_insert(buf, &ins, "\n", 1);
-        }
+        /* Do NOT inject a view-only '\n' after the anchor. The signal handlers
+         * are blocked here, so anything inserted into the view never reaches
+         * Zig's doc_buf — a view-only newline left the view one line longer than
+         * doc_buf, and every later edit then mapped view (line,col) onto the
+         * wrong doc_buf line (iter_to_position -> zig_replace_range). Replacing
+         * the marker text with a single-char anchor keeps the view's line count
+         * identical to doc_buf, so the mapping stays correct.
+         * (docs/ISSUES.md — live-HR divergence.) */
 
         g_signal_handlers_unblock_by_func(buf, on_insert_text_before, gui);
         g_signal_handlers_unblock_by_func(buf, on_insert_text_after, gui);
