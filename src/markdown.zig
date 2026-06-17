@@ -180,6 +180,101 @@ pub export fn zig_arabic_search_regex(input: ?[*:0]const u8) callconv(.c) ?[*:0]
     return r.ptr;
 }
 
+// ---- markdown table structure -------------------------------------------
+
+/// Iterate the trimmed cells of a table row: drops one optional leading and
+/// trailing pipe, splits on '|', trims each cell. (split_row's logic; the cell
+/// *text extraction* for rendering stays in C — see docs/PORTABILITY.md.)
+const CellIter = struct {
+    s: []const u8,
+    i: usize = 0,
+    done: bool = false,
+
+    fn init(line: []const u8) CellIter {
+        var t = std.mem.trim(u8, line, " \t\r\n");
+        if (t.len > 0 and t[0] == '|') t = t[1..];
+        if (t.len > 0 and t[t.len - 1] == '|') t = t[0 .. t.len - 1];
+        return .{ .s = t };
+    }
+
+    fn next(self: *CellIter) ?[]const u8 {
+        if (self.done) return null;
+        const start = self.i;
+        while (self.i < self.s.len and self.s[self.i] != '|') self.i += 1;
+        const cell = std.mem.trim(u8, self.s[start..self.i], " \t");
+        if (self.i < self.s.len) self.i += 1 else self.done = true;
+        return cell;
+    }
+};
+
+/// A markdown table delimiter row: at least one cell, every cell is
+/// optional-colon, 1+ dashes, optional-colon (`:--`, `---`, `:-:`, `--:`).
+pub fn isTableDelimiter(line: []const u8) bool {
+    if (std.mem.indexOfScalar(u8, line, '-') == null) return false;
+    var it = CellIter.init(line);
+    var any = false;
+    while (it.next()) |cell| {
+        any = true;
+        if (cell.len == 0) return false;
+        var q: usize = 0;
+        if (cell[q] == ':') q += 1;
+        var dashes: usize = 0;
+        while (q < cell.len and cell[q] == '-') {
+            q += 1;
+            dashes += 1;
+        }
+        if (q < cell.len and cell[q] == ':') q += 1;
+        if (q != cell.len or dashes == 0) return false;
+    }
+    return any;
+}
+
+/// A plausible table row: non-blank and contains a pipe.
+pub fn isTableRow(line: []const u8) bool {
+    if (std.mem.indexOfScalar(u8, line, '|') == null) return false;
+    for (line) |ch| {
+        if (ch != ' ' and ch != '\t' and ch != '\n' and ch != '\r') return true;
+    }
+    return false;
+}
+
+/// Per-column alignment from a delimiter row's colons: 0=left, 1=center,
+/// 2=right. Writes up to out.len codes, returns the column count written.
+pub fn tableColumnAligns(delim: []const u8, out: []u8) usize {
+    var it = CellIter.init(delim);
+    var n: usize = 0;
+    while (it.next()) |cell| {
+        if (n >= out.len) break;
+        const left = cell.len > 0 and cell[0] == ':';
+        const right = cell.len > 0 and cell[cell.len - 1] == ':';
+        out[n] = if (left and right) 1 else if (right) 2 else 0;
+        n += 1;
+    }
+    return n;
+}
+
+pub export fn zig_table_is_delimiter(line: ?[*:0]const u8) callconv(.c) c_int {
+    const t = line orelse return 0;
+    return if (isTableDelimiter(std.mem.span(t))) 1 else 0;
+}
+
+pub export fn zig_table_is_row(line: ?[*:0]const u8) callconv(.c) c_int {
+    const t = line orelse return 0;
+    return if (isTableRow(std.mem.span(t))) 1 else 0;
+}
+
+/// Fill `out_ptr[0..max]` with per-column alignment codes (0/1/2), return count.
+pub export fn zig_table_aligns(delim: ?[*:0]const u8, out_ptr: ?[*]c_int, max: c_int) callconv(.c) c_int {
+    const t = delim orelse return 0;
+    const o = out_ptr orelse return 0;
+    if (max <= 0) return 0;
+    var tmp: [256]u8 = undefined;
+    const cap = @min(@as(usize, @intCast(max)), tmp.len);
+    const n = tableColumnAligns(std.mem.span(t), tmp[0..cap]);
+    for (0..n) |i| o[i] = tmp[i];
+    return @intCast(n);
+}
+
 test "isArabicChar covers Arabic blocks, rejects Latin/digits" {
     try std.testing.expect(isArabicChar('م'));
     try std.testing.expect(isArabicChar('ع'));
@@ -242,4 +337,23 @@ test "arabicSearchRegex: escapes meta, unifies Arabic, strips tashkeel" {
     const r4 = try arabicSearchRegex(a, "");
     defer a.free(r4);
     try std.testing.expectEqualStrings("", r4);
+}
+
+test "table structure: delimiter, row, alignment" {
+    try std.testing.expect(isTableDelimiter("|---|---|"));
+    try std.testing.expect(isTableDelimiter("| :--- | :--: | ---: |"));
+    try std.testing.expect(!isTableDelimiter("| a | b |")); // no dashes
+    try std.testing.expect(!isTableDelimiter("|  |  |")); // empty cells
+
+    try std.testing.expect(isTableRow("| a | b |"));
+    try std.testing.expect(isTableRow("a | b")); // pipes without edges
+    try std.testing.expect(!isTableRow("plain text"));
+    try std.testing.expect(!isTableRow("   "));
+
+    var codes: [8]u8 = undefined;
+    const n = tableColumnAligns("| :--- | :--: | ---: |", &codes);
+    try std.testing.expectEqual(@as(usize, 3), n);
+    try std.testing.expectEqual(@as(u8, 0), codes[0]); // left
+    try std.testing.expectEqual(@as(u8, 1), codes[1]); // center
+    try std.testing.expectEqual(@as(u8, 2), codes[2]); // right
 }

@@ -29,6 +29,10 @@ extern int zig_fuzzy_score(const char *haystack, const char *needle); /* -1 = no
 /* Build Arabic-tolerant search regex from NFKC-normalized input. Returns a
  * Zig-allocated string — free with zig_free_document_text, NOT g_free. */
 extern char *zig_arabic_search_regex(const char *normalized_input);
+/* Markdown table structure (src/markdown.zig). */
+extern int zig_table_is_delimiter(const char *line);  /* 1 = delimiter row */
+extern int zig_table_is_row(const char *line);         /* 1 = plausible table row */
+extern int zig_table_aligns(const char *delim, int *out_codes, int max); /* per-col 0/1/2; returns count */
 
 /* Zig -> C FFI */
 void gui_set_text(const char *text, int len);
