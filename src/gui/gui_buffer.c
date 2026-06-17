@@ -21,6 +21,192 @@ void gui_push_undo_snapshot(void) {
     zig_undo_push(line, col);
 }
 
+/* Grow the dirty-line range so the next debounced conceal pass only retags
+ * the lines touched since the last pass. */
+static void mark_conceal_dirty(AppGui *gui, int first_line, int last_line) {
+    if (!gui) return;
+    if (gui->conceal_dirty_start < 0 || first_line < gui->conceal_dirty_start)
+        gui->conceal_dirty_start = first_line;
+    if (last_line > gui->conceal_dirty_end)
+        gui->conceal_dirty_end = last_line;
+}
+
+/* TRUE if `line` matches the Markdown ATX heading pattern (^#{1,6} ). Reads
+ * only that one line, so it is cheap to call per edit. */
+static gboolean line_is_heading(GtkTextBuffer *buf, int line) {
+    if (line < 0 || line >= gtk_text_buffer_get_line_count(buf)) return FALSE;
+    GtkTextIter ls, le;
+    gtk_text_buffer_get_iter_at_line(buf, &ls, line);
+    le = ls;
+    if (!gtk_text_iter_ends_line(&le)) gtk_text_iter_forward_to_line_end(&le);
+    gchar *t = gtk_text_buffer_get_text(buf, &ls, &le, TRUE);
+    gboolean h = zig_heading_level(t) > 0; /* one heading parser, src/markdown.zig */
+    g_free(t);
+    return h;
+}
+
+/* Flag the outline for rebuild if an edit on lines [first,last] (cols touched
+ * starting at first_col) could have changed the heading structure:
+ *   - lines added/removed (first != last) shifts every heading's stored line
+ *     number, so the click-to-navigate targets go stale → must rebuild;
+ *   - an edit in the marker zone (col <= 6) may have added or removed the
+ *     leading '#'s, toggling a line's heading status;
+ *   - an affected line that is currently a heading means its title text (the
+ *     outline label) may have changed.
+ * Generous on purpose: a false positive only costs one skippable rebuild; a
+ * false negative would leave a stale outline. */
+static void mark_outline_dirty(AppGui *gui, GtkTextBuffer *buf,
+                               int first_line, int last_line, int first_col) {
+    if (!gui || gui->outline_dirty) return;
+    if (first_line != last_line || first_col <= 6 ||
+        line_is_heading(buf, first_line) || line_is_heading(buf, last_line)) {
+        gui->outline_dirty = TRUE;
+    }
+}
+
+/* Cached word count. -1 = unknown (needs a full recount: the document was
+ * loaded/replaced wholesale, or is over the 500k-char cap). Maintained
+ * incrementally on each keystroke so the stats debounce never re-walks the
+ * whole document. */
+static long g_word_count = -1;
+/* Word count of the line range an edit is about to touch, captured in the
+ * *_before handler so the *_after handler can apply (new - old) to g_word_count. */
+static long g_pending_old_words = 0;
+
+/* Count words on lines [first,last] with the same rule as the stats pass:
+ * a run of non-(space|punct) characters is one word. Word counts are per-line
+ * independent — '\n' is whitespace, so no word spans a line boundary — so the
+ * sum over any line range is exactly the whole-document count for those lines.
+ * Reads only those lines. */
+static long count_words_line_range(GtkTextBuffer *buf, int first, int last) {
+    int lc = gtk_text_buffer_get_line_count(buf);
+    if (first < 0) first = 0;
+    if (last > lc - 1) last = lc - 1;
+    long words = 0;
+    for (int i = first; i <= last; i++) {
+        GtkTextIter ls, le;
+        gtk_text_buffer_get_iter_at_line(buf, &ls, i);
+        le = ls;
+        if (!gtk_text_iter_ends_line(&le)) gtk_text_iter_forward_to_line_end(&le);
+        gchar *t = gtk_text_buffer_get_text(buf, &ls, &le, TRUE);
+        gboolean in_word = FALSE;
+        for (char *p = t; *p; p = g_utf8_next_char(p)) {
+            gunichar c = g_utf8_get_char(p);
+            if (g_unichar_isspace(c) || g_unichar_ispunct(c)) in_word = FALSE;
+            else if (!in_word) { words++; in_word = TRUE; }
+        }
+        g_free(t);
+    }
+    return words;
+}
+
+/* Drop the cached word count so the next stats pass recomputes it from scratch.
+ * Called from buffer paths that replace content wholesale and bypass the
+ * insert/delete handlers (full reload / undo / redo). */
+void gui_word_count_invalidate(void) {
+    g_word_count = -1;
+}
+
+/* Reference whole-document word count (the pre-incremental algorithm), used
+ * by the self-test to validate count_words_line_range. */
+static long bench_full_word_count(GtkTextBuffer *buf) {
+    GtkTextIter s, e;
+    gtk_text_buffer_get_bounds(buf, &s, &e);
+    gchar *t = gtk_text_buffer_get_text(buf, &s, &e, TRUE);
+    long words = 0;
+    gboolean in_word = FALSE;
+    for (char *p = t; *p; p = g_utf8_next_char(p)) {
+        gunichar c = g_utf8_get_char(p);
+        if (g_unichar_isspace(c) || g_unichar_ispunct(c)) in_word = FALSE;
+        else if (!in_word) { words++; in_word = TRUE; }
+    }
+    g_free(t);
+    return words;
+}
+
+/* Headless self-test of incremental word counting: count_words_line_range
+ * summed over the whole document must equal the reference full walk, and a
+ * per-line sum must match too (proves per-line independence). Returns failures.
+ * Also exercises an edit + delta to mirror the handler arithmetic. */
+int qirtas_bench_wordcount(void) {
+    if (!gtk_is_initialized() && !gtk_init_check()) {
+        g_printerr("[bench] gtk_init_check failed — skipping word-count test\n");
+        return 0;
+    }
+    GtkTextBuffer *buf = gtk_text_buffer_new(NULL);
+    const char *doc =
+        "The quick brown fox.\n"        /* punct-terminated     */
+        "\n"                            /* blank line           */
+        "Hello,   world!! again\n"      /* multi-space + punct  */
+        "نص عربي للاختبار\n"             /* arabic words         */
+        "   leading and trailing   \n"  /* edge whitespace      */
+        "no-newline-last-line";         /* hyphens are punct    */
+    gtk_text_buffer_set_text(buf, doc, -1);
+    int lc = gtk_text_buffer_get_line_count(buf);
+
+    int fails = 0;
+    long ref = bench_full_word_count(buf);
+    long whole = count_words_line_range(buf, 0, lc - 1);
+    if (whole != ref) { fails++; g_printerr("[bench] wc FAIL: range(0,last)=%ld != full=%ld\n", whole, ref); }
+
+    long per_line_sum = 0;
+    for (int i = 0; i < lc; i++) per_line_sum += count_words_line_range(buf, i, i);
+    if (per_line_sum != ref) { fails++; g_printerr("[bench] wc FAIL: per-line sum=%ld != full=%ld\n", per_line_sum, ref); }
+
+    /* delta arithmetic: edit line 0, total via (old swap) must match recount */
+    long old_l0 = count_words_line_range(buf, 0, 0);
+    GtkTextIter it;
+    gtk_text_buffer_get_iter_at_line_offset(buf, &it, 0, 3); /* inside "The" */
+    gtk_text_buffer_insert(buf, &it, " EXTRA ", -1);
+    long incremental = ref + (count_words_line_range(buf, 0, 0) - old_l0);
+    long after_ref = bench_full_word_count(buf);
+    if (incremental != after_ref) { fails++; g_printerr("[bench] wc FAIL: delta=%ld != recount=%ld\n", incremental, after_ref); }
+
+    g_printerr("[bench] word-count self-test: %d failure(s) (doc=%ld words)\n", fails, ref);
+    g_object_unref(buf);
+    return fails;
+}
+
+/* Headless self-test of the outline-gate decision (line_is_heading + the
+ * mark_outline_dirty predicate). Returns the number of failed expectations;
+ * called from the QIRTAS_BENCH harness. */
+int qirtas_bench_outline_gate(void) {
+    if (!gtk_is_initialized() && !gtk_init_check()) {
+        g_printerr("[bench] gtk_init_check failed — skipping outline-gate test\n");
+        return 0;
+    }
+    GtkTextBuffer *buf = gtk_text_buffer_new(NULL);
+    const char *doc =
+        "# Heading\n"              /* 0: heading            */
+        "plain paragraph line\n"   /* 1: not                */
+        "## Sub heading\n"         /* 2: heading            */
+        "#NoSpace\n"               /* 3: not (no space)     */
+        "####### too many\n"       /* 4: not (7 hashes)     */
+        "#\n";                     /* 5: not (no title)     */
+    gtk_text_buffer_set_text(buf, doc, -1);
+
+    int fails = 0;
+    /* line_is_heading classification */
+    if (!line_is_heading(buf, 0)) { fails++; g_printerr("[bench] gate FAIL: L0 should be heading\n"); }
+    if ( line_is_heading(buf, 1)) { fails++; g_printerr("[bench] gate FAIL: L1 should NOT be heading\n"); }
+    if (!line_is_heading(buf, 2)) { fails++; g_printerr("[bench] gate FAIL: L2 should be heading\n"); }
+    if ( line_is_heading(buf, 3)) { fails++; g_printerr("[bench] gate FAIL: L3 (#NoSpace) should NOT\n"); }
+    if ( line_is_heading(buf, 4)) { fails++; g_printerr("[bench] gate FAIL: L4 (7 #) should NOT\n"); }
+    if ( line_is_heading(buf, 5)) { fails++; g_printerr("[bench] gate FAIL: L5 (# only) should NOT\n"); }
+
+    /* dirty predicate (mirror of mark_outline_dirty) */
+    #define GATE(fl, ll, fc) ((fl) != (ll) || (fc) <= 6 || line_is_heading(buf, fl) || line_is_heading(buf, ll))
+    if ( GATE(1, 1, 20)) { fails++; g_printerr("[bench] gate FAIL: plain mid-line edit should be SKIPPED\n"); }
+    if (!GATE(1, 2, 20)) { fails++; g_printerr("[bench] gate FAIL: newline (line added) should be dirty\n"); }
+    if (!GATE(0, 0, 20)) { fails++; g_printerr("[bench] gate FAIL: editing heading text should be dirty\n"); }
+    if (!GATE(1, 1, 2))  { fails++; g_printerr("[bench] gate FAIL: col<=6 edit should be dirty (conservative)\n"); }
+    #undef GATE
+
+    g_printerr("[bench] outline-gate self-test: %d failure(s)\n", fails);
+    g_object_unref(buf);
+    return fails;
+}
+
 /* Apply a [start_off, end_off) → replacement edit to BOTH the GTK buffer and
  * Zig with NO full reload: edit GTK directly with the sync signals blocked,
  * mirror into Zig with one zig_replace_range (atomic = one undo step),
@@ -191,7 +377,7 @@ static guint autosave_debounce_id = 0;
 static gboolean autosave_debounce_cb(gpointer user_data) {
     (void)user_data;
     autosave_debounce_id = 0;
-    gui_trigger_autosave();
+    if (gui_autosave_enabled()) gui_trigger_autosave();
     return G_SOURCE_REMOVE;
 }
 
@@ -201,6 +387,11 @@ static gboolean buffer_stats_timeout_cb(gpointer user_data) {
     if (!gui || !gui->source_view) return G_SOURCE_REMOVE;
     QIRTAS_PERF_BEGIN;
 
+    /* Verbose perf (QIRTAS_PERF=2): time each O(document)-suspect section so a
+     * single pass line shows where the time goes. */
+    int _verbose = qirtas_perf_enabled >= 2;
+    gint64 _t_pass = _verbose ? g_get_monotonic_time() : 0;
+
     GtkTextBuffer *buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(gui->source_view));
 
     /* Char count is free (buffer-maintained); only the word count needs a
@@ -209,25 +400,19 @@ static gboolean buffer_stats_timeout_cb(gpointer user_data) {
 
     glong line_count = (glong)gtk_text_buffer_get_line_count(buf);
 
-    glong word_count = -1; /* -1 = skipped (document too large) */
-    if (char_count <= 500000) {
-        GtkTextIter start, end;
-        gtk_text_buffer_get_bounds(buf, &start, &end);
-        gchar *text = gtk_text_buffer_get_text(buf, &start, &end, TRUE);
-        word_count = 0;
-        gboolean in_word = FALSE;
-        char *p = text;
-        while (*p) {
-            gunichar c = g_utf8_get_char(p);
-            if (g_unichar_isspace(c) || g_unichar_ispunct(c)) {
-                in_word = FALSE;
-            } else {
-                if (!in_word) { word_count++; in_word = TRUE; }
-            }
-            p = g_utf8_next_char(p);
-        }
-        g_free(text);
+    /* Word count is maintained incrementally on each keystroke (see the
+     * insert/delete handlers). Only recompute the whole document when the
+     * cache is unknown (fresh load / wholesale replace / dropped below the
+     * cap). Past 500k chars the full recount is skipped and the count shows
+     * "—" until the document shrinks back under the cap. */
+    gint64 _t_w0 = _verbose ? g_get_monotonic_time() : 0;
+    int _word_recount = 0;
+    if (g_word_count < 0 && char_count <= 500000) {
+        g_word_count = count_words_line_range(buf, 0, (int)line_count - 1);
+        _word_recount = 1;
     }
+    double _word_ms = _verbose ? (g_get_monotonic_time() - _t_w0) / 1000.0 : 0;
+    glong word_count = g_word_count; /* -1 = too large / unknown → shown as "—" */
 
     if (qirtas_app_language == 1) {
         /* Arabic: grammatical count phrases (كلمة fem, حرف/سطر masc). */
@@ -249,9 +434,9 @@ static gboolean buffer_stats_timeout_cb(gpointer user_data) {
         if (gui->lbl_lines) gtk_label_set_text(GTK_LABEL(gui->lbl_lines), l_buf);
     }
 
-    /* Full conceal pass runs here (already deferred past the 'changed'
-     * signal, so Pango's line-layout cache is stable — avoids the
-     * "Byte index N is off the end of the line" abort).
+    /* Conceal pass runs here (already deferred past the 'changed' signal, so
+     * Pango's line-layout cache is stable — avoids the "Byte index N is off
+     * the end of the line" abort).
      *
      * Concealing/revealing markers changes line heights, which shifts every
      * line below the change and made the viewport jump on edits mid-document
@@ -265,14 +450,61 @@ static gboolean buffer_stats_timeout_cb(gpointer user_data) {
     gtk_text_view_get_iter_at_location(tv, &top_iter, vrect.x, vrect.y);
     GtkTextMark *view_anchor = gtk_text_buffer_create_mark(buf, NULL, &top_iter, TRUE);
 
-    update_conceal_markdown_all(buf);
+    /* Reconceal only the lines edited since the last pass. The full-buffer
+     * pass (O(document)) is reserved for load / tab-switch / read-mode toggle,
+     * where dirty range is unset (-1). One pad line each side absorbs edits
+     * that open or close a marker spanning into a neighbouring line. */
+    gint64 _t_c0 = _verbose ? g_get_monotonic_time() : 0;
+    int _conceal_full = (gui->conceal_dirty_start < 0);
+    if (_conceal_full) {
+        update_conceal_markdown_all(buf);
+    } else {
+        update_conceal_markdown_range(buf, gui->conceal_dirty_start - 1,
+                                           gui->conceal_dirty_end + 1);
+    }
+    gui->conceal_dirty_start = -1;
+    gui->conceal_dirty_end = -1;
+    double _conceal_ms = _verbose ? (g_get_monotonic_time() - _t_c0) / 1000.0 : 0;
 
     gtk_text_view_scroll_to_mark(tv, view_anchor, 0.0, TRUE, 0.0, 0.0);
     gtk_text_buffer_delete_mark(buf, view_anchor);
-    gui_outline_refresh(gui);
+
+    /* Rebuild the heading outline only when an edit may have changed it. A
+     * plain keystroke inside a paragraph leaves outline_dirty FALSE and skips
+     * the O(document) line scan. */
+    gint64 _t_o0 = _verbose ? g_get_monotonic_time() : 0;
+    int _outline_rebuilt = gui->outline_dirty;
+    if (gui->outline_dirty) {
+        gui_outline_refresh(gui);
+        gui->outline_dirty = FALSE;
+    }
+    double _outline_ms = _verbose ? (g_get_monotonic_time() - _t_o0) / 1000.0 : 0;
 
     /* Typing pause = word-grain undo boundary. No-op if nothing pending. */
     zig_undo_commit();
+
+    if (_verbose) {
+        double _total_ms = (g_get_monotonic_time() - _t_pass) / 1000.0;
+        g_printerr("[perf] pass total=%.2f ms | word=%.2f(%s) conceal=%.2f(%s) "
+                   "outline=%.2f(%s) | chars=%ld lines=%ld words=%ld\n",
+                   _total_ms,
+                   _word_ms,    _word_recount ? "recount" : "cached",
+                   _conceal_ms, _conceal_full ? "full" : "range",
+                   _outline_ms, _outline_rebuilt ? "rebuilt" : "skipped",
+                   char_count, line_count, word_count);
+    }
+    /* A code fence was just typed/pasted: render its pill now (self-blocks the
+     * buffer handlers, so it's safe outside the load path). Gated on the flag so
+     * normal edits never pay for the full-buffer scan. */
+    if (gui->code_pill_dirty) {
+        gui->code_pill_dirty = FALSE;
+        parse_and_render_code_pills(buf, gui);
+    }
+    if (gui->table_dirty) {
+        gui->table_dirty = FALSE;
+        parse_and_render_tables(buf, gui);
+    }
+
     QIRTAS_PERF_END("buffer_stats_timeout_cb");
     return G_SOURCE_REMOVE;
 }
@@ -283,6 +515,12 @@ static gboolean buffer_stats_timeout_cb(gpointer user_data) {
  * before the conceal pass touches iterators. */
 void gui_refresh_buffer_stats(void) {
     if (!global_gui) return;
+    /* Programmatic load / tab-switch: the whole buffer is new, so force the
+     * full conceal pass (dirty range unset) rather than an incremental one. */
+    global_gui->conceal_dirty_start = -1;
+    global_gui->conceal_dirty_end = -1;
+    global_gui->outline_dirty = TRUE;
+    gui_word_count_invalidate();
     if (buffer_stats_timeout_id) g_source_remove(buffer_stats_timeout_id);
     buffer_stats_timeout_id = g_timeout_add(50, buffer_stats_timeout_cb, global_gui);
 }
@@ -307,6 +545,16 @@ void on_buffer_changed(GtkTextBuffer *buf, gpointer user_data) {
 void on_insert_text_before(GtkTextBuffer *buf, GtkTextIter *location, gchar *text, gint len, gpointer user_data) {
     AppGui *gui = (AppGui *)user_data;
     if (gui && gui->loading_viewport) return;
+
+    /* Capture the pre-edit word count of the line the text lands on, for the
+     * incremental total applied in on_insert_text_after. Done before the
+     * auto-pair branches below (some stop emission, so *_after never runs —
+     * then the buffer is unchanged and the unused capture is simply dropped). */
+    if (g_word_count >= 0) {
+        int li = gtk_text_iter_get_line(location);
+        g_pending_old_words = count_words_line_range(buf, li, li);
+    }
+
     if (len != 1) return;
 
     char c = text[0];
@@ -530,6 +778,7 @@ void toggle_comment_current_line(GtkTextBuffer *buf) {
 void on_insert_text_after(GtkTextBuffer *buf, GtkTextIter *location, gchar *text, gint len, gpointer user_data) {
     AppGui *gui = (AppGui *)user_data;
     if (gui && gui->loading_viewport) return;
+    gint64 _ks0 = qirtas_perf_enabled ? g_get_monotonic_time() : 0;
 
     int end_offset = gtk_text_iter_get_offset(location);
     int char_len = g_utf8_strlen(text, len);
@@ -546,6 +795,13 @@ void on_insert_text_after(GtkTextBuffer *buf, GtkTextIter *location, gchar *text
     gchar *text_dup = g_strndup(text, len);
     zig_insert_text(pos, text_dup);
 
+    /* Diagnostic for big inserts (paste): compare bytes GTK delivered to this
+     * signal against the buffer size after, so a truncation shows up. */
+    if (qirtas_perf_enabled && len > 64) {
+        g_printerr("[perf] insert(paste?) len=%d bytes at line=%d → buffer now %d chars\n",
+                   len, start_line, gtk_text_buffer_get_char_count(buf));
+    }
+
     /* Word-grain undo: mark uncommitted edits, seal when a boundary char
      * (space / newline / punct) is typed. Idle seal in the stats debounce
      * covers pauses. */
@@ -559,9 +815,27 @@ void on_insert_text_after(GtkTextBuffer *buf, GtkTextIter *location, gchar *text
     g_free(text_dup);
 
     gui_set_sync_state(QIRTAS_SYNC_NOT_SYNCED);
-    update_paragraph_direction_lines(buf, start_line, gtk_text_iter_get_line(location));
+    int end_line = gtk_text_iter_get_line(location);
+    update_paragraph_direction_lines(buf, start_line, end_line);
+    mark_conceal_dirty(gui, start_line, end_line);
+    /* A backtick may have closed a fenced code block (typed or pasted from a
+     * chat UI). Flag it so the stats debounce re-runs the code-pill pass. */
+    if (memchr(text, '`', len)) gui->code_pill_dirty = TRUE;
+    /* A pipe may have completed/extended a markdown table row. */
+    if (memchr(text, '|', len)) gui->table_dirty = TRUE;
+    mark_outline_dirty(gui, buf, start_line, end_line, start_col);
+
+    /* Incremental word count: the inserted text turned the old single line
+     * (start_line) into lines [start_line..end_line]; swap their word counts. */
+    if (g_word_count >= 0)
+        g_word_count += count_words_line_range(buf, start_line, end_line) - g_pending_old_words;
 
     apply_wiki_link_tags_local(buf);
+
+    if (qirtas_perf_enabled) {
+        double _ks = (g_get_monotonic_time() - _ks0) / 1000.0;
+        if (_ks > 1.0) g_printerr("[perf] keystroke(insert) %.2f ms\n", _ks);
+    }
 }
 
 void on_delete_range_before(GtkTextBuffer *buf, GtkTextIter *start, GtkTextIter *end, gpointer user_data) {
@@ -577,20 +851,50 @@ void on_delete_range_before(GtkTextBuffer *buf, GtkTextIter *start, GtkTextIter 
     Position p_start = { start_line, start_col };
     Position p_end = { end_line, end_col };
 
+    if (qirtas_perf_enabled && (end_line - start_line) > 1) {
+        g_printerr("[perf] delete(cut?) lines %d..%d at buffer %d chars\n",
+                   start_line, end_line, gtk_text_buffer_get_char_count(buf));
+    }
+
+    /* Checked BEFORE the delete so line_is_heading sees the pre-edit text
+     * ("was a heading"); first_line != end_line catches lines being merged
+     * away; start_col <= 6 catches a leading '#' being deleted. */
+    mark_outline_dirty(gui, buf, start_line, end_line, start_col);
+
+    /* Word count of the lines about to be (partly) deleted/merged, captured
+     * pre-delete; on_delete_range_after applies the post-merge replacement. */
+    if (g_word_count >= 0)
+        g_pending_old_words = count_words_line_range(buf, start_line, end_line);
+
     zig_delete_range(p_start, p_end);
+    /* Mark an undo step pending but DON'T capture a full-document snapshot per
+     * delete — captureUndoEntry dupes the whole buffer, so committing on every
+     * backspace was O(document) per keystroke. The pending step is sealed at
+     * the typing-pause debounce (buffer_stats_timeout_cb) and zig_undo() seals
+     * any pending edit before reverting, so Ctrl+Z right after a delete still
+     * works. Result: deletes get the same word-grain coalescing as inserts. */
     gui_push_undo_snapshot();
-    /* A deletion (backspace, Ctrl+Backspace word-delete, Delete, selection
-     * cut) is a discrete action — seal it as its own undo step immediately
-     * instead of waiting for the typing-pause debounce, so Ctrl+Z right after
-     * a word-delete actually reverts it. */
-    zig_undo_commit();
 }
 
 void on_delete_range_after(GtkTextBuffer *buf, GtkTextIter *start, GtkTextIter *end, gpointer user_data) {
     AppGui *gui = (AppGui *)user_data;
     if (gui && gui->loading_viewport) return;
+    gint64 _ks0 = qirtas_perf_enabled ? g_get_monotonic_time() : 0;
     (void)end;
     gui_set_sync_state(QIRTAS_SYNC_NOT_SYNCED);
-    update_paragraph_direction_lines(buf, gtk_text_iter_get_line(start), gtk_text_iter_get_line(start));
+    int del_line = gtk_text_iter_get_line(start);
+    update_paragraph_direction_lines(buf, del_line, del_line);
+    mark_conceal_dirty(gui, del_line, del_line);
+
+    /* The deleted range collapsed to the single line del_line; swap the
+     * pre-delete word count (captured in on_delete_range_before) for it. */
+    if (g_word_count >= 0)
+        g_word_count += count_words_line_range(buf, del_line, del_line) - g_pending_old_words;
+
     apply_wiki_link_tags_local(buf);
+
+    if (qirtas_perf_enabled) {
+        double _ks = (g_get_monotonic_time() - _ks0) / 1000.0;
+        if (_ks > 1.0) g_printerr("[perf] keystroke(delete) %.2f ms\n", _ks);
+    }
 }

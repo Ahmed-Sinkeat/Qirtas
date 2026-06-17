@@ -8,41 +8,48 @@ extern void on_delete_range_after(GtkTextBuffer *buf, GtkTextIter *start, GtkTex
 extern void on_buffer_changed(GtkTextBuffer *buf, gpointer user_data);
 
 void parse_and_render_hrs(GtkTextBuffer *buf, AppGui *gui) {
-    GtkTextIter iter;
-    gtk_text_buffer_get_start_iter(buf, &iter);
-
-    while (TRUE) {
-        GtkTextIter line_end = iter;
-        gtk_text_iter_forward_to_line_end(&line_end);
+    /* Iterate by line NUMBER, not by advancing an iterator: the delete +
+     * insert_child_anchor below both invalidate every outstanding iterator,
+     * so any reused iter becomes garbage. The old code reused `iter`/
+     * `replace_start` across those mutations — after the first "---" line the
+     * loop ran delete/insert on garbage iterators, corrupting the document
+     * (data loss) and spewing "Invalid text buffer iterator" / insert_text
+     * assertions. get_iter_at_line(line) re-resolves a valid position each
+     * pass. Replacing "---" with an anchor keeps the line, so the line index
+     * and line count stay stable. */
+    int line = 0;
+    while (line < gtk_text_buffer_get_line_count(buf)) {
+        GtkTextIter iter, line_end;
+        gtk_text_buffer_get_iter_at_line(buf, &iter, line);
+        line_end = iter;
+        if (!gtk_text_iter_ends_line(&line_end))
+            gtk_text_iter_forward_to_line_end(&line_end);
 
         gchar *line_text = gtk_text_buffer_get_text(buf, &iter, &line_end, TRUE);
-        if (!line_text) break;
+        gboolean is_hr = (line_text && strcmp(line_text, "---") == 0);
+        g_free(line_text);
 
-        if (strcmp(line_text, "---") == 0) {
-            g_free(line_text);
+        if (is_hr) {
+            /* Reacquire fresh iters for the delete (the get_text above is
+             * read-only, but be explicit), delete the "---", then reacquire
+             * again before inserting the anchor. */
+            gtk_text_buffer_get_iter_at_line(buf, &iter, line);
+            line_end = iter;
+            if (!gtk_text_iter_ends_line(&line_end))
+                gtk_text_iter_forward_to_line_end(&line_end);
+            gtk_text_buffer_delete(buf, &iter, &line_end);
 
-            GtkTextIter replace_start = iter;
-            GtkTextIter replace_end = line_end;
-
-            gtk_text_buffer_delete(buf, &replace_start, &replace_end);
-
+            GtkTextIter at;
+            gtk_text_buffer_get_iter_at_line(buf, &at, line);
             GtkTextChildAnchor *anchor = gtk_text_child_anchor_new();
-            gtk_text_buffer_insert_child_anchor(buf, &replace_start, anchor);
+            gtk_text_buffer_insert_child_anchor(buf, &at, anchor);
 
             GtkWidget *separator = gtk_separator_new(GTK_ORIENTATION_HORIZONTAL);
             gtk_widget_set_hexpand(separator, TRUE);
             gtk_widget_add_css_class(separator, "hr-line");
-
             gtk_text_view_add_child_at_anchor(GTK_TEXT_VIEW(gui->source_view), separator, anchor);
-
-            iter = replace_start;
-        } else {
-            g_free(line_text);
         }
-
-        if (!gtk_text_iter_forward_line(&iter)) {
-            break;
-        }
+        line++;
     }
 }
 
@@ -100,20 +107,22 @@ void check_and_insert_hr(GtkTextBuffer *buf, AppGui *gui) {
 
         GtkTextChildAnchor *anchor = gtk_text_child_anchor_new();
         gtk_text_buffer_insert_child_anchor(buf, &replace_start, anchor);
-        
+        /* insert_child_anchor invalidated replace_start — do NOT reuse it. */
+
         GtkWidget *separator = gtk_separator_new(GTK_ORIENTATION_HORIZONTAL);
         gtk_widget_set_hexpand(separator, TRUE);
         gtk_widget_add_css_class(separator, "hr-line");
 
         gtk_text_view_add_child_at_anchor(GTK_TEXT_VIEW(gui->source_view), separator, anchor);
 
-        GtkTextIter next_char = replace_start;
-        gunichar nc = gtk_text_iter_get_char(&next_char);
-        if (nc != '\n' && nc != '\r' && !gtk_text_iter_is_end(&next_char)) {
-            gtk_text_buffer_insert(buf, &replace_start, "\n", 1);
-        } else if (gtk_text_iter_is_end(&next_char)) {
-            gtk_text_buffer_insert(buf, &replace_start, "\n", 1);
-        }
+        /* Do NOT inject a view-only '\n' after the anchor. The signal handlers
+         * are blocked here, so anything inserted into the view never reaches
+         * Zig's doc_buf — a view-only newline left the view one line longer than
+         * doc_buf, and every later edit then mapped view (line,col) onto the
+         * wrong doc_buf line (iter_to_position -> zig_replace_range). Replacing
+         * the marker text with a single-char anchor keeps the view's line count
+         * identical to doc_buf, so the mapping stays correct.
+         * (docs/ISSUES.md — live-HR divergence.) */
 
         g_signal_handlers_unblock_by_func(buf, on_insert_text_before, gui);
         g_signal_handlers_unblock_by_func(buf, on_insert_text_after, gui);

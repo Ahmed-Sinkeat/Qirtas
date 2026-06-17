@@ -64,51 +64,23 @@ static void do_search_from_cursor(AppGui *gui) {
     }
 }
 
+/* The regex-building algorithm now lives in src/markdown.zig
+ * (zig_arabic_search_regex), shared with future platforms and unit-tested.
+ * NFKC normalization stays here because it is platform-provided (GLib on Linux;
+ * an Android port uses java.text.Normalizer before calling the same Zig fn).
+ * NFKC decomposes Arabic presentation-form ligatures (from IME/pasted PDF) so a
+ * search for a ligature-forming word still matches plain text. */
 static char *create_arabic_search_regex(const char *raw_input) {
     if (!raw_input || strlen(raw_input) == 0) return g_strdup("");
 
-    /* NFKC: Arabic presentation-form ligatures (e.g. from IME composition or
-     * pasted PDF text) decompose into plain letter sequences, so a search
-     * for a word ending in a ligature-forming pair still matches plain text. */
     gchar *input_norm = g_utf8_normalize(raw_input, -1, G_NORMALIZE_NFKC);
-    const char *input = input_norm ? input_norm : raw_input;
-
-    GString *pattern = g_string_new("");
-    const char *p = input;
-
-    while (*p != '\0') {
-        gunichar c = g_utf8_get_char(p);
-        const char *next_p = g_utf8_next_char(p);
-
-        if ((c >= 0x064B && c <= 0x065F) || c == 0x0670) {
-            p = next_p;
-            continue;
-        }
-
-        if (strchr(".*+?^${}()|[]\\", (char)c) != NULL) {
-            g_string_append_printf(pattern, "\\%c", (char)c);
-        } else if (c == 0x0627 || c == 0x0623 || c == 0x0625 || c == 0x0622 || c == 0x0671) {
-            g_string_append(pattern, "[اأإآٱ]");
-        } else if (c == 0x0629 || c == 0x0647) {
-            g_string_append(pattern, "[ةه]");
-        } else if (c == 0x064A || c == 0x0649) {
-            g_string_append(pattern, "[يى]");
-        } else {
-            char utf8_buf[6] = {0};
-            int len = g_unichar_to_utf8(c, utf8_buf);
-            g_string_append_len(pattern, utf8_buf, len);
-        }
-
-        if (c >= 0x0600 && c <= 0x06FF) {
-            g_string_append(pattern, "[\\x{064B}-\\x{065F}\\x{0670}]*");
-        }
-
-        p = next_p;
-    }
-
-    char *result = pattern->str;
-    g_string_free(pattern, FALSE);
+    char *zr = zig_arabic_search_regex(input_norm ? input_norm : raw_input);
     g_free(input_norm);
+
+    /* Copy into a GLib-owned string so the caller's g_free is correct, then
+     * release the Zig allocation with the matching deallocator. */
+    char *result = g_strdup(zr ? zr : "");
+    if (zr) zig_free_document_text(zr);
     return result;
 }
 

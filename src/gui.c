@@ -52,144 +52,102 @@
  * in gui_buffer.c; UI dropdown/restart-button not yet ported to redesign. */
 int qirtas_app_language = 0;
 
+/* Transient editor toast ("Copied", etc.) — a revealer pill over the editor
+ * overlay. Created in the editor setup; driven by gui_show_toast(). */
+static GtkWidget *g_toast_revealer = NULL;
+static GtkWidget *g_toast_label = NULL;
+static guint g_toast_timeout_id = 0;
+
+static gboolean toast_hide_cb(gpointer data) {
+    (void)data;
+    g_toast_timeout_id = 0;
+    if (g_toast_revealer)
+        gtk_revealer_set_reveal_child(GTK_REVEALER(g_toast_revealer), FALSE);
+    return G_SOURCE_REMOVE;
+}
+
+void gui_show_toast(const char *msg) {
+    if (!g_toast_revealer || !g_toast_label || !msg) return;
+    gtk_label_set_text(GTK_LABEL(g_toast_label), msg);
+    gtk_revealer_set_reveal_child(GTK_REVEALER(g_toast_revealer), TRUE);
+    if (g_toast_timeout_id) g_source_remove(g_toast_timeout_id);
+    g_toast_timeout_id = g_timeout_add(1300, toast_hide_cb, NULL);
+}
+
 /* Perf observability gate (QIRTAS_PERF=1). Read by QIRTAS_PERF_* macros in
  * gui_internal.h; set from env in run_gui(). */
 int qirtas_perf_enabled = 0;
 
+/* Diagnostic toggles (env, read in run_gui). QIRTAS_NO_CONCEAL=1 disables the
+ * markdown conceal passes so scroll/typing cost can be measured with the
+ * conceal-tag overhead removed — tells us whether conceal drives scroll CPU
+ * before committing to viewport-scoped conceal. */
+int qirtas_no_conceal = 0;
+
 /* Icon style (0 = Classic, 1 = Modern); drives qirtas_icon() lookup. */
 int qirtas_icon_style = 0;
 
-/* EN→AR translation table + lookup. Active when app language == Arabic (1);
- * English passthrough otherwise. */
-typedef struct { const char *en; const char *ar; } TrPair;
-static const TrPair tr_table[] = {
-    { "Add New File",            "ملف جديد" },
-    { "Open File",               "فتح ملف" },
-    { "Save File",               "حفظ الملف" },
-    { "Export as PDF",           "تصدير PDF" },
-    { "Save As…",                "حفظ باسم…" },
-    { "Find / Replace…",         "بحث / استبدال…" },
-    { "Fullscreen",              "ملء الشاشة" },
-    { "Preferences",             "التفضيلات" },
-    { "Keyboard Shortcuts",      "اختصارات لوحة المفاتيح" },
-    { "Quit Qirtas",             "إغلاق قرطاس" },
-    { "Open",                    "فتح" },
-    { "Open with File Manager",  "فتح في مدير الملفات" },
-    { "Menu",                    "القائمة" },
-    { "THEME",                   "السمة" },
-    { "Theme",                   "السمة" },
-    { "APPEARANCE",              "المظهر" },
-    { "EDITOR",                  "المحرر" },
-    { "Takes effect on next launch", "يسري عند التشغيل التالي" },
-    { "Layout flips immediately; press Apply & Restart for the labels", "ينقلب الاتجاه فورًا؛ اضغط تطبيق وإعادة التشغيل لتغيير النصوص" },
-    { "PREFERENCES",             "التفضيلات" },
-    { "LAYOUT PREFERENCES",      "تفضيلات التخطيط" },
-    { "KEYBOARD SHORTCUTS",      "اختصارات لوحة المفاتيح" },
-    { "SYNC & CLOUD",            "المزامنة والسحابة" },
-    { "GENERAL",                 "عام" },
-    { "Language",                "اللغة | Language" },
-    { "Icon Style",              "نمط الأيقونات" },
-    { "Wrap Lines Automatically","التفاف الأسطر تلقائيًا" },
-    { "Display Line Numbers",    "إظهار أرقام الأسطر" },
-    { "Highlight Current Line",  "تمييز السطر الحالي" },
-    { "Display Overview Map",    "إظهار الخريطة العامة" },
-    { "Show Right Margin",       "إظهار الهامش الأيمن" },
-    { "Margin Position",         "موضع الهامش" },
-    { "Restore Session on Startup", "استعادة الجلسة عند التشغيل" },
-    { "Compact Layout",          "تخطيط مضغوط" },
-    { "Pointer Trail Animation", "أثر المؤشر المتحرك" },
-    { "Trail Color",             "لون الأثر" },
-    { "Pointer Color",           "لون المؤشر" },
-    { "Custom",                  "مخصص" },
-    { "Font Size",               "حجم الخط" },
-    { "English Font",            "الخط الإنجليزي" },
-    { "Arabic Font",             "الخط العربي" },
-    { "Status Bar Position",     "موضع شريط الحالة" },
-    { "Sidebar Side",            "جهة الشريط الجانبي" },
-    { "Text Width",              "عرض النص" },
-    { "Show layout dividers",    "إظهار فواصل التخطيط" },
-    { "Scroll past end (extra bottom space)", "تمرير بعد النهاية (مساحة سفلية إضافية)" },
-    { "Focus Mode",              "وضع التركيز" },
-    { "Show editor border",      "إظهار إطار المحرر" },
-    { "Keyboard Shortcuts",      "اختصارات لوحة المفاتيح" },
-    { "Settings",                "الإعدادات" },
-    { "Cut",                     "قص" },
-    { "Copy",                    "نسخ" },
-    { "Paste",                   "لصق" },
-    { "Format",                  "تنسيق" },
-    { "Paragraph",               "فقرة" },
-    { "Search in file…",         "بحث في الملف…" },
-    { "Replace with…",           "استبدال بـ…" },
-    { "Replace",                 "استبدال" },
-    { "All",                     "الكل" },
-    { "Toggle Sidebar (Ctrl+\\)","إظهار/إخفاء الشريط الجانبي" },
-    { "Search in file (Ctrl+F)", "بحث في الملف (Ctrl+F)" },
-    { "Horizontal Rule",         "خط أفقي" },
-    { "FORMAT",                  "تنسيق" },
-    { "PARAGRAPH",               "فقرة" },
-    { "Sync Now",                "مزامنة الآن" },
-    { "OUTLINE",                 "الفهرس" },
-    { "Outline",                 "المخطط" },
-    { "Library",                 "المكتبة" },
-    { "Toggle Outline",          "إظهار/إخفاء المخطط" },
-    { "Close Outline",           "إغلاق المخطط" },
-    { "Quick Open",              "فتح سريع" },
-    { "Type to search files…",   "اكتب للبحث في الملفات…" },
-    { "Apply & Restart",         "تطبيق وإعادة تشغيل" },
-    { "Labels are built at startup — restart to apply the language everywhere. Your tabs are restored.", "تُبنى النصوص عند بدء التشغيل — أعد التشغيل لتطبيق اللغة في كل مكان. تبويباتك ستُستعاد." },
-    { "Export to PDF",           "تصدير إلى PDF" },
-    { "Choose an export theme",  "اختر سمة التصدير" },
-    { "Editor look (syntax highlighted)", "مظهر المحرر (تلوين الصيغة)" },
-    { "Copy File",               "نسخ الملف" },
-    { "Notes",                   "الملاحظات" },
-    { "Enter file name:",        "أدخل اسم الملف:" },
-    { "VAULT",                   "الخزنة" },
-    { "Current Vault",           "الخزنة الحالية" },
-    { "Google Drive:",           "جوجل درايف:" },
-    { "Dropbox:",                "دروب بوكس:" },
-    { "GitHub:",                 "جيت هاب:" },
-    { "Local / Syncthing:",      "محلي / Syncthing:" },
-    { "Disconnected",            "غير متصل" },
-    { "Connected",               "متصل" },
-    { "Connect to Google Drive", "الاتصال بجوجل درايف" },
-    { "Connect to Dropbox",      "الاتصال بدروب بوكس" },
-    { "Connect to GitHub",       "الاتصال بجيت هاب" },
-    { "Sync Folder",             "مجلد المزامنة" },
-    { "Previous match",          "النتيجة السابقة" },
-    { "Next match",              "النتيجة التالية" },
-    { "Close (Esc)",             "إغلاق (Esc)" },
-    { "Replace current match",   "استبدال النتيجة الحالية" },
-    { "Replace all matches",     "استبدال كل النتائج" },
-    { "Scroll tabs left",        "تمرير التبويبات لليسار" },
-    { "Scroll tabs right",       "تمرير التبويبات لليمين" },
-    { "words",                   "كلمة" },
-    { "chars",                   "حرف" },
-    { "lines",                   "سطر" },
-    { "0 words",                 "0 كلمة" },
-    { "0 chars",                 "0 حرف" },
-    { "0 lines",                 "0 سطر" },
-    { "Open Existing File",      "فتح ملف موجود" },
-    { "Select Custom Theme CSS", "اختيار سمة CSS مخصصة" },
-    { "Open Reference  (Ctrl+?)","فتح المرجع (Ctrl+?)" },
-    { "Toggle sidebar",          "إظهار/إخفاء الشريط الجانبي" },
-    { "no matches",              "لا نتائج" },
-    { "Synced",                  "محفوظ" },
-    { "Not Synced",              "غير محفوظ" },
-    { "Saving...",               "جارٍ الحفظ..." },
-    { "Syncing...",              "جارٍ المزامنة..." },
-    { "Connecting...",           "جارٍ الاتصال..." },
-    { "Connected",               "متصل" },
-    { "Offline",                 "غير متصل" },
-    { "Sync Failed",             "فشلت المزامنة" },
-};
-
-const char *qirtas_tr(const char *en) {
-    if (qirtas_app_language != 1 || !en) return en;
-    for (size_t i = 0; i < G_N_ELEMENTS(tr_table); i++) {
-        if (strcmp(tr_table[i].en, en) == 0) return tr_table[i].ar;
+/* Offline measurement of the per-pause buffer_stats_timeout_cb work, minus the
+ * GUI plumbing. Builds a headless GtkTextBuffer (no window) from `text` and
+ * times the three O(document) passes that run on every typing pause:
+ *   word-count  : gtk_text_buffer_get_text() + full UTF-8 walk (capped >500k)
+ *   outline scan: the gui_outline_refresh per-line loop (get_iter_at_line +
+ *                 get_text per line), without creating widgets
+ *   counts      : get_char_count / get_line_count (expected ~free)
+ * Prints ms to stderr. Called from the QIRTAS_BENCH harness. */
+void qirtas_bench_stats(const char *text, int len) {
+    if (!gtk_is_initialized() && !gtk_init_check()) {
+        g_printerr("[bench] gtk_init_check failed (no display?) — skipping stats bench\n");
+        return;
     }
-    return en;
+    GtkTextBuffer *buf = gtk_text_buffer_new(NULL);
+    gtk_text_buffer_set_text(buf, text, len);
+
+    gint64 t0 = g_get_monotonic_time();
+    glong char_count = (glong)gtk_text_buffer_get_char_count(buf);
+    glong line_count = (glong)gtk_text_buffer_get_line_count(buf);
+    gint64 t1 = g_get_monotonic_time();
+
+    /* word count (same cap + walk as the real callback) */
+    glong word_count = -1;
+    if (char_count <= 500000) {
+        GtkTextIter s, e;
+        gtk_text_buffer_get_bounds(buf, &s, &e);
+        gchar *t = gtk_text_buffer_get_text(buf, &s, &e, TRUE);
+        word_count = 0;
+        gboolean in_word = FALSE;
+        for (char *p = t; *p; p = g_utf8_next_char(p)) {
+            gunichar ch = g_utf8_get_char(p);
+            if (g_unichar_isspace(ch) || g_unichar_ispunct(ch)) in_word = FALSE;
+            else if (!in_word) { word_count++; in_word = TRUE; }
+        }
+        g_free(t);
+    }
+    gint64 t2 = g_get_monotonic_time();
+
+    /* outline scan: the gui_outline_refresh loop, no widget creation */
+    int headings = 0, lc = (int)line_count;
+    for (int i = 0; i < lc && headings < 200; i++) {
+        GtkTextIter ls, le;
+        gtk_text_buffer_get_iter_at_line(buf, &ls, i);
+        le = ls;
+        if (!gtk_text_iter_ends_line(&le)) gtk_text_iter_forward_to_line_end(&le);
+        gchar *lt = gtk_text_buffer_get_text(buf, &ls, &le, TRUE);
+        int level = 0;
+        while (lt[level] == '#') level++;
+        if (level >= 1 && level <= 6 && lt[level] == ' ' && lt[level + 1] != '\0') headings++;
+        g_free(lt);
+    }
+    gint64 t3 = g_get_monotonic_time();
+
+    g_printerr("[bench] stats-pass (per typing pause) on %ld chars / %ld lines:\n", char_count, line_count);
+    g_printerr("[bench]   counts (char+line)        %.3f ms\n", (t1 - t0) / 1000.0);
+    g_printerr("[bench]   word-count walk           %.3f ms%s\n", (t2 - t1) / 1000.0, word_count < 0 ? " (SKIPPED: >500k cap)" : "");
+    g_printerr("[bench]   outline scan (%d headings) %.3f ms\n", headings, (t3 - t2) / 1000.0);
+
+    g_object_unref(buf);
 }
+
 
 AppGui    *global_gui         = NULL;
 GtkWidget *global_window      = NULL;
@@ -214,9 +172,7 @@ extern int zig_get_cursor_trail(void);
  * FORWARD DECLARATIONS
   ============ */
 
-static void on_open_vault_clicked(GtkButton *btn, gpointer user_data);
-static void on_vault_dialog_response(GObject *source_object, GAsyncResult *res, gpointer user_data);
-static void on_trail_toggled(GtkCheckButton *chk, gpointer user_data);
+static void on_trail_toggled(GObject *gobject, GParamSpec *pspec, gpointer user_data);
 
 void populate_explorer(AppGui *gui);
 static void set_active_tab(AppGui *gui, GtkWidget *active_btn, const char *page);
@@ -226,36 +182,29 @@ void on_insert_text_after(GtkTextBuffer *buf, GtkTextIter *location, gchar *text
 void on_delete_range_after(GtkTextBuffer *buf, GtkTextIter *start, GtkTextIter *end, gpointer user_data);
 gboolean on_editor_key_pressed(GtkEventControllerKey *ctrl, guint keyval, guint keycode, GdkModifierType state, gpointer user_data);
 void on_editor_right_click(GtkGestureClick *gesture, gint n_press, gdouble x, gdouble y, gpointer user_data);
-static gboolean editor_get_iter_at_widget_point(AppGui *gui, gdouble x, gdouble y, GtkTextIter *iter);
-static void apply_regex_conceal(GtkTextBuffer *buf, const gchar *text, const gchar *pattern, gint cursor_char, gint delim_len, GtkTextTag *conceal_tag);
-static void apply_regex_conceal_local(GtkTextBuffer *buf, const gchar *text, gint range_start_offset, const gchar *pattern, gint cursor_char, gint delim_len, GtkTextTag *conceal_tag);
 void update_conceal_markdown(GtkTextBuffer *buf);
 void update_conceal_markdown_all(GtkTextBuffer *buf);
 void on_buffer_changed(GtkTextBuffer *buf, gpointer user_data);
 void on_mark_set(GtkTextBuffer *buf, GtkTextIter *location, GtkTextMark *mark, gpointer user_data);
 static void on_cursor_position_changed(GObject *object, GParamSpec *pspec, gpointer user_data);
-static void on_format_clicked(GtkButton *btn, gpointer user_data);
-static void on_para_clicked(GtkButton *btn, gpointer user_data);
 void apply_wiki_link_tags(GtkTextBuffer *buf);
 void on_editor_left_click(GtkGestureClick *gesture, gint n_press, gdouble x, gdouble y, gpointer user_data);
 void on_editor_motion(GtkEventControllerMotion *controller, gdouble x, gdouble y, gpointer user_data);
 static gboolean on_editor_mouse_event(GtkEventControllerLegacy *controller, GdkEvent *event, gpointer user_data);
 gboolean keycode_matches_latin_keyval(guint keycode, guint target_keyval);
 void show_keybindings_window(AppGui *gui);
-static void on_settings_btn_clicked(GtkButton *btn, gpointer user_data);
 static gboolean on_settings_window_close_request(GtkWindow *window, gpointer user_data);
 static void on_status_bar_pos_changed(GObject *gobject, GParamSpec *pspec, gpointer user_data);
 static void on_sidebar_side_changed(GObject *gobject, GParamSpec *pspec, gpointer user_data);
-static void on_export_pdf_clicked(GtkButton *btn, gpointer user_data);
 void qirtas_export_to_pdf(AppGui *gui);
 void update_editor_font(AppGui *gui);
 void check_and_insert_hr(GtkTextBuffer *buf, AppGui *gui);
 void parse_and_render_hrs(GtkTextBuffer *buf, AppGui *gui);
+void parse_and_render_code_pills(GtkTextBuffer *buf, AppGui *gui);
+void parse_and_render_tables(GtkTextBuffer *buf, AppGui *gui);
+void gui_table_reset_reveal(GtkTextBuffer *buf);
 static char *replace_anchors_with_hrs(const char *src);
 void apply_paragraph_alignment(GtkTextBuffer *buf, GtkJustification justification);
-static void on_paste_plain_text_received(GObject *source_object, GAsyncResult *res, gpointer user_data);
-static void on_save_as_dialog_response(GObject *source_object, GAsyncResult *res, gpointer user_data);
-void trigger_save_as(AppGui *gui);
 void move_current_line(GtkTextBuffer *buf, gboolean up);
 static int get_line_height(GtkWidget *text_view);
 
@@ -277,11 +226,8 @@ void on_local_sync_clicked(GtkButton *btn, gpointer user_data);
 /* ScrollToCursorData + AppShortcut: canonical defs in gui_internal.h. */
 gboolean idle_scroll_to_cursor(gpointer user_data);
 
-static gboolean parse_shortcut_string(const char *str, guint *out_keyval, GdkModifierType *out_state);
 void init_app_shortcuts(void);
 gboolean match_app_shortcut(const char *action_id, guint keyval, guint keycode, GdkModifierType state);
-static gboolean on_settings_key_pressed(GtkEventControllerKey *ctrl, guint keyval, guint keycode, GdkModifierType state, gpointer user_data);
-static void on_edit_shortcut_clicked(GtkButton *btn, gpointer user_data);
 
 
 /* FFI — Called from Zig */
@@ -368,647 +314,125 @@ void on_theme_dropdown_changed(GObject *gobject, GParamSpec *pspec, gpointer use
 
 
 /* ── Draw a single ghost caret (rounded-rect pill) at (gx, gy) with given alpha ── */
-static void draw_ghost_caret(cairo_t *cr,
-                             double gx, double gy,
-                             double caret_w, double caret_h,
-                             double r, double g_col, double b,
-                             double alpha)
-{
-    if (alpha <= 0.01) return;
-
-    /* Caret width: keep it narrow like a real I-beam (2–3 px) */
-    double w      = caret_w < 2.5 ? 2.5 : caret_w;
-    double h      = caret_h;
-    double radius = w / 2.0;
-    if (radius < 1.0) radius = 1.0;
-    if (radius > h / 2.0) radius = h / 2.0;
-
-    cairo_new_sub_path(cr);
-    /* top-right arc */
-    cairo_arc(cr, gx + w - radius, gy + radius, radius, -G_PI_2, 0);
-    /* bottom-right arc */
-    cairo_arc(cr, gx + w - radius, gy + h - radius, radius, 0, G_PI_2);
-    /* bottom-left arc */
-    cairo_arc(cr, gx + radius, gy + h - radius, radius, G_PI_2, G_PI);
-    /* top-left arc */
-    cairo_arc(cr, gx + radius, gy + radius, radius, G_PI, 3.0 * G_PI_2);
-    cairo_close_path(cr);
-
-    cairo_set_source_rgba(cr, r, g_col, b, alpha);
-    cairo_fill(cr);
-}
 
 
-static char *resolve_resource_path(const char *rel_path) {
-    static char abs_path[2048];
-    char exe_path[1024] = {0};
-    ssize_t exe_len = readlink("/proc/self/exe", exe_path, sizeof(exe_path) - 1);
-    if (exe_len > 0) {
-        exe_path[exe_len] = '\0';
-        char *last_slash = strrchr(exe_path, '/');
-        if (last_slash) *last_slash = '\0'; /* e.g. /home/.../Qirtas/zig-out/bin */
-        
-        snprintf(abs_path, sizeof(abs_path), "%s/../../%s", exe_path, rel_path);
-        
-        if (access(abs_path, F_OK) != 0) {
-            snprintf(abs_path, sizeof(abs_path), "%s/%s", exe_path, rel_path);
-        }
-        return abs_path;
-    }
-    strncpy(abs_path, rel_path, sizeof(abs_path) - 1);
-    abs_path[sizeof(abs_path) - 1] = '\0';
-    return abs_path;
-}
 
 
-static void on_custom_theme_dialog_response(GObject *source_object, GAsyncResult *res, gpointer user_data) {
-    GtkFileDialog *dialog = GTK_FILE_DIALOG(source_object);
-    GError *error = NULL;
-    GFile *file = gtk_file_dialog_open_finish(dialog, res, &error);
+
+
+
+
+
+static void on_trail_toggled(GObject *gobject, GParamSpec *pspec, gpointer user_data) {
+    (void)pspec;
     AppGui *gui = (AppGui *)user_data;
-    GtkDropDown *dropdown = g_object_get_data(G_OBJECT(dialog), "theme-dropdown");
-    
-    if (file) {
-        char *path = g_file_get_path(file);
-        if (path) {
-            strncpy(custom_theme_path, path, sizeof(custom_theme_path) - 1);
-            custom_theme_path[sizeof(custom_theme_path) - 1] = '\0';
-            apply_theme(gui, "custom");
-            g_free(path);
-        }
-        g_object_unref(file);
-    } else {
-        if (dropdown) {
-            int idx = 0;
-            if (strcmp(current_theme, "sepia") == 0) idx = 1;
-            else if (strcmp(current_theme, "midnight") == 0) idx = 2;
-            else if (strcmp(current_theme, "things") == 0) idx = 3;
-            else if (strcmp(current_theme, "typewriter-light") == 0) idx = 4;
-            else if (strcmp(current_theme, "typewriter-dark") == 0) idx = 5;
-            else if (strcmp(current_theme, "qirtas") == 0) idx = 6;
-            else if (strcmp(current_theme, "custom") == 0) idx = 7;
-            g_signal_handlers_block_by_func(dropdown, G_CALLBACK(on_theme_dropdown_changed), gui);
-            gtk_drop_down_set_selected(dropdown, idx);
-            g_signal_handlers_unblock_by_func(dropdown, G_CALLBACK(on_theme_dropdown_changed), gui);
-        }
-    }
-}
-
-
-/* ============================================================
- * TEXT DIRECTION (RTL/LTR)
- * ============================================================ */
-
-static gboolean is_arabic_char(gunichar c) {
-    return ((c >= 0x0600 && c <= 0x06FF) ||
-            (c >= 0x0750 && c <= 0x077F) ||
-            (c >= 0x08A0 && c <= 0x08FF) ||
-            (c >= 0xFB50 && c <= 0xFDFF) ||
-            (c >= 0xFE70 && c <= 0xFEFF));
-}
-
-static gboolean detect_rtl(const char *text) {
-    if (!text) return FALSE;
-    const char *p = text;
-    while (*p) {
-        gunichar c = g_utf8_get_char(p);
-        
-        // Skip whitespaces, digits, common punctuation, and markdown formatting characters
-        if (g_unichar_isspace(c) ||
-            g_unichar_isdigit(c) ||
-            g_unichar_ispunct(c) ||
-            c == '#' || c == '*' || c == '-' || c == '_' || c == '+' ||
-            c == '>' || c == '`' || c == '[' || c == ']' || c == '(' ||
-            c == ')' || c == '{' || c == '}' || c == '|' || c == '~') {
-            p = g_utf8_next_char(p);
-            continue;
-        }
-        
-        // Check if the first strong character is Arabic
-        if (is_arabic_char(c)) {
-            return TRUE;
-        }
-        
-        // If it starts with Latin/English characters, fall back to LTR
-        if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')) {
-            return FALSE;
-        }
-        
-        p = g_utf8_next_char(p);
-    }
-    return FALSE;
-}
-
-static void update_paragraph_direction(GtkTextBuffer *buf, GtkTextIter *iter) {
-    GtkTextTagTable *table = gtk_text_buffer_get_tag_table(buf);
-    GtkTextTag *rtl_tag = gtk_text_tag_table_lookup(table, "rtl-tag");
-    if (!rtl_tag) {
-        rtl_tag = gtk_text_buffer_create_tag(buf, "rtl-tag", "direction", GTK_TEXT_DIR_RTL, NULL);
-    }
-    GtkTextTag *ltr_tag = gtk_text_tag_table_lookup(table, "ltr-tag");
-    if (!ltr_tag) {
-        ltr_tag = gtk_text_buffer_create_tag(buf, "ltr-tag", "direction", GTK_TEXT_DIR_LTR, NULL);
-    }
-
-    gint line_num = gtk_text_iter_get_line(iter);
-    GtkTextIter start;
-    gtk_text_buffer_get_iter_at_line(buf, &start, line_num);
-    GtkTextIter end = start;
-    if (!gtk_text_iter_ends_line(&end)) {
-        gtk_text_iter_forward_to_line_end(&end);
-    }
-    gchar *text = gtk_text_iter_get_text(&start, &end);
-    if (text) {
-        if (detect_rtl(text)) {
-            gtk_text_buffer_remove_tag(buf, ltr_tag, &start, &end);
-            gtk_text_buffer_apply_tag(buf, rtl_tag, &start, &end);
-        } else {
-            gtk_text_buffer_remove_tag(buf, rtl_tag, &start, &end);
-            gtk_text_buffer_apply_tag(buf, ltr_tag, &start, &end);
-        }
-        g_free(text);
-    }
-}
-
-void update_all_paragraphs_direction(GtkTextBuffer *buf) {
-    GtkTextIter iter;
-    gtk_text_buffer_get_start_iter(buf, &iter);
-    while (TRUE) {
-        update_paragraph_direction(buf, &iter);
-        if (!gtk_text_iter_forward_line(&iter)) {
-            break;
-        }
-    }
-}
-
-/* Per-edit direction update: only the touched lines. The full pass above is
- * O(document) and pulls a full document copy out of Zig just to sample for
- * RTL — running it per keystroke (even from idle) was the typing-lag bug. */
-void update_paragraph_direction_lines(GtkTextBuffer *buf, gint first_line, gint last_line) {
-    for (gint l = first_line; l <= last_line; l++) {
-        GtkTextIter it;
-        gtk_text_buffer_get_iter_at_line(buf, &it, l);
-        update_paragraph_direction(buf, &it);
-        if (l >= gtk_text_buffer_get_line_count(buf)) break;
-    }
-}
-
-typedef struct {
-    GtkTextBuffer *buf;
-    GtkWidget     *popover;
-    gint           saved_start; /* char offset of selection start when popover opened */
-    gint           saved_end;   /* char offset of selection end   when popover opened */
-} PopoverData;
-
-/* Restore the saved selection from PopoverData and apply inline format wrapper */
-static void apply_format_with_saved(GtkTextBuffer *buf, const char *prefix, const char *suffix,
-                                    gint saved_start, gint saved_end) {
-    gtk_text_buffer_begin_user_action(buf);
-
-    gboolean has_selection = (saved_start != saved_end);
-
-    if (!has_selection) {
-        /* No selection — insert markers at saved cursor and place cursor between them */
-        GtkTextIter cursor_iter;
-        gtk_text_buffer_get_iter_at_offset(buf, &cursor_iter, saved_start);
-
-        gint offset = gtk_text_iter_get_offset(&cursor_iter);
-        gtk_text_buffer_insert(buf, &cursor_iter, prefix, -1);
-
-        gtk_text_buffer_get_iter_at_offset(buf, &cursor_iter, offset + (gint)strlen(prefix));
-        gtk_text_buffer_insert(buf, &cursor_iter, suffix, -1);
-
-        GtkTextIter final_cursor;
-        gtk_text_buffer_get_iter_at_offset(buf, &final_cursor, offset + (gint)strlen(prefix));
-        gtk_text_buffer_select_range(buf, &final_cursor, &final_cursor);
-    } else {
-        /* Restore selection that was lost when popover opened */
-        GtkTextIter start, end;
-        gtk_text_buffer_get_iter_at_offset(buf, &start, saved_start);
-        gtk_text_buffer_get_iter_at_offset(buf, &end,   saved_end);
-
-        gchar *text     = gtk_text_buffer_get_text(buf, &start, &end, FALSE);
-        gchar *new_text = g_strconcat(prefix, text, suffix, NULL);
-
-        gint start_offset = gtk_text_iter_get_offset(&start);
-        gtk_text_buffer_delete(buf, &start, &end);
-
-        GtkTextIter insert_iter;
-        gtk_text_buffer_get_iter_at_offset(buf, &insert_iter, start_offset);
-        gtk_text_buffer_insert(buf, &insert_iter, new_text, -1);
-
-        GtkTextIter select_start, select_end;
-        gtk_text_buffer_get_iter_at_offset(buf, &select_start, start_offset);
-        gtk_text_buffer_get_iter_at_offset(buf, &select_end,   start_offset + (gint)strlen(new_text));
-        gtk_text_buffer_select_range(buf, &select_start, &select_end);
-
-        g_free(text);
-        g_free(new_text);
-    }
-    gtk_text_buffer_end_user_action(buf);
-}
-
-/* Legacy wrapper used by keyboard shortcuts (Ctrl+B etc.) — uses live selection */
-
-/* Core paragraph formatting body: strips existing markers, adds new prefix. */
-static void apply_paragraph_format_core(GtkTextBuffer *buf, const char *prefix,
-                                        gint start_line, gint end_line) {
-    gtk_text_buffer_begin_user_action(buf);
-
-    for (gint l = start_line; l <= end_line; l++) {
-        GtkTextIter line_start, line_end;
-        gtk_text_buffer_get_iter_at_line(buf, &line_start, l);
-
-        line_end = line_start;
-        gtk_text_iter_forward_to_line_end(&line_end);
-        gchar *line_text = gtk_text_buffer_get_text(buf, &line_start, &line_end, FALSE);
-
-        int ws = 0;
-        while (line_text[ws] == ' ' || line_text[ws] == '\t') ws++;
-
-        int strip_len = 0;
-        char *content = line_text + ws;
-        if (strncmp(content, "- [ ] ", 6) == 0 || strncmp(content, "- [x] ", 6) == 0 ||
-            strncmp(content, "* [ ] ", 6) == 0 || strncmp(content, "* [x] ", 6) == 0) {
-            strip_len = ws + 6;
-        } else if (strncmp(content, "- ", 2) == 0 || strncmp(content, "* ", 2) == 0 ||
-                   strncmp(content, "+ ", 2) == 0) {
-            strip_len = ws + 2;
-        } else if (content[0] == '#') {
-            int h = 0;
-            while (content[h] == '#') h++;
-            if (content[h] == ' ') strip_len = ws + h + 1;
-        } else {
-            int num = 0;
-            while (content[num] >= '0' && content[num] <= '9') num++;
-            if (num > 0 && content[num] == '.' && content[num+1] == ' ')
-                strip_len = ws + num + 2;
-        }
-
-        if (strip_len > 0) {
-            GtkTextIter strip_end = line_start;
-            gtk_text_iter_forward_chars(&strip_end, strip_len);
-            gtk_text_buffer_delete(buf, &line_start, &strip_end);
-            gtk_text_buffer_get_iter_at_line(buf, &line_start, l);
-        }
-
-        if (prefix && strlen(prefix) > 0) {
-            char final_prefix[64];
-            if (strcmp(prefix, "1. ") == 0)
-                snprintf(final_prefix, sizeof(final_prefix), "%d. ", (l - start_line) + 1);
-            else
-                snprintf(final_prefix, sizeof(final_prefix), "%s", prefix);
-            gtk_text_buffer_insert(buf, &line_start, final_prefix, -1);
-        }
-
-        g_free(line_text);
-    }
-
-    gtk_text_buffer_end_user_action(buf);
-}
-
-/* Entry point for popover buttons — uses saved selection offsets */
-static void apply_paragraph_format_with_saved(GtkTextBuffer *buf, const char *prefix,
-                                              gint saved_start, gint saved_end) {
-    GtkTextIter start, end;
-    gtk_text_buffer_get_iter_at_offset(buf, &start, saved_start);
-    gtk_text_buffer_get_iter_at_offset(buf, &end,   saved_end);
-    gint start_line = gtk_text_iter_get_line(&start);
-    gint end_line   = gtk_text_iter_get_line(&end);
-    apply_paragraph_format_core(buf, prefix, start_line, end_line);
-
-    gint total_lines = gtk_text_buffer_get_line_count(buf);
-    if (end_line >= total_lines) {
-        end_line = total_lines - 1;
-    }
-    if (end_line < 0) end_line = 0;
-
-    GtkTextIter cursor_iter;
-    gtk_text_buffer_get_iter_at_line(buf, &cursor_iter, end_line);
-    gtk_text_iter_forward_to_line_end(&cursor_iter);
-    gtk_text_buffer_select_range(buf, &cursor_iter, &cursor_iter);
-}
-
-/* Entry point for keyboard shortcuts — uses live selection */
-
-typedef struct {
-    GtkTextBuffer *buf;
-    char          *prefix;
-    char          *suffix;
-    gint           saved_start;
-    gint           saved_end;
-    gboolean       is_paragraph;
-} IdleFormatData;
-
-static gboolean do_idle_format(gpointer user_data) {
-    IdleFormatData *ifd = (IdleFormatData *)user_data;
-    GtkTextBuffer *buf = ifd->buf;
-
-    /* Block both signal handlers that queue scroll-to-cursor or conceal
-     * updates while we mutate the buffer.  Without this, every individual
-     * insert/delete inside the format loop fires mark-set → on_mark_set →
-     * idle_scroll_to_cursor, queuing many scroll callbacks that fight each
-     * other and produce a visible cursor jump. */
-    if (global_gui) {
-        g_signal_handlers_block_by_func(buf, on_mark_set,      global_gui);
-        g_signal_handlers_block_by_func(buf, on_buffer_changed, global_gui);
-    }
-
-    if (ifd->is_paragraph) {
-        apply_paragraph_format_with_saved(buf, ifd->prefix, ifd->saved_start, ifd->saved_end);
-    } else {
-        apply_format_with_saved(buf, ifd->prefix, ifd->suffix, ifd->saved_start, ifd->saved_end);
-    }
-
-    /* Unblock, then do a single conceal refresh so the decorators (bold
-     * markers, highlights, etc.) render correctly around the new text. */
-    if (global_gui) {
-        g_signal_handlers_unblock_by_func(buf, on_mark_set,      global_gui);
-        g_signal_handlers_unblock_by_func(buf, on_buffer_changed, global_gui);
-    }
-
-    /* One clean conceal pass now that all mutations are done. */
-    update_conceal_markdown_all(buf);
-
-    /* One well-timed scroll: queue an idle that runs AFTER GTK re-layouts
-     * from the conceal-tag changes we just applied. */
-    if (global_gui && global_gui->source_view &&
-        gtk_widget_get_realized(global_gui->source_view)) {
-        GtkTextIter insert_iter;
-        gtk_text_buffer_get_iter_at_mark(buf, &insert_iter, gtk_text_buffer_get_insert(buf));
-
-        ScrollToCursorData *d = g_new(ScrollToCursorData, 1);
-        d->gui  = global_gui;
-        d->offset = gtk_text_iter_get_offset(&insert_iter);
-        g_idle_add(idle_scroll_to_cursor, d);
-    }
-
-    g_free(ifd->prefix);
-    g_free(ifd->suffix);
-    g_free(ifd);
-    return G_SOURCE_REMOVE;
-}
-
-static void on_format_clicked(GtkButton *btn, gpointer user_data) {
-    PopoverData *pd = (PopoverData *)user_data;
-    const char *prefix = g_object_get_data(G_OBJECT(btn), "prefix");
-    const char *suffix = g_object_get_data(G_OBJECT(btn), "suffix");
-    
-    gtk_popover_popdown(GTK_POPOVER(pd->popover));
-    if (global_source_view) {
-        gtk_widget_grab_focus(global_source_view);
-    }
-    
-    IdleFormatData *ifd = g_new(IdleFormatData, 1);
-    ifd->buf = pd->buf;
-    ifd->prefix = prefix ? g_strdup(prefix) : NULL;
-    ifd->suffix = suffix ? g_strdup(suffix) : NULL;
-    ifd->saved_start = pd->saved_start;
-    ifd->saved_end = pd->saved_end;
-    ifd->is_paragraph = FALSE;
-    
-    g_idle_add(do_idle_format, ifd);
-}
-
-static void on_para_clicked(GtkButton *btn, gpointer user_data) {
-    PopoverData *pd = (PopoverData *)user_data;
-    const char *prefix = g_object_get_data(G_OBJECT(btn), "prefix");
-    
-    gtk_popover_popdown(GTK_POPOVER(pd->popover));
-    if (global_source_view) {
-        gtk_widget_grab_focus(global_source_view);
-    }
-    
-    IdleFormatData *ifd = g_new(IdleFormatData, 1);
-    ifd->buf = pd->buf;
-    ifd->prefix = prefix ? g_strdup(prefix) : NULL;
-    ifd->suffix = NULL;
-    ifd->saved_start = pd->saved_start;
-    ifd->saved_end = pd->saved_end;
-    ifd->is_paragraph = TRUE;
-    
-    g_idle_add(do_idle_format, ifd);
-}
-
-/* ============================================================
- * UNIFIED ADD / OPEN POPOVER & SHUTDOWN CONTROLS
- * ============================================================ */
-
-typedef struct {
-    GtkWidget *popover;
-    GtkWidget *box_actions;
-    GtkWidget *box_input;
-    GtkWidget *entry_name;
-    AppGui *gui;
-} AddPopoverWidgets;
-
-static void on_open_dialog_response(GObject *source_object, GAsyncResult *res, gpointer user_data) {
-    GtkFileDialog *dialog = GTK_FILE_DIALOG(source_object);
-    GError *error = NULL;
-    GFile *file = gtk_file_dialog_open_finish(dialog, res, &error);
-    if (file) {
-        char *path = g_file_get_path(file);
-        if (path) {
-            zig_open_file(path);
-            g_free(path);
-        }
-        g_object_unref(file);
-    }
-}
-
-static void on_vault_dialog_response(GObject *source_object, GAsyncResult *res, gpointer user_data) {
-    GtkFileDialog *dialog = GTK_FILE_DIALOG(source_object);
-    AppGui *gui = (AppGui *)user_data;
-    GError *error = NULL;
-    GFile *folder = gtk_file_dialog_select_folder_finish(dialog, res, &error);
-    if (folder) {
-        char *path = g_file_get_path(folder);
-        if (path) {
-            zig_open_vault(path);
-            if (gui->vault_path_lbl_val) {
-                gtk_label_set_text(GTK_LABEL(gui->vault_path_lbl_val), path);
-            }
-            g_free(path);
-        }
-        g_object_unref(folder);
-    }
-}
-
-static void on_open_vault_clicked(GtkButton *btn, gpointer user_data) {
-    (void)btn;
-    AppGui *gui = (AppGui *)user_data;
-    GtkFileDialog *dialog = gtk_file_dialog_new();
-    gtk_file_dialog_set_title(dialog, "Open Vault Directory");
-    gtk_file_dialog_select_folder(dialog, GTK_WINDOW(gui->settings_window), NULL, on_vault_dialog_response, gui);
-}
-
-static void on_trail_toggled(GtkCheckButton *chk, gpointer user_data) {
-    AppGui *gui = (AppGui *)user_data;
-    gboolean active = gtk_check_button_get_active(chk);
-    gui->enable_cursor_trail = active;
+    gboolean active = gtk_switch_get_active(GTK_SWITCH(gobject));
+    gui->cursor.enable_trail = active;
     zig_set_cursor_trail(active ? 1 : 0);
     if (!active) {
-        gui->trail_len = 0;
-        if (gui->cursor_trail_area) {
-            gtk_widget_queue_draw(gui->cursor_trail_area);
+        gui->cursor.trail_len = 0;
+        if (gui->cursor.trail_area) {
+            gtk_widget_queue_draw(gui->cursor.trail_area);
         }
     }
 }
 
-static void on_export_pdf_clicked(GtkButton *btn, gpointer user_data) {
+/* Font-size stepper (− / value / +). Clamped to the same 10-26 range the old
+ * GtkSpinButton enforced. */
+static void on_font_size_step_clicked(GtkButton *btn, gpointer user_data) {
     AppGui *gui = (AppGui *)user_data;
-    GtkWidget *pop = gtk_widget_get_ancestor(GTK_WIDGET(btn), GTK_TYPE_POPOVER);
-    if (pop) gtk_popover_popdown(GTK_POPOVER(pop));
-    qirtas_export_to_pdf(gui);
-}
-
-static void on_open_existing_clicked(GtkButton *btn, gpointer user_data) {
-    AppGui *gui = (AppGui *)user_data;
-    GtkFileDialog *dialog = gtk_file_dialog_new();
-    gtk_file_dialog_set_title(dialog, "Open Existing File");
-    gtk_file_dialog_open(dialog, GTK_WINDOW(gui->window), NULL, on_open_dialog_response, gui);
-    
-    GtkWidget *pop = gtk_widget_get_ancestor(GTK_WIDGET(btn), GTK_TYPE_POPOVER);
-    if (pop) gtk_popover_popdown(GTK_POPOVER(pop));
-}
-
-static void on_create_submit(GtkEntry *entry, gpointer user_data) {
-    AddPopoverWidgets *w = (AddPopoverWidgets *)user_data;
-    const char *text = gtk_editable_get_text(GTK_EDITABLE(entry));
-    if (text && strlen(text) > 0) {
-        zig_create_new_file(text);
+    int delta = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(btn), "qirtas-delta"));
+    double new_size = gui->current_font_size + delta;
+    if (new_size < 10.0) new_size = 10.0;
+    if (new_size > 26.0) new_size = 26.0;
+    if (new_size == gui->current_font_size) return;
+    gui->current_font_size = new_size;
+    qirtas_pref_set_int("font_size", (int)new_size);  /* persist as the new default */
+    update_editor_font(gui);
+    if (gui->font_size_value_lbl) {
+        char buf[8];
+        snprintf(buf, sizeof(buf), "%d", (int)gui->current_font_size);
+        gtk_label_set_text(GTK_LABEL(gui->font_size_value_lbl), buf);
     }
-    gtk_popover_popdown(GTK_POPOVER(w->popover));
 }
 
-static void on_create_new_clicked(GtkButton *btn, gpointer user_data) {
-    (void)btn;
-    AddPopoverWidgets *w = (AddPopoverWidgets *)user_data;
-    gtk_widget_set_visible(w->box_actions, FALSE);
-    gtk_widget_set_visible(w->box_input, TRUE);
-    gtk_widget_grab_focus(w->entry_name);
+/* Persist the main window's current size + maximized state so it reopens the
+ * same way. Called from every user-initiated exit path (window close, Ctrl+Q,
+ * the unsaved-changes prompt). Reads the live allocation, so the window must
+ * still be realized — true for all those paths. */
+void gui_save_window_geometry(AppGui *gui) {
+    if (!gui || !gui->window) return;
+    GtkWindow *win = GTK_WINDOW(gui->window);
+    gboolean maximized = gtk_window_is_maximized(win);
+    qirtas_pref_set_int("window_maximized", maximized ? 1 : 0);
+    if (!maximized) {
+        int w = gtk_widget_get_width(GTK_WIDGET(win));
+        int h = gtk_widget_get_height(GTK_WIDGET(win));
+        if (w > 100 && h > 100) {
+            qirtas_pref_set_int("window_width", w);
+            qirtas_pref_set_int("window_height", h);
+        }
+    }
 }
 
-static void on_popover_closed(GtkPopover *popover, gpointer user_data) {
-    (void)popover;
-    AddPopoverWidgets *w = (AddPopoverWidgets *)user_data;
-    gtk_widget_set_visible(w->box_actions, TRUE);
-    gtk_widget_set_visible(w->box_input, FALSE);
-    gtk_editable_set_text(GTK_EDITABLE(w->entry_name), "");
+/* Settings row: title (+ optional subtitle) on the left, GtkSwitch on the
+ * right. Returned box is appended directly to pop_box and inherits the
+ * existing .settings-sheet-body > box card styling. */
+static GtkWidget *settings_switch_row(const char *title, const char *subtitle,
+                                       gboolean active, GCallback cb, gpointer user_data,
+                                       GtkWidget **out_switch) {
+    GtkWidget *row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
+
+    GtkWidget *text_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 2);
+    gtk_widget_set_hexpand(text_box, TRUE);
+    gtk_widget_set_valign(text_box, GTK_ALIGN_CENTER);
+
+    GtkWidget *title_lbl = gtk_label_new(title);
+    gtk_widget_set_halign(title_lbl, GTK_ALIGN_START);
+    gtk_widget_add_css_class(title_lbl, "settings-switch-title");
+    gtk_box_append(GTK_BOX(text_box), title_lbl);
+
+    if (subtitle) {
+        GtkWidget *sub_lbl = gtk_label_new(subtitle);
+        gtk_widget_set_halign(sub_lbl, GTK_ALIGN_START);
+        gtk_widget_add_css_class(sub_lbl, "settings-switch-subtitle");
+        gtk_box_append(GTK_BOX(text_box), sub_lbl);
+    }
+
+    gtk_box_append(GTK_BOX(row), text_box);
+
+    GtkWidget *sw = gtk_switch_new();
+    gtk_switch_set_active(GTK_SWITCH(sw), active);
+    gtk_widget_set_valign(sw, GTK_ALIGN_CENTER);
+    g_signal_connect(sw, "notify::active", cb, user_data);
+    gtk_box_append(GTK_BOX(row), sw);
+
+    if (out_switch) *out_switch = sw;
+    return row;
 }
+
+
+
+
+
 
 /* Final cleanup: fires exactly once when the GApplication terminates, no
  * matter how (window close, quit action, last-window-removed). The right
  * place for the DB flush — close-request only covers the window path. */
-static void on_app_shutdown(GApplication *app, gpointer user_data) {
-    (void)app; (void)user_data;
-    zig_on_shutdown();
-}
 
-static void on_close_confirm_response(AdwAlertDialog *dlg, const char *response, gpointer user_data) {
-    (void)dlg;
-    AppGui *gui = (AppGui *)user_data;
-    if (!gui) return;
-    if (strcmp(response, "save") == 0) {
-        gui_manual_save(gui);
-        gtk_window_destroy(GTK_WINDOW(gui->window));   /* bypasses close-request */
-    } else if (strcmp(response, "discard") == 0) {
-        gui_set_buffer_modified(FALSE);
-        gtk_window_destroy(GTK_WINDOW(gui->window));
-    }
-    /* "cancel": keep the window open, do nothing. */
-}
 
 /* New-folder prompt (Ctrl+Shift+N, or the explorer right-click menu). Creates
  * a real directory in the vault, optionally under `parent_dir`. */
-static void on_folder_dialog_response(AdwAlertDialog *dlg, const char *response, gpointer user_data) {
-    GtkEntry *entry = GTK_ENTRY(user_data);
-    if (strcmp(response, "create") == 0) {
-        const char *name = gtk_editable_get_text(GTK_EDITABLE(entry));
-        if (name && name[0]) {
-            extern void zig_create_folder(const char *name);
-            const char *parent = g_object_get_data(G_OBJECT(dlg), "parent_dir");
-            if (parent && parent[0]) {
-                char *full = g_strdup_printf("%s/%s", parent, name);
-                zig_create_folder(full);
-                g_free(full);
-            } else {
-                zig_create_folder(name);
-            }
-        }
-    }
-}
 
 static void on_exp_new_file_clicked(GtkButton *btn, gpointer user_data);
 static void on_exp_new_folder_clicked(GtkButton *btn, gpointer user_data);
 static void on_exp_open_vault_fm_clicked(GtkButton *btn, gpointer user_data);
 
-void prompt_new_folder(AppGui *gui, const char *parent_dir) {
-    if (!gui) return;
-    AdwAlertDialog *dlg = ADW_ALERT_DIALOG(
-        adw_alert_dialog_new(qirtas_tr("New Folder"), NULL));
-    GtkWidget *entry = gtk_entry_new();
-    gtk_entry_set_placeholder_text(GTK_ENTRY(entry), qirtas_tr("Folder name"));
-    adw_alert_dialog_set_extra_child(dlg, entry);
-    adw_alert_dialog_add_responses(dlg,
-        "cancel", qirtas_tr("Cancel"),
-        "create", qirtas_tr("Create"), NULL);
-    adw_alert_dialog_set_response_appearance(dlg, "create", ADW_RESPONSE_SUGGESTED);
-    adw_alert_dialog_set_default_response(dlg, "create");
-    adw_alert_dialog_set_close_response(dlg, "cancel");
-    if (parent_dir)
-        g_object_set_data_full(G_OBJECT(dlg), "parent_dir", g_strdup(parent_dir), g_free);
-    g_signal_connect(dlg, "response", G_CALLBACK(on_folder_dialog_response), entry);
-    adw_dialog_present(ADW_DIALOG(dlg), gui->window);
-}
-
-static gboolean on_window_close_request(GtkWindow *window, gpointer user_data) {
-    AppGui *gui = (AppGui *)user_data;
-    /* Unsaved changes → prompt Save / Discard / Cancel and block the close
-     * until the user decides. Cleanup itself runs from the shutdown signal. */
-    if (gui && gui_get_buffer_modified()) {
-        AdwAlertDialog *dlg = ADW_ALERT_DIALOG(
-            adw_alert_dialog_new(qirtas_tr("Unsaved changes"),
-                                 qirtas_tr("Save your changes before closing?")));
-        adw_alert_dialog_add_responses(dlg,
-            "cancel",  qirtas_tr("Cancel"),
-            "discard", qirtas_tr("Discard"),
-            "save",    qirtas_tr("Save"), NULL);
-        adw_alert_dialog_set_response_appearance(dlg, "discard", ADW_RESPONSE_DESTRUCTIVE);
-        adw_alert_dialog_set_response_appearance(dlg, "save", ADW_RESPONSE_SUGGESTED);
-        adw_alert_dialog_set_default_response(dlg, "save");
-        adw_alert_dialog_set_close_response(dlg, "cancel");
-        g_signal_connect(dlg, "response", G_CALLBACK(on_close_confirm_response), gui);
-        adw_dialog_present(ADW_DIALOG(dlg), GTK_WIDGET(window));
-        return TRUE;   /* block; the response handler destroys when ready */
-    }
-    return FALSE;       /* clean → allow close, shutdown signal does cleanup */
-}
-
-static void on_popover_destroy(GtkWidget *widget, gpointer user_data) {
-    AppGui *gui = (AppGui *)user_data;
-    if (gui && gui->active_popover == widget) {
-        gui->active_popover = NULL;
-    }
-}
-
-static void on_editor_popover_closed(GtkPopover *popover, gpointer user_data) {
-    (void)user_data;
-    (void)popover;
-    /* GTK4 popdown() already hides the popover; unparenting is handled by
-     * the "destroy" signal connected to on_popover_destroy. Do nothing here. */
-}
 
 
-static gboolean editor_get_iter_at_widget_point(AppGui *gui, gdouble x, gdouble y, GtkTextIter *iter) {
-    if (!gui || !gui->source_view || !iter) return FALSE;
 
-    int bx, by;
-    gtk_text_view_window_to_buffer_coords(GTK_TEXT_VIEW(gui->source_view),
-                                         GTK_TEXT_WINDOW_TEXT,
-                                         (int)x, (int)y, &bx, &by);
-    return gtk_text_view_get_iter_at_location(GTK_TEXT_VIEW(gui->source_view), iter, bx, by);
-}
+
+
 
 
 static gboolean on_editor_mouse_event(GtkEventControllerLegacy *controller,
@@ -1121,118 +545,12 @@ static void on_workspace_click(GtkGestureClick *gesture, gint n_press, gdouble x
         if (gui->active_popover) {
             gtk_widget_unparent(gui->active_popover);
         }
-        if (gui->sidebar && gtk_widget_get_visible(gui->sidebar)) {
-            gtk_widget_set_visible(gui->sidebar, FALSE);
-        }
+        /* Library bar stays open until its toggle icon is pressed — clicking in
+         * the workspace no longer auto-closes it. */
     }
 }
 
-static void apply_regex_conceal(GtkTextBuffer *buf, const gchar *text, const gchar *pattern, gint cursor_char, gint delim_len, GtkTextTag *conceal_tag) {
-    GError *error = NULL;
-    static GRegex *regex_bold = NULL;
-    static GRegex *regex_highlight = NULL;
-    static GRegex *regex_italic = NULL;
-    
-    GRegex *regex = NULL;
-    if (strcmp(pattern, "\\*\\*([^\\n]+?)\\*\\*") == 0) {
-        if (!regex_bold) regex_bold = g_regex_new(pattern, G_REGEX_DEFAULT, 0, NULL);
-        regex = regex_bold;
-    } else if (strcmp(pattern, "==([^\\n]+?)==") == 0) {
-        if (!regex_highlight) regex_highlight = g_regex_new(pattern, G_REGEX_DEFAULT, 0, NULL);
-        regex = regex_highlight;
-    } else if (strcmp(pattern, "(?<!\\*)\\*([^\\n\\*]+?)\\*(?!\\*)") == 0) {
-        if (!regex_italic) regex_italic = g_regex_new(pattern, G_REGEX_DEFAULT, 0, NULL);
-        regex = regex_italic;
-    } else {
-        regex = g_regex_new(pattern, G_REGEX_DEFAULT, 0, NULL);
-    }
-    
-    if (!regex) return;
 
-    GMatchInfo *match_info = NULL;
-    gboolean has_match = g_regex_match(regex, text, 0, &match_info);
-    while (has_match) {
-        gint start_byte = 0;
-        gint end_byte = 0;
-        if (g_match_info_fetch_pos(match_info, 0, &start_byte, &end_byte)) {
-            gint start_char = g_utf8_pointer_to_offset(text, text + start_byte);
-            gint end_char = g_utf8_pointer_to_offset(text, text + end_byte);
-            
-            gboolean cursor_inside = (cursor_char >= start_char && cursor_char <= end_char);
-            
-            if (!cursor_inside) {
-                GtkTextIter start_iter, end_iter;
-                gtk_text_buffer_get_iter_at_offset(buf, &start_iter, start_char);
-                gtk_text_buffer_get_iter_at_offset(buf, &end_iter, start_char + delim_len);
-                gtk_text_buffer_apply_tag(buf, conceal_tag, &start_iter, &end_iter);
-                
-                gtk_text_buffer_get_iter_at_offset(buf, &start_iter, end_char - delim_len);
-                gtk_text_buffer_get_iter_at_offset(buf, &end_iter, end_char);
-                gtk_text_buffer_apply_tag(buf, conceal_tag, &start_iter, &end_iter);
-            }
-        }
-        has_match = g_match_info_next(match_info, &error);
-    }
-    g_match_info_free(match_info);
-    if (regex != regex_bold && regex != regex_highlight && regex != regex_italic) {
-        g_regex_unref(regex);
-    }
-}
-
-static void apply_regex_conceal_local(GtkTextBuffer *buf, const gchar *text, gint range_start_offset, const gchar *pattern, gint cursor_char, gint delim_len, GtkTextTag *conceal_tag) {
-    GError *error = NULL;
-    static GRegex *regex_bold = NULL;
-    static GRegex *regex_highlight = NULL;
-    static GRegex *regex_italic = NULL;
-    
-    GRegex *regex = NULL;
-    if (strcmp(pattern, "\\*\\*([^\\n]+?)\\*\\*") == 0) {
-        if (!regex_bold) regex_bold = g_regex_new(pattern, G_REGEX_DEFAULT, 0, NULL);
-        regex = regex_bold;
-    } else if (strcmp(pattern, "==([^\\n]+?)==") == 0) {
-        if (!regex_highlight) regex_highlight = g_regex_new(pattern, G_REGEX_DEFAULT, 0, NULL);
-        regex = regex_highlight;
-    } else if (strcmp(pattern, "(?<!\\*)\\*([^\\n\\*]+?)\\*(?!\\*)") == 0) {
-        if (!regex_italic) regex_italic = g_regex_new(pattern, G_REGEX_DEFAULT, 0, NULL);
-        regex = regex_italic;
-    } else {
-        regex = g_regex_new(pattern, G_REGEX_DEFAULT, 0, NULL);
-    }
-    
-    if (!regex) return;
-
-    GMatchInfo *match_info = NULL;
-    gboolean has_match = g_regex_match(regex, text, 0, &match_info);
-    while (has_match) {
-        gint start_byte = 0;
-        gint end_byte = 0;
-        if (g_match_info_fetch_pos(match_info, 0, &start_byte, &end_byte)) {
-            gint start_char_local = g_utf8_pointer_to_offset(text, text + start_byte);
-            gint end_char_local = g_utf8_pointer_to_offset(text, text + end_byte);
-            
-            gint start_char = range_start_offset + start_char_local;
-            gint end_char = range_start_offset + end_char_local;
-            
-            gboolean cursor_inside = (cursor_char >= start_char && cursor_char <= end_char);
-            
-            if (!cursor_inside) {
-                GtkTextIter start_iter, end_iter;
-                gtk_text_buffer_get_iter_at_offset(buf, &start_iter, start_char);
-                gtk_text_buffer_get_iter_at_offset(buf, &end_iter, start_char + delim_len);
-                gtk_text_buffer_apply_tag(buf, conceal_tag, &start_iter, &end_iter);
-                
-                gtk_text_buffer_get_iter_at_offset(buf, &start_iter, end_char - delim_len);
-                gtk_text_buffer_get_iter_at_offset(buf, &end_iter, end_char);
-                gtk_text_buffer_apply_tag(buf, conceal_tag, &start_iter, &end_iter);
-            }
-        }
-        has_match = g_match_info_next(match_info, &error);
-    }
-    g_match_info_free(match_info);
-    if (regex != regex_bold && regex != regex_highlight && regex != regex_italic) {
-        g_regex_unref(regex);
-    }
-}
 
 
 static char *replace_anchors_with_hrs(const char *src) {
@@ -1265,82 +583,8 @@ static void on_cursor_position_changed(GObject *object, GParamSpec *pspec, gpoin
 }
 
 
-static void on_paste_plain_text_received(GObject *source_object, GAsyncResult *res, gpointer user_data) {
-    GdkClipboard *clipboard = GDK_CLIPBOARD(source_object);
-    GError *error = NULL;
-    char *text = gdk_clipboard_read_text_finish(clipboard, res, &error);
-    if (error) {
-        g_warning("Failed to read text from clipboard: %s", error->message);
-        g_clear_error(&error);
-        return;
-    }
-    if (text) {
-        AppGui *gui = (AppGui *)user_data;
-        GtkTextBuffer *buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(gui->source_view));
-        GtkTextIter start, end;
-        gtk_text_buffer_begin_user_action(buf);
-        if (gtk_text_buffer_get_selection_bounds(buf, &start, &end)) {
-            gtk_text_buffer_delete(buf, &start, &end);
-        }
-        gtk_text_buffer_insert_at_cursor(buf, text, -1);
-        gtk_text_buffer_end_user_action(buf);
-        g_free(text);
-    }
-}
 
-static void on_save_as_dialog_response(GObject *source_object, GAsyncResult *res, gpointer user_data) {
-    GtkFileDialog *dialog = GTK_FILE_DIALOG(source_object);
-    AppGui *gui = (AppGui *)user_data;
-    GError *error = NULL;
-    GFile *file = gtk_file_dialog_save_finish(dialog, res, &error);
-    if (file) {
-        char *path = g_file_get_path(file);
-        if (path) {
-            GtkTextBuffer *buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(gui->source_view));
-            GtkTextIter start, end;
-            gtk_text_buffer_get_bounds(buf, &start, &end);
-            char *text = gtk_text_buffer_get_text(buf, &start, &end, FALSE);
-            if (text) {
-                FILE *f = fopen(path, "w");
-                if (f) {
-                    fputs(text, f);
-                    fclose(f);
-                    gui_set_sync_status("Saved");
-                    zig_open_file(path);
-                } else {
-                    gui_set_sync_status("Save As Failed");
-                }
-                g_free(text);
-            }
-            g_free(path);
-        }
-        g_object_unref(file);
-    } else if (error) {
-        g_clear_error(&error);
-    }
-}
 
-void trigger_save_as(AppGui *gui) {
-    if (!gui || !gui->window) return;
-
-    GtkFileDialog *dialog = gtk_file_dialog_new();
-    gtk_file_dialog_set_title(dialog, "Save As...");
-    gtk_file_dialog_set_initial_name(dialog, "untitled.md");
-
-    GtkFileFilter *filter = gtk_file_filter_new();
-    gtk_file_filter_set_name(filter, "Markdown Files");
-    gtk_file_filter_add_pattern(filter, "*.md");
-    gtk_file_filter_add_mime_type(filter, "text/markdown");
-
-    GListStore *filters = g_list_store_new(GTK_TYPE_FILE_FILTER);
-    g_list_store_append(filters, filter);
-    g_object_unref(filter);
-
-    gtk_file_dialog_set_filters(dialog, G_LIST_MODEL(filters));
-    g_object_unref(filters);
-
-    gtk_file_dialog_save(dialog, GTK_WINDOW(gui->window), NULL, on_save_as_dialog_response, gui);
-}
 
 
 static AppShortcut app_shortcuts[] = {
@@ -1356,7 +600,8 @@ static AppShortcut app_shortcuts[] = {
     { "zoom_in", "Zoom In", "<Control>equal", 0, 0 },
     { "zoom_out", "Zoom Out", "<Control>minus", 0, 0 },
     { "reset_zoom", "Reset Zoom", "<Control>0", 0, 0 },
-    { "fullscreen", "Fullscreen / Focus Mode", "F11", 0, 0 },
+    { "fullscreen", "Fullscreen", "F11", 0, 0 },
+    { "focus_mode", "Focus mode", "<Control><Shift>f", 0, 0 },
     { "copy", "Copy selected text", "<Control>c", 0, 0 },
     { "cut", "Cut selected text", "<Control>x", 0, 0 },
     { "paste", "Paste text", "<Control>v", 0, 0 },
@@ -1387,8 +632,8 @@ static AppShortcut app_shortcuts[] = {
     { "replace_text", "Replace text", "<Control>h", 0, 0 },
     { "close_tab", "Close file / tab", "<Control>w", 0, 0 },
     { "open_settings", "Open settings", "<Control>comma", 0, 0 },
-    { "shortcuts_ref", "Shortcuts reference", "<Control>question", 0, 0 },
-    { "toggle_sidebar", "Toggle Sidebar", "<Control><Shift>backslash", 0, 0 },
+    { "shortcuts_ref", "Shortcuts reference", "<Control><Shift>slash", 0, 0 },
+    { "toggle_sidebar", "Toggle Sidebar", "F9", 0, 0 },
     { "inline_code", "Inline code", "<Control>k", 0, 0 },
     { "highlight", "Highlight", "<Control><Shift>h", 0, 0 },
     { "blockquote", "Blockquote", "<Control>q", 0, 0 },
@@ -1399,172 +644,14 @@ static AppShortcut app_shortcuts[] = {
 #define NUM_APP_SHORTCUTS (sizeof(app_shortcuts)/sizeof(app_shortcuts[0]))
 
 static int shortcut_listening_index = -1;
-static GtkWidget *shortcut_value_labels[NUM_APP_SHORTCUTS] = { NULL };
 static GtkWidget *shortcut_edit_buttons[NUM_APP_SHORTCUTS] = { NULL };
 
-static gboolean parse_shortcut_string(const char *str, guint *out_keyval, GdkModifierType *out_state) {
-    if (!str || strlen(str) == 0) return FALSE;
-
-    GdkModifierType state = 0;
-    const char *p = str;
-
-    while (*p == '<') {
-        const char *end = strchr(p, '>');
-        if (!end) break;
-        
-        size_t len = end - p - 1;
-        if (g_ascii_strncasecmp(p + 1, "Control", len) == 0) {
-            state |= GDK_CONTROL_MASK;
-        } else if (g_ascii_strncasecmp(p + 1, "Shift", len) == 0) {
-            state |= GDK_SHIFT_MASK;
-        } else if (g_ascii_strncasecmp(p + 1, "Alt", len) == 0) {
-            state |= GDK_ALT_MASK;
-        } else if (g_ascii_strncasecmp(p + 1, "Meta", len) == 0 || g_ascii_strncasecmp(p + 1, "Super", len) == 0) {
-            state |= GDK_SUPER_MASK;
-        }
-        p = end + 1;
-    }
-
-    guint keyval = gdk_keyval_from_name(p);
-    if (keyval == GDK_KEY_VoidSymbol) {
-        if (strcmp(p, "+") == 0) keyval = GDK_KEY_plus;
-        else if (strcmp(p, "=") == 0) keyval = GDK_KEY_equal;
-        else if (strcmp(p, "-") == 0) keyval = GDK_KEY_minus;
-        else if (strcmp(p, "\\") == 0) keyval = GDK_KEY_backslash;
-        else return FALSE;
-    }
-
-    *out_keyval = keyval;
-    *out_state = state;
-    return TRUE;
-}
 
 
-static gboolean is_modifier_key(guint keyval) {
-    return (keyval == GDK_KEY_Shift_L || keyval == GDK_KEY_Shift_R ||
-            keyval == GDK_KEY_Control_L || keyval == GDK_KEY_Control_R ||
-            keyval == GDK_KEY_Alt_L || keyval == GDK_KEY_Alt_R ||
-            keyval == GDK_KEY_Meta_L || keyval == GDK_KEY_Meta_R ||
-            keyval == GDK_KEY_Super_L || keyval == GDK_KEY_Super_R ||
-            keyval == GDK_KEY_Hyper_L || keyval == GDK_KEY_Hyper_R ||
-            keyval == GDK_KEY_Caps_Lock || keyval == GDK_KEY_Num_Lock ||
-            keyval == GDK_KEY_Scroll_Lock);
-}
 
-static gchar* get_pretty_shortcut_string(const char *shortcut_str) {
-    GString *pretty = g_string_new("");
-    const char *p = shortcut_str;
-    while (*p) {
-        if (strncmp(p, "<Control>", 9) == 0) {
-            g_string_append(pretty, "Ctrl + ");
-            p += 9;
-        } else if (strncmp(p, "<Shift>", 7) == 0) {
-            g_string_append(pretty, "Shift + ");
-            p += 7;
-        } else if (strncmp(p, "<Alt>", 5) == 0) {
-            g_string_append(pretty, "Alt + ");
-            p += 5;
-        } else if (strncmp(p, "<Super>", 7) == 0) {
-            g_string_append(pretty, "Super + ");
-            p += 7;
-        } else {
-            if (strlen(p) == 1 && *p >= 'a' && *p <= 'z') {
-                g_string_append_c(pretty, *p - 32);
-            } else {
-                g_string_append(pretty, p);
-            }
-            break;
-        }
-    }
-    return g_string_free(pretty, FALSE);
-}
 
-static gboolean on_settings_key_pressed(GtkEventControllerKey *ctrl,
-                                        guint keyval, guint keycode,
-                                        GdkModifierType state, gpointer user_data) {
-    (void)ctrl;
-    (void)keycode;
-    (void)user_data;
 
-    if (shortcut_listening_index < 0) return FALSE;
 
-    if (is_modifier_key(keyval)) {
-        return TRUE;
-    }
-
-    int idx = shortcut_listening_index;
-    shortcut_listening_index = -1;
-
-    GString *gstr = g_string_new("");
-    if (state & GDK_CONTROL_MASK) g_string_append(gstr, "<Control>");
-    if (state & GDK_SHIFT_MASK)   g_string_append(gstr, "<Shift>");
-    if (state & GDK_ALT_MASK)     g_string_append(gstr, "<Alt>");
-    if (state & GDK_SUPER_MASK)   g_string_append(gstr, "<Super>");
-
-    const char *key_name = gdk_keyval_name(keyval);
-    if (!key_name) {
-        key_name = "void";
-    }
-    g_string_append(gstr, key_name);
-
-    strncpy(app_shortcuts[idx].shortcut_str, gstr->str, sizeof(app_shortcuts[idx].shortcut_str) - 1);
-    app_shortcuts[idx].shortcut_str[sizeof(app_shortcuts[idx].shortcut_str) - 1] = '\0';
-    app_shortcuts[idx].keyval = keyval;
-    app_shortcuts[idx].state = state & (GDK_CONTROL_MASK | GDK_SHIFT_MASK | GDK_ALT_MASK | GDK_SUPER_MASK);
-
-    sqlite3 *db = NULL;
-    if (sqlite3_open(DB_PATH, &db) == SQLITE_OK) {
-        const char *insert_sql = "INSERT OR REPLACE INTO keyboard_shortcuts (action_name, shortcut_val) VALUES (?, ?);";
-        sqlite3_stmt *stmt = NULL;
-        if (sqlite3_prepare_v2(db, insert_sql, -1, &stmt, NULL) == SQLITE_OK) {
-            sqlite3_bind_text(stmt, 1, app_shortcuts[idx].action_id, -1, SQLITE_STATIC);
-            sqlite3_bind_text(stmt, 2, app_shortcuts[idx].shortcut_str, -1, SQLITE_STATIC);
-            sqlite3_step(stmt);
-            sqlite3_finalize(stmt);
-        }
-        sqlite3_close(db);
-    }
-
-    if (shortcut_value_labels[idx]) {
-        gchar *pretty_str = get_pretty_shortcut_string(app_shortcuts[idx].shortcut_str);
-        gtk_label_set_text(GTK_LABEL(shortcut_value_labels[idx]), pretty_str);
-        g_free(pretty_str);
-    }
-
-    if (shortcut_edit_buttons[idx]) {
-        gtk_button_set_label(GTK_BUTTON(shortcut_edit_buttons[idx]), "Edit");
-    }
-
-    g_string_free(gstr, TRUE);
-
-    return TRUE;
-}
-
-static void on_edit_shortcut_clicked(GtkButton *btn, gpointer user_data) {
-    int idx = GPOINTER_TO_INT(user_data);
-
-    if (shortcut_listening_index >= 0 && shortcut_listening_index != idx) {
-        int old_idx = shortcut_listening_index;
-        if (shortcut_edit_buttons[old_idx]) {
-            gtk_button_set_label(GTK_BUTTON(shortcut_edit_buttons[old_idx]), "Edit");
-        }
-    }
-
-    shortcut_listening_index = idx;
-    gtk_button_set_label(btn, "Press keys...");
-}
-
-static void on_kb_window_destroy(GtkWidget *widget, gpointer user_data) {
-    (void)widget;
-    (void)user_data;
-    if (shortcut_listening_index >= 0) {
-        shortcut_listening_index = -1;
-    }
-    for (size_t i = 0; i < NUM_APP_SHORTCUTS; i++) {
-        shortcut_value_labels[i] = NULL;
-        shortcut_edit_buttons[i] = NULL;
-    }
-}
 
 
 /* ============================================================
@@ -1619,101 +706,9 @@ static void on_logo_clicked(GtkButton *btn, gpointer user_data) {
  * SEARCH
  * ============================================================ */
 
-static void update_search_match_count(AppGui *gui) {
-    if (!gui->search_ctx) return;
-    gint count = gtk_source_search_context_get_occurrences_count(gui->search_ctx);
-    char buf[48];
-    if (count == -1 || count == 0)
-        snprintf(buf, sizeof(buf), "no matches");
-    else
-        snprintf(buf, sizeof(buf), "%d match%s", count, count == 1 ? "" : "es");
-    gtk_label_set_text(GTK_LABEL(gui->search_match_label), buf);
-}
 
-static void do_search_forward(AppGui *gui) {
-    if (!gui->search_ctx) return;
-    GtkTextBuffer *buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(gui->source_view));
-    GtkTextIter start, end, ms, me;
-    gtk_text_buffer_get_selection_bounds(buf, &start, &end);
-    gtk_text_iter_forward_char(&end);
-    gboolean wrapped;
-    if (gtk_source_search_context_forward(gui->search_ctx, &end, &ms, &me, &wrapped)) {
-        gtk_text_buffer_select_range(buf, &ms, &me);
-        gtk_text_view_scroll_to_mark(GTK_TEXT_VIEW(gui->source_view),
-                                     gtk_text_buffer_get_insert(buf),
-                                     0.15, FALSE, 0.0, 0.5);
-    }
-    update_search_match_count(gui);
-}
 
-static void do_search_backward(AppGui *gui) {
-    if (!gui->search_ctx) return;
-    GtkTextBuffer *buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(gui->source_view));
-    GtkTextIter start, end, ms, me;
-    gtk_text_buffer_get_selection_bounds(buf, &start, &end);
-    gboolean wrapped;
-    if (gtk_source_search_context_backward(gui->search_ctx, &start, &ms, &me, &wrapped)) {
-        gtk_text_buffer_select_range(buf, &ms, &me);
-        gtk_text_view_scroll_to_mark(GTK_TEXT_VIEW(gui->source_view),
-                                     gtk_text_buffer_get_insert(buf),
-                                     0.15, FALSE, 0.0, 0.5);
-    }
-    update_search_match_count(gui);
-}
 
-static char *create_arabic_search_regex(const char *input) {
-    if (!input || strlen(input) == 0) return g_strdup("");
-
-    GString *pattern = g_string_new("");
-    const char *p = input;
-
-    while (*p != '\0') {
-        gunichar c = g_utf8_get_char(p);
-        const char *next_p = g_utf8_next_char(p);
-
-        // 1. Skip input diacritics so they are ignored/stripped from user query
-        if ((c >= 0x064B && c <= 0x065F) || c == 0x0670) {
-            p = next_p;
-            continue;
-        }
-
-        // 2. Check for regex special characters and escape them
-        if (strchr(".*+?^${}()|[]\\", (char)c) != NULL) {
-            g_string_append_printf(pattern, "\\%c", (char)c);
-        }
-        // 3. Arabic letter variations
-        else if (c == 0x0627 || c == 0x0623 || c == 0x0625 || c == 0x0622 || c == 0x0671) {
-            // Alef group: [اأإآٱ]
-            g_string_append(pattern, "[اأإآٱ]");
-        }
-        else if (c == 0x0629 || c == 0x0647) {
-            // Teh Marbuta / Heh: [ةه]
-            g_string_append(pattern, "[ةه]");
-        }
-        else if (c == 0x064A || c == 0x0649) {
-            // Yeh / Alef Maksura: [يى]
-            g_string_append(pattern, "[يى]");
-        }
-        else {
-            // Standard character: append its UTF-8 representation
-            char utf8_buf[6] = {0};
-            int len = g_unichar_to_utf8(c, utf8_buf);
-            g_string_append_len(pattern, utf8_buf, len);
-        }
-
-        // 4. Append optional Arabic diacritics matcher after this character
-        // Arabic block is 0x0600 to 0x06FF.
-        if (c >= 0x0600 && c <= 0x06FF) {
-            g_string_append(pattern, "[\\x{064B}-\\x{065F}\\x{0670}]*");
-        }
-
-        p = next_p;
-    }
-
-    char *result = pattern->str;
-    g_string_free(pattern, FALSE);
-    return result;
-}
 
 
 /* ============================================================
@@ -1732,16 +727,47 @@ static void on_files_clicked(GtkButton *btn, gpointer user_data) {
 
 /* stats click handler removed */
 
-static void on_wrap_toggled(GtkCheckButton *btn, gpointer user_data) {
+
+static void on_wrap_toggled(GObject *gobject, GParamSpec *pspec, gpointer user_data) {
+    (void)pspec;
     GtkTextView *view = GTK_TEXT_VIEW(user_data);
     /* Full-buffer model: soft wrap is a real user choice (the old virtual-
-     * paging restriction that forced it off is gone). Honor the checkbox. */
-    gboolean active = gtk_check_button_get_active(btn);
+     * paging restriction that forced it off is gone). Honor the switch. */
+    gboolean active = gtk_switch_get_active(GTK_SWITCH(gobject));
     if (global_gui) {
         global_gui->wrap_lines = active;
         qirtas_pref_set_int("wrap_lines", active ? 1 : 0);
     }
     gtk_text_view_set_wrap_mode(view, active ? GTK_WRAP_WORD_CHAR : GTK_WRAP_NONE);
+    /* Re-layout so disabling wrap doesn't leave dead space on the right. */
+    if (global_gui) apply_editor_prefs(global_gui);
+}
+
+/* Toggle markdown conceal (hiding **, #, etc). A persistent escape hatch:
+ * conceal applies scale-tagged ranges that GTK's text layout can choke on with
+ * some pathological documents — turning it off renders raw markers but is
+ * crash-safe. */
+static void on_conceal_toggled(GObject *gobject, GParamSpec *pspec, gpointer user_data) {
+    (void)pspec;
+    AppGui *gui = (AppGui *)user_data;
+    gboolean on = gtk_switch_get_active(GTK_SWITCH(gobject));
+    qirtas_no_conceal = on ? 0 : 1;
+    qirtas_pref_set_int("conceal_enabled", on ? 1 : 0);
+    if (!gui || !gui->source_view) return;
+    GtkTextBuffer *buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(gui->source_view));
+    if (!on) {
+        /* Strip the conceal/heading tags so the raw markers show. */
+        GtkTextTagTable *table = gtk_text_buffer_get_tag_table(buf);
+        GtkTextIter s, e;
+        gtk_text_buffer_get_bounds(buf, &s, &e);
+        const char *names[] = { "conceal", "heading1", "heading2", "heading3", "heading4" };
+        for (int i = 0; i < 5; i++) {
+            GtkTextTag *t = gtk_text_tag_table_lookup(table, names[i]);
+            if (t) gtk_text_buffer_remove_tag(buf, t, &s, &e);
+        }
+    } else {
+        gui_refresh_buffer_stats();
+    }
 }
 
 static char current_en_font[64] = "JetBrains Mono";
@@ -1779,7 +805,6 @@ static void format_mtime(time_t mtime, char *out, size_t n) {
 }
 
 /* Global tracker for the currently active tree row button */
-static GtkWidget *g_active_tree_row = NULL;
 
 /* Data passed to toggle callback for directory rows */
 typedef struct {
@@ -1788,202 +813,36 @@ typedef struct {
     gboolean   expanded;
 } TreeDirData;
 
-static void on_tree_dir_toggle(GtkButton *btn, gpointer user_data) {
-    (void)btn;
-    TreeDirData *d = (TreeDirData *)user_data;
-    d->expanded = !d->expanded;
-    gtk_widget_set_visible(d->children_box, d->expanded);
-    gtk_label_set_text(GTK_LABEL(d->arrow_label), d->expanded ? "▼" : "▶");
-}
 
-static void on_tree_file_clicked(GtkButton *btn, gpointer user_data) {
-    /* Clear previous active */
-    if (g_active_tree_row && GTK_IS_WIDGET(g_active_tree_row))
-        gtk_widget_remove_css_class(g_active_tree_row, "active");
-    g_active_tree_row = GTK_WIDGET(btn);
-    gtk_widget_add_css_class(GTK_WIDGET(btn), "active");
-    zig_open_file((const char *)user_data);
-}
 
 /* Forward declaration */
-static void tree_build_dir(GtkWidget *parent_box, const char *dir_path, int depth);
 
 /*
  * Build a single file row widget.
  * full_path  – absolute or relative path to the file
  * name       – display name (basename)
  */
-static GtkWidget *tree_build_file_row(const char *full_path, const char *name) {
-    gboolean is_md = g_str_has_suffix(name, ".md") || g_str_has_suffix(name, ".txt");
-
-    GtkWidget *btn = gtk_button_new();
-    gtk_widget_add_css_class(btn, "tree-row");
-    gtk_widget_set_hexpand(btn, TRUE);
-
-    GtkWidget *hbox = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 4);
-    gtk_widget_set_halign(hbox, GTK_ALIGN_FILL);
-    gtk_widget_set_hexpand(hbox, TRUE);
-
-    /* File icon */
-    const char *icon_name = is_md ? "text-x-generic-symbolic" : "text-x-generic-symbolic";
-    GtkWidget *icon = gtk_image_new_from_icon_name(icon_name);
-    gtk_widget_add_css_class(icon, is_md ? "tree-icon-md" : "tree-icon");
-    gtk_box_append(GTK_BOX(hbox), icon);
-
-    /* Name label */
-    GtkWidget *lbl = gtk_label_new(name);
-    gtk_widget_add_css_class(lbl, "tree-row-label");
-    gtk_label_set_ellipsize(GTK_LABEL(lbl), PANGO_ELLIPSIZE_END);
-    gtk_widget_set_hexpand(lbl, TRUE);
-    gtk_widget_set_halign(lbl, GTK_ALIGN_START);
-    gtk_box_append(GTK_BOX(hbox), lbl);
-
-    gtk_button_set_child(GTK_BUTTON(btn), hbox);
-
-    /* Store full path on button and connect signal */
-    char *path_copy = g_strdup(full_path);
-    g_signal_connect_data(btn, "clicked",
-                          G_CALLBACK(on_tree_file_clicked),
-                          path_copy, (GClosureNotify)g_free, 0);
-
-    /* Store filepath for search */
-    g_object_set_data_full(G_OBJECT(btn), "tree_filepath", g_strdup(full_path), g_free);
-
-    return btn;
-}
 
 /*
  * Build a directory row with a collapsible children box.
  * Returns the outer wrapper box (row + children).
  */
-static GtkWidget *tree_build_dir_row(const char *dir_path, const char *name) {
-    GtkWidget *wrapper = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
-
-    /* Header button row */
-    GtkWidget *btn = gtk_button_new();
-    gtk_widget_add_css_class(btn, "tree-row");
-    gtk_widget_add_css_class(btn, "tree-row-dir");
-    gtk_widget_set_hexpand(btn, TRUE);
-
-    GtkWidget *hbox = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 4);
-    gtk_widget_set_hexpand(hbox, TRUE);
-
-    /* Arrow label */
-    GtkWidget *arrow = gtk_label_new("▶");
-    gtk_widget_add_css_class(arrow, "tree-arrow");
-    gtk_box_append(GTK_BOX(hbox), arrow);
-
-    /* Folder icon */
-    GtkWidget *icon = gtk_image_new_from_icon_name("folder-symbolic");
-    gtk_widget_add_css_class(icon, "tree-icon-folder");
-    gtk_box_append(GTK_BOX(hbox), icon);
-
-    /* Name label */
-    GtkWidget *lbl = gtk_label_new(name);
-    gtk_widget_add_css_class(lbl, "tree-row-label");
-    gtk_label_set_ellipsize(GTK_LABEL(lbl), PANGO_ELLIPSIZE_END);
-    gtk_widget_set_hexpand(lbl, TRUE);
-    gtk_widget_set_halign(lbl, GTK_ALIGN_START);
-    gtk_box_append(GTK_BOX(hbox), lbl);
-
-    gtk_button_set_child(GTK_BUTTON(btn), hbox);
-    gtk_box_append(GTK_BOX(wrapper), btn);
-
-    /* Children container (hidden by default) */
-    GtkWidget *children_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
-    gtk_widget_add_css_class(children_box, "tree-children");
-    gtk_widget_set_visible(children_box, FALSE);
-    gtk_box_append(GTK_BOX(wrapper), children_box);
-
-    /* Recursively populate children */
-    tree_build_dir(children_box, dir_path, 0);
-
-    /* Toggle data */
-    TreeDirData *data = g_new0(TreeDirData, 1);
-    data->children_box = children_box;
-    data->arrow_label  = arrow;
-    data->expanded     = FALSE;
-
-    g_signal_connect_data(btn, "clicked",
-                          G_CALLBACK(on_tree_dir_toggle),
-                          data, (GClosureNotify)g_free, 0);
-
-    return wrapper;
-}
 
 /*
  * String comparison function for qsort — directories first, then alphabetical.
  */
 typedef struct { char name[NAME_MAX+1]; gboolean is_dir; } DirEntry;
 
-static int dir_entry_cmp(const void *a, const void *b) {
-    const DirEntry *ea = (const DirEntry *)a;
-    const DirEntry *eb = (const DirEntry *)b;
-    if (ea->is_dir != eb->is_dir)
-        return ea->is_dir ? -1 : 1; /* dirs first */
-    return strcasecmp(ea->name, eb->name);
-}
 
 /*
  * Recursively fill parent_box with tree rows for all entries in dir_path.
  * depth is unused currently but kept for future indent logic.
  */
-static void tree_build_dir(GtkWidget *parent_box, const char *dir_path, int depth) {
-    (void)depth;
-
-    GError *err = NULL;
-    GDir *dir = g_dir_open(dir_path, 0, &err);
-    if (!dir) {
-        if (err) g_error_free(err);
-        return;
-    }
-
-    /* Collect entries */
-    DirEntry entries[4096];
-    int count = 0;
-    const char *nm;
-    while ((nm = g_dir_read_name(dir)) != NULL && count < 4095) {
-        if (nm[0] == '.') continue; /* skip hidden */
-        strncpy(entries[count].name, nm, NAME_MAX);
-        entries[count].name[NAME_MAX] = '\0';
-
-        char full[PATH_MAX];
-        snprintf(full, sizeof(full), "%s/%s", dir_path, nm);
-        entries[count].is_dir = g_file_test(full, G_FILE_TEST_IS_DIR);
-        count++;
-    }
-    g_dir_close(dir);
-
-    qsort(entries, count, sizeof(DirEntry), dir_entry_cmp);
-
-    for (int i = 0; i < count; i++) {
-        char full[PATH_MAX];
-        snprintf(full, sizeof(full), "%s/%s", dir_path, entries[i].name);
-
-        GtkWidget *row_widget;
-        if (entries[i].is_dir) {
-            row_widget = tree_build_dir_row(full, entries[i].name);
-        } else {
-            /* Only show relevant text files */
-            const char *n = entries[i].name;
-            gboolean show = g_str_has_suffix(n, ".md")  ||
-                            g_str_has_suffix(n, ".txt") ||
-                            g_str_has_suffix(n, ".zig") ||
-                            g_str_has_suffix(n, ".c")   ||
-                            g_str_has_suffix(n, ".h")   ||
-                            g_str_has_suffix(n, ".zon");
-            if (!show) continue;
-            row_widget = tree_build_file_row(full, entries[i].name);
-        }
-        gtk_box_append(GTK_BOX(parent_box), row_widget);
-    }
-}
 
 /* ============================================================
  * populate_explorer  — replaces the old flat-list version
  * ============================================================ */
 
-static GtkWidget *g_tree_container = NULL; /* the root GtkBox inside the scroll */
 
 
 /* ============================================================
@@ -1991,75 +850,9 @@ static GtkWidget *g_tree_container = NULL; /* the root GtkBox inside the scroll 
  * filter visible rows by name on search)
  * ============================================================ */
 
-static guint explorer_search_timeout_id = 0;
 
 /* Recursively walk the tree GtkBox and show/hide file rows matching query */
-static int tree_filter_walk(GtkWidget *box, const char *query, int *match_count) {
-    GtkWidget *child = gtk_widget_get_first_child(box);
-    int visible_in_this_box = 0;
-    while (child) {
-        GtkWidget *next = gtk_widget_get_next_sibling(child);
-        if (GTK_IS_BUTTON(child)) {
-            /* File row */
-            const char *fp = g_object_get_data(G_OBJECT(child), "tree_filepath");
-            if (fp) {
-                const char *basename = g_path_get_basename(fp); /* leaks, but tiny */
-                gboolean match = (query == NULL || strlen(query) == 0 ||
-                                  (strcasestr(basename, query) != NULL));
-                gtk_widget_set_visible(child, match);
-                if (match) { visible_in_this_box++; if (match_count) (*match_count)++; }
-            }
-        } else if (GTK_IS_BOX(child)) {
-            /* Could be a dir wrapper or children_box */
-            /* Check if it has the tree-children class → recurse into it */
-            if (gtk_widget_has_css_class(child, "tree-children")) {
-                int sub = tree_filter_walk(child, query, match_count);
-                /* Make children_box visible if it has matches and we are searching */
-                if (query && strlen(query) > 0) {
-                    gtk_widget_set_visible(child, sub > 0);
-                    if (sub > 0) visible_in_this_box++;
-                } else {
-                    /* Reset to collapsed */
-                    gtk_widget_set_visible(child, FALSE);
-                }
-            } else {
-                /* Dir wrapper box (contains button + children_box) */
-                int sub = tree_filter_walk(child, query, match_count);
-                gtk_widget_set_visible(child, (query == NULL || strlen(query) == 0) || sub > 0);
-                if (sub > 0) visible_in_this_box++;
-            }
-        }
-        child = next;
-    }
-    return visible_in_this_box;
-}
 
-static gboolean do_debounced_explorer_search(gpointer user_data) {
-    AppGui *gui = (AppGui *)user_data;
-    explorer_search_timeout_id = 0;
-
-    if (!gui || !gui->explorer_listbox) return G_SOURCE_REMOVE;
-
-    const char *query = gtk_editable_get_text(GTK_EDITABLE(gui->exp_search_entry));
-    int match_count = 0;
-    tree_filter_walk(gui->explorer_listbox, query, &match_count);
-
-    if (gui->exp_count_label) {
-        char badge[64];
-        if (query && strlen(query) > 0)
-            snprintf(badge, sizeof(badge), "Found %d matches", match_count);
-        else {
-            /* Count top-level items */
-            int top = 0;
-            GtkWidget *w = gtk_widget_get_first_child(gui->explorer_listbox);
-            while (w) { top++; w = gtk_widget_get_next_sibling(w); }
-            snprintf(badge, sizeof(badge), "%d items", top);
-        }
-        gtk_label_set_text(GTK_LABEL(gui->exp_count_label), badge);
-    }
-
-    return G_SOURCE_REMOVE;
-}
 
 
 /* Stub sort func — not used with tree box but kept to avoid linker issues */
@@ -2067,6 +860,13 @@ static gboolean do_debounced_explorer_search(gpointer user_data) {
 /* ============================================================
  * BUILD UI
  * ============================================================ */
+
+/* Zoom helpers — exported so the editor key handler (which reliably receives
+ * editor shortcuts) can drive font size too; the window-level handler was being
+ * pre-empted before Ctrl+=/-/0 reached it. */
+void gui_zoom_in(AppGui *gui)    { current_font_size += 1.0; update_editor_font(gui); }
+void gui_zoom_out(AppGui *gui)   { if (current_font_size > 6.0) { current_font_size -= 1.0; update_editor_font(gui); } }
+void gui_zoom_reset(AppGui *gui) { current_font_size = 16.0; update_editor_font(gui); }
 
 static gboolean on_window_key_pressed(GtkEventControllerKey *ctrl,
                                       guint keyval, guint keycode,
@@ -2124,7 +924,7 @@ static gboolean on_window_key_pressed(GtkEventControllerKey *ctrl,
 
     /* Create New Folder (Ctrl+Shift+N) */
     if (match_app_shortcut("new_folder", keyval, keycode, state)) {
-        prompt_new_folder(gui, NULL);
+        explorer_begin_new_folder(gui, NULL);
         return TRUE;
     }
 
@@ -2154,9 +954,15 @@ static gboolean on_window_key_pressed(GtkEventControllerKey *ctrl,
         return TRUE;
     }
 
-    /* Fullscreen / Focus Mode */
+    /* Fullscreen (window only) */
     if (match_app_shortcut("fullscreen", keyval, keycode, state)) {
         toggle_fullscreen(gui);
+        return TRUE;
+    }
+
+    /* Focus mode (hide chrome / center text) */
+    if (match_app_shortcut("focus_mode", keyval, keycode, state)) {
+        toggle_focus_mode(gui);
         return TRUE;
     }
 
@@ -2187,7 +993,7 @@ static gboolean on_window_key_pressed(GtkEventControllerKey *ctrl,
 }
 
 
-static void on_settings_btn_clicked(GtkButton *btn, gpointer user_data) {
+void on_settings_btn_clicked(GtkButton *btn, gpointer user_data) {
     (void)btn;
     AppGui *gui = (AppGui *)user_data;
     if (gui->settings_window) {
@@ -2306,260 +1112,30 @@ static void on_scroll_changed(GtkAdjustment *adj, gpointer user_data) {
 
 /* Extra paper-card geometry macros + focus/dividers FFI (redesign shell). */
 #define QIRTAS_DESK_GAP_DEFAULT 32
-#define QIRTAS_DESK_GAP_MIN 8
-#define QIRTAS_DESK_GAP_MAX 360
-#define QIRTAS_RESIZE_HOTZONE 6
 void zig_set_layout_dividers(int);
 int zig_get_layout_dividers(void);
 void zig_set_bottom_margin(int);
 int zig_get_bottom_margin(void);
-void zig_set_focus_mode(int);
 int zig_get_focus_mode(void);
 void zig_set_editor_border(int);
 
-/* ===========================================================================
- * Paper-card layout subsystem (ported from the redesign): floating text
- * column width, focus mode, read mode. All widget-presence-guarded — safe to
- * link/run before activate() builds the paper card (editor_card may be NULL).
- * =========================================================================== */
+/* Paper-card layout subsystem moved to gui_layout.c; geometry macros +
+ * ReadModeScrollData now live in gui_internal.h alongside it. */
 
-#define QIRTAS_CARD_CHROME       160
-#define QIRTAS_TEXT_COLUMN_MIN   420
-#define QIRTAS_TEXT_COLUMN_MAX   840
-/* Read mode caps the column to a comfortable reading measure regardless of
- * card width — wider margins, shorter lines. */
-#define QIRTAS_READ_MODE_MAX_WIDTH 760
 
-/* Last observed paper width signature; -1 forces paper_column_tick to recompute. */
-static int s_last_paper_width = -1;
 
-static void reorder_main_layout(AppGui *gui) {
-    if (!gui || !gui->main_vertical_box || !gui->bottom_bar_widget || !gui->sidebar_editor_box) return;
-
-    gboolean status_bar_is_top = FALSE; // Default to Bottom
-    if (!gui->enable_focus_mode && gui->sb_pos_dropdown) {
-        guint selected = gtk_drop_down_get_selected(GTK_DROP_DOWN(gui->sb_pos_dropdown));
-        if (selected == 1) status_bar_is_top = TRUE;
-    }
-
-    if (gui->tab_strip)
-        gtk_box_reorder_child_after(GTK_BOX(gui->main_vertical_box), gui->tab_strip, NULL);
-
-    GtkWidget *anchor = gui->tab_strip;
-
-    if (status_bar_is_top) {
-        gtk_box_reorder_child_after(GTK_BOX(gui->main_vertical_box), gui->bottom_bar_widget, anchor);
-        gtk_box_reorder_child_after(GTK_BOX(gui->main_vertical_box), gui->sidebar_editor_box, gui->bottom_bar_widget);
-    } else {
-        gtk_box_reorder_child_after(GTK_BOX(gui->main_vertical_box), gui->sidebar_editor_box, anchor);
-        gtk_box_reorder_child_after(GTK_BOX(gui->main_vertical_box), gui->bottom_bar_widget, gui->sidebar_editor_box);
-    }
-}
-
-static void apply_editor_border(AppGui *gui) {
-    GtkWidget *card = (gui && gui->editor_card) ? gui->editor_card : (gui ? gui->scrolled : NULL);
-    if (!card) return;
-
-    gtk_widget_set_hexpand(card, TRUE);
-    gtk_widget_set_halign(card, GTK_ALIGN_FILL);
-    gtk_widget_set_size_request(card, -1, -1);
-
-    if (gui->enable_focus_mode) {
-        gtk_widget_remove_css_class(card, "focus-mode");
-        gtk_widget_set_margin_start(card, gui->desk_gap);
-        gtk_widget_set_margin_end(card, gui->desk_gap);
-        gtk_widget_set_margin_top(card, 28);
-        gtk_widget_set_margin_bottom(card, 24);
-        return;
-    }
-
-    if (gui->enable_editor_border) {
-        gtk_widget_remove_css_class(card, "focus-mode");
-        int top = gui->compact_mode ? 10 : 28;
-        int bot = gui->compact_mode ?  8 : 24;
-        gtk_widget_set_margin_start(card, gui->desk_gap);
-        gtk_widget_set_margin_end(card, gui->desk_gap);
-        gtk_widget_set_margin_top(card, top);
-        gtk_widget_set_margin_bottom(card, bot);
-    } else {
-        gtk_widget_add_css_class(card, "focus-mode");
-        gtk_widget_set_margin_start(card, 0);
-        gtk_widget_set_margin_end(card, 0);
-        gtk_widget_set_margin_top(card, 0);
-        gtk_widget_set_margin_bottom(card, 0);
-    }
-}
-
-static gboolean paper_column_tick(GtkWidget *widget, GdkFrameClock *clock, gpointer data) {
-    (void)clock;
-    AppGui *gui = data;
-    if (!gui || !gui->source_view) return G_SOURCE_CONTINUE;
-    int width = gtk_widget_get_width(widget);
-    if (width <= 1) return G_SOURCE_CONTINUE;
-
-    GtkSourceView *sv = GTK_SOURCE_VIEW(gui->source_view);
-    gboolean ln = gui->show_line_numbers;
-    GtkWidget *gutter = GTK_WIDGET(gtk_source_view_get_gutter(sv, GTK_TEXT_WINDOW_LEFT));
-    int gw = (ln && gutter) ? gtk_widget_get_width(gutter) : 0;
-
-    int sig = width ^ (ln ? 0x40000000 : 0) ^ (gw << 8);
-    if (sig == s_last_paper_width) return G_SOURCE_CONTINUE;
-    s_last_paper_width = sig;
-
-    int text_w = width - QIRTAS_CARD_CHROME;
-    if (text_w < QIRTAS_TEXT_COLUMN_MIN) text_w = QIRTAS_TEXT_COLUMN_MIN;
-    if (!gui->text_width_full_page && text_w > QIRTAS_TEXT_COLUMN_MAX)
-        text_w = QIRTAS_TEXT_COLUMN_MAX;
-    if (gui->read_mode && text_w > QIRTAS_READ_MODE_MAX_WIDTH)
-        text_w = QIRTAS_READ_MODE_MAX_WIDTH;
-    gui->text_column_width = text_w;
-
-    int margin = (width - text_w) / 2;
-    if (margin < 8) margin = 8;
-
-    if (ln) {
-        const int GAP = 8;
-        int gutter_shift = margin - gw - GAP;
-        if (gutter_shift < 0) gutter_shift = 0;
-        if (gutter) gtk_widget_set_margin_start(gutter, gutter_shift);
-        gtk_text_view_set_left_margin(GTK_TEXT_VIEW(gui->source_view), GAP);
-        gtk_text_view_set_right_margin(GTK_TEXT_VIEW(gui->source_view), margin);
-    } else {
-        if (gutter) gtk_widget_set_margin_start(gutter, 0);
-        gtk_text_view_set_left_margin(GTK_TEXT_VIEW(gui->source_view), margin);
-        gtk_text_view_set_right_margin(GTK_TEXT_VIEW(gui->source_view), margin);
-    }
-    return G_SOURCE_CONTINUE;
-}
-
-typedef struct {
-    AppGui *gui;
-    GtkTextMark *mark;
-    guint generation;
-} ReadModeScrollData;
-
-static gboolean restore_read_mode_scroll_cb(gpointer user_data) {
-    ReadModeScrollData *d = user_data;
-    if (d->generation == d->gui->buffer_generation && d->gui->source_view) {
-        GtkTextBuffer *buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(d->gui->source_view));
-        gtk_text_view_scroll_to_mark(GTK_TEXT_VIEW(d->gui->source_view), d->mark, 0.0, TRUE, 0.0, 0.0);
-        gtk_text_buffer_delete_mark(buf, d->mark);
-    }
-    g_free(d);
-    return G_SOURCE_REMOVE;
-}
-
-void apply_focus_mode(AppGui *gui) {
-    if (!gui || !gui->scrolled || !gui->sidebar || !gui->main_vertical_box ||
-        !gui->bottom_bar_widget || !gui->sidebar_editor_box) return;
-
-    if (gui->enable_focus_mode) {
-        gtk_widget_set_visible(gui->sidebar, FALSE);
-        reorder_main_layout(gui);
-        apply_editor_border(gui);
-        s_last_paper_width = -1;
-        if (gui->editor_header) gtk_widget_set_visible(gui->editor_header, FALSE);
-        if (gui->sb_pos_dropdown) gtk_widget_set_sensitive(gui->sb_pos_dropdown, FALSE);
-        if (gui->sb_side_dropdown) gtk_widget_set_sensitive(gui->sb_side_dropdown, FALSE);
-        if (gui->divider_chk) gtk_widget_set_sensitive(gui->divider_chk, FALSE);
-        if (gui->btn_sidebar_toggle) gtk_widget_set_sensitive(gui->btn_sidebar_toggle, TRUE);
-    } else {
-        gtk_widget_set_visible(gui->sidebar, TRUE);
-        reorder_main_layout(gui);
-        if (gui->editor_header) gtk_widget_set_visible(gui->editor_header, TRUE);
-        if (gui->editor_thread) gtk_widget_set_visible(gui->editor_thread, TRUE);
-        apply_editor_border(gui);
-        if (gui->sb_pos_dropdown) gtk_widget_set_sensitive(gui->sb_pos_dropdown, TRUE);
-        if (gui->sb_side_dropdown) gtk_widget_set_sensitive(gui->sb_side_dropdown, TRUE);
-        if (gui->divider_chk) gtk_widget_set_sensitive(gui->divider_chk, TRUE);
-        if (gui->btn_sidebar_toggle) gtk_widget_set_sensitive(gui->btn_sidebar_toggle, TRUE);
-    }
-
-    if (gui->focus_chk) {
-        gtk_check_button_set_active(GTK_CHECK_BUTTON(gui->focus_chk), gui->enable_focus_mode);
-    }
-}
-
-void toggle_read_mode(AppGui *gui) {
-    if (!gui || !gui->source_view) return;
-
-    GtkTextView *tv = GTK_TEXT_VIEW(gui->source_view);
-    GtkTextBuffer *buf = gtk_text_view_get_buffer(tv);
-
-    GdkRectangle visible;
-    gtk_text_view_get_visible_rect(tv, &visible);
-    GtkTextIter top_iter;
-    gtk_text_view_get_iter_at_location(tv, &top_iter, visible.x, visible.y);
-    GtkTextMark *scroll_anchor = gtk_text_buffer_create_mark(buf, NULL, &top_iter, TRUE);
-
-    gui->read_mode = !gui->read_mode;
-
-    gtk_text_view_set_editable(tv, !gui->read_mode);
-    gtk_text_view_set_cursor_visible(tv, !gui->read_mode);
-
-    if (gui->editor_card) {
-        if (gui->read_mode) gtk_widget_add_css_class(gui->editor_card, "read-mode");
-        else gtk_widget_remove_css_class(gui->editor_card, "read-mode");
-    }
-    if (gui->btn_read_mode) {
-        if (gui->read_mode) gtk_widget_add_css_class(gui->btn_read_mode, "active");
-        else gtk_widget_remove_css_class(gui->btn_read_mode, "active");
-    }
-
-    s_last_paper_width = -1;
-    if (gui->editor_card) paper_column_tick(gui->editor_card, NULL, gui);
-    update_conceal_markdown_all_sync(buf);
-
-    ReadModeScrollData *d = g_new(ReadModeScrollData, 1);
-    d->gui = gui;
-    d->mark = scroll_anchor;
-    d->generation = gui->buffer_generation;
-    g_idle_add_full(G_PRIORITY_LOW, restore_read_mode_scroll_cb, d, NULL);
-}
 
 
 /* ===== Redesign UI shell (activate + handlers), ported from gui_conflict.c ===== */
 typedef struct { const char *key; const char *classic; const char *modern; } IconPair;
 /* forward decls (shell region) */
-static void on_status_menu_shortcuts(GtkButton *btn, gpointer user_data);
-static void on_status_menu_settings(GtkButton *btn, gpointer user_data);
-static void popdown_ancestor_popover(GtkWidget *w);
-static void on_status_menu_quit(GtkButton *btn, gpointer user_data);
-static void on_status_bar_open_file_clicked(GtkButton *btn, gpointer user_data);
-static void on_status_bar_new_file_clicked(GtkButton *btn, gpointer user_data);
-static void on_status_menu_find_replace(GtkButton *btn, gpointer user_data);
-static void on_status_bar_save_file_clicked(GtkButton *btn, gpointer user_data);
-static void on_status_menu_fullscreen(GtkButton *btn, gpointer user_data);
-static void on_restart_clicked(GtkButton *btn, gpointer user_data);
 static void on_icon_style_changed(GObject *gobject, GParamSpec *pspec, gpointer user_data);
 static void on_language_changed(GObject *gobject, GParamSpec *pspec, gpointer user_data);
-static void on_status_menu_copy_file(GtkButton *btn, gpointer user_data);
-static void on_status_bar_export_pdf_clicked(GtkButton *btn, gpointer user_data);
-static void apply_compact_mode(AppGui *gui);
-static GtkWidget *status_menu_item(const char *icon, const char *label, const char *hint, GCallback cb, gpointer user_data);
-static void on_status_menu_save_as(GtkButton *btn, gpointer user_data);
-static void on_read_mode_toggle_clicked(GtkButton *btn, gpointer user_data);
-static void on_editor_border_toggled(GtkCheckButton *chk, gpointer user_data);
 static void on_trail_color_custom_toggled(GtkCheckButton *chk, gpointer user_data);
-static gboolean paper_column_timeout_wrapper(gpointer data);
-static void on_outline_close_clicked(GtkButton *btn, gpointer user_data);
 static void on_trail_color_changed(GObject *object, GParamSpec *pspec, gpointer user_data);
-static void on_compact_mode_toggled(GtkCheckButton *btn, gpointer user_data);
-static void on_highlight_line_toggled(GtkCheckButton *btn, gpointer user_data);
-static void on_line_numbers_toggled(GtkCheckButton *btn, gpointer user_data);
-static void on_restore_session_toggled(GtkCheckButton *btn, gpointer user_data);
-static void on_text_width_mode_changed(GObject *gobject, GParamSpec *pspec, gpointer user_data);
-static void on_focus_mode_toggled(GtkCheckButton *chk, gpointer user_data);
 static void on_pointer_color_custom_toggled(GtkCheckButton *chk, gpointer user_data);
 static void on_pointer_color_changed(GObject *object, GParamSpec *pspec, gpointer user_data);
-static void apply_editor_prefs(AppGui *gui);
 const char *qirtas_icon(const char *key);
-static void apply_layout_dividers(AppGui *gui);
-static int paper_edge_margin(AppGui *gui, GtkWidget *overlay);
-static void on_column_resize_motion(GtkEventControllerMotion *ctrl, gdouble x, gdouble y, gpointer user_data);
-static void on_column_resize_begin(GtkGestureDrag *gesture, gdouble x, gdouble y, gpointer user_data);
-static void on_column_resize_update(GtkGestureDrag *gesture, gdouble offset_x, gdouble offset_y, gpointer user_data);
-static void on_column_resize_end(GtkGestureDrag *gesture, gdouble offset_x, gdouble offset_y, gpointer user_data);
 static void on_header_outline_clicked(GtkButton *btn, gpointer user_data);
 static GtkWidget *editor_header_icon_btn(const char *icon_key, const char *tip, GCallback cb, gpointer data);
 static void activate(GtkApplication *app, gpointer user_data);
@@ -2596,77 +1172,17 @@ static gboolean idle_wrapper(gpointer d);
 void gui_run_on_main_thread(GuiIdleCallback callback, void *user_data);
 
 /* auto-pulled deps round 2 */
-static void on_status_menu_shortcuts(GtkButton *btn, gpointer user_data) {
-    popdown_ancestor_popover(GTK_WIDGET(btn));
-    show_keybindings_window((AppGui *)user_data);
-}
 
-static void on_status_menu_settings(GtkButton *btn, gpointer user_data) {
-    popdown_ancestor_popover(GTK_WIDGET(btn));
-    on_settings_btn_clicked(NULL, (AppGui *)user_data);
-}
 
-static void popdown_ancestor_popover(GtkWidget *w) {
-    GtkWidget *pop = gtk_widget_get_ancestor(w, GTK_TYPE_POPOVER);
-    if (pop) gtk_popover_popdown(GTK_POPOVER(pop));
-}
 
-static void on_status_menu_quit(GtkButton *btn, gpointer user_data) {
-    (void)user_data;
-    popdown_ancestor_popover(GTK_WIDGET(btn));
-    g_application_quit(g_application_get_default());
-}
 
 
 /* auto-pulled deps round 1 */
-static void on_status_bar_open_file_clicked(GtkButton *btn, gpointer user_data) {
-    AppGui *gui = (AppGui *)user_data;
-    GtkWidget *pop = gtk_widget_get_ancestor(GTK_WIDGET(btn), GTK_TYPE_POPOVER);
-    if (pop) gtk_popover_popdown(GTK_POPOVER(pop));
 
-    GtkFileDialog *dialog = gtk_file_dialog_new();
-    gtk_file_dialog_set_title(dialog, qirtas_tr("Open Existing File"));
-    gtk_file_dialog_open(dialog, GTK_WINDOW(gui->window), NULL, on_open_dialog_response, gui);
-}
 
-static void on_status_bar_new_file_clicked(GtkButton *btn, gpointer user_data) {
-    (void)user_data;
-    GtkWidget *pop = gtk_widget_get_ancestor(GTK_WIDGET(btn), GTK_TYPE_POPOVER);
-    if (pop) gtk_popover_popdown(GTK_POPOVER(pop));
 
-    extern void zig_open_file(const char *filename);
-    zig_open_file("Untitled");
-}
 
-static void on_status_menu_find_replace(GtkButton *btn, gpointer user_data) {
-    popdown_ancestor_popover(GTK_WIDGET(btn));
-    AppGui *gui = (AppGui *)user_data;
-    if (!gui->search_visible) toggle_search(gui);
-}
 
-static void on_status_bar_save_file_clicked(GtkButton *btn, gpointer user_data) {
-    AppGui *gui = (AppGui *)user_data;
-    GtkWidget *pop = gtk_widget_get_ancestor(GTK_WIDGET(btn), GTK_TYPE_POPOVER);
-    if (pop) gtk_popover_popdown(GTK_POPOVER(pop));
-    gui_manual_save(gui);
-}
-
-static void on_status_menu_fullscreen(GtkButton *btn, gpointer user_data) {
-    popdown_ancestor_popover(GTK_WIDGET(btn));
-    toggle_fullscreen((AppGui *)user_data);
-}
-
-static void on_restart_clicked(GtkButton *btn, gpointer user_data) {
-    (void)btn; (void)user_data;
-    char exe[1024] = {0};
-    ssize_t n = readlink("/proc/self/exe", exe, sizeof(exe) - 1);
-    if (n > 0) {
-        exe[n] = '\0';
-        gchar *argv[] = { exe, NULL };
-        g_spawn_async(NULL, argv, NULL, G_SPAWN_DEFAULT, NULL, NULL, NULL, NULL);
-    }
-    g_application_quit(g_application_get_default());
-}
 
 static void on_icon_style_changed(GObject *gobject, GParamSpec *pspec, gpointer user_data) {
     (void)pspec;
@@ -2703,173 +1219,50 @@ static void on_language_changed(GObject *gobject, GParamSpec *pspec, gpointer us
         gtk_widget_set_direction(global_gui->bottom_bar_widget, GTK_TEXT_DIR_LTR);
 }
 
-static void on_status_menu_copy_file(GtkButton *btn, gpointer user_data) {
-    popdown_ancestor_popover(GTK_WIDGET(btn));
-    AppGui *gui = (AppGui *)user_data;
-    if (!gui || gui->active_tab_index == -1 || gui->active_tab_index >= gui->num_tabs) return;
-    const char *path = gui->open_tabs[gui->active_tab_index];
-    if (!path || strcmp(path, "Untitled") == 0) return;
-    if (!g_file_test(path, G_FILE_TEST_EXISTS)) return;
 
-    /* Put the file itself on the clipboard (text/uri-list) so pasting in
-     * a file manager copies the .md file. */
-    GFile *file = g_file_new_for_path(path);
-    GdkFileList *flist = gdk_file_list_new_from_array(&file, 1);
-    GdkClipboard *cb = gdk_display_get_clipboard(gdk_display_get_default());
-    gdk_clipboard_set(cb, GDK_TYPE_FILE_LIST, flist);
-    g_boxed_free(GDK_TYPE_FILE_LIST, flist);
-    g_object_unref(file);
-}
 
-static void on_status_bar_export_pdf_clicked(GtkButton *btn, gpointer user_data) {
-    AppGui *gui = (AppGui *)user_data;
-    GtkWidget *pop = gtk_widget_get_ancestor(GTK_WIDGET(btn), GTK_TYPE_POPOVER);
-    if (pop) gtk_popover_popdown(GTK_POPOVER(pop));
 
-    qirtas_export_to_pdf(gui);
-}
 
-static void apply_compact_mode(AppGui *gui) {
-    if (!gui || !gui->window) return;
-    if (gui->compact_mode)
-        gtk_widget_add_css_class(gui->window, "compact-ui");
-    else
-        gtk_widget_remove_css_class(gui->window, "compact-ui");
-    apply_editor_border(gui);
-}
 
-static GtkWidget *status_menu_item(const char *icon, const char *label,
-                                   const char *hint,
-                                   GCallback cb, gpointer user_data) {
-    GtkWidget *btn = gtk_button_new();
-    gtk_widget_add_css_class(btn, "pop-btn");
-    gtk_widget_add_css_class(btn, "menu-item-btn");
-    GtkWidget *hbox = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
-    GtkWidget *img = gtk_image_new_from_icon_name(icon);
-    GtkWidget *lbl = gtk_label_new(label);
-    gtk_widget_set_halign(lbl, GTK_ALIGN_START);
-    gtk_widget_set_hexpand(lbl, TRUE);
-    gtk_box_append(GTK_BOX(hbox), img);
-    gtk_box_append(GTK_BOX(hbox), lbl);
-    if (hint) {
-        GtkWidget *hint_lbl = gtk_label_new(hint);
-        gtk_widget_add_css_class(hint_lbl, "menu-item-hint");
-        gtk_widget_set_halign(hint_lbl, GTK_ALIGN_END);
-        gtk_box_append(GTK_BOX(hbox), hint_lbl);
-    }
-    gtk_button_set_child(GTK_BUTTON(btn), hbox);
-    g_signal_connect(btn, "clicked", cb, user_data);
-    return btn;
-}
-
-static void on_status_menu_save_as(GtkButton *btn, gpointer user_data) {
-    popdown_ancestor_popover(GTK_WIDGET(btn));
-    trigger_save_as((AppGui *)user_data);
-}
-
-static void on_read_mode_toggle_clicked(GtkButton *btn, gpointer user_data) {
-    (void)btn;
-    toggle_read_mode((AppGui *)user_data);
-}
 
 
 /* auto-pulled deps round 0 */
-static void on_editor_border_toggled(GtkCheckButton *chk, gpointer user_data) {
-    AppGui *gui = (AppGui *)user_data;
-    gboolean active = gtk_check_button_get_active(chk);
-    gui->enable_editor_border = active;
-    zig_set_editor_border(active ? 1 : 0);
-    apply_editor_border(gui);
-}
 
 static void on_trail_color_custom_toggled(GtkCheckButton *chk, gpointer user_data) {
     AppGui *gui = (AppGui *)user_data;
     gboolean active = gtk_check_button_get_active(chk);
-    gui->use_custom_trail_color = active;
-    if (gui->trail_color_btn) {
-        gtk_widget_set_sensitive(gui->trail_color_btn, active);
+    gui->cursor.use_custom_trail_color = active;
+    if (gui->cursor.trail_color_btn) {
+        gtk_widget_set_sensitive(gui->cursor.trail_color_btn, active);
     }
     save_trail_color_settings(gui);
     reset_cursor_trail(gui);
 }
 
-static gboolean paper_column_timeout_wrapper(gpointer data) {
-    AppGui *gui = data;
-    if (!gui || !gui->editor_card) return G_SOURCE_CONTINUE;
-    paper_column_tick(gui->editor_card, NULL, gui);
-    return G_SOURCE_CONTINUE;
-}
 
-static void on_outline_close_clicked(GtkButton *btn, gpointer user_data) {
-    (void)btn;
-    AppGui *gui = (AppGui *)user_data;
-    if (!gui || !gui->outline_panel) return;
-    gui->outline_panel_visible = FALSE;
-    gtk_widget_set_visible(gui->outline_panel, FALSE);
-    qirtas_pref_set_int("outline_panel_visible", 0);
-}
 
 static void on_trail_color_changed(GObject *object, GParamSpec *pspec, gpointer user_data) {
     (void)pspec;
     AppGui *gui = (AppGui *)user_data;
-    if (!gui || !gui->use_custom_trail_color) return;
+    if (!gui || !gui->cursor.use_custom_trail_color) return;
     GtkColorDialogButton *btn = GTK_COLOR_DIALOG_BUTTON(object);
     const GdkRGBA *rgba = gtk_color_dialog_button_get_rgba(btn);
     if (rgba) {
-        gui->custom_trail_color = *rgba;
+        gui->cursor.custom_trail_color = *rgba;
         save_trail_color_settings(gui);
         reset_cursor_trail(gui);
     }
 }
 
-static void on_compact_mode_toggled(GtkCheckButton *btn, gpointer user_data) {
-    AppGui *gui = (AppGui *)user_data;
-    gui->compact_mode = gtk_check_button_get_active(btn);
-    qirtas_pref_set_int("compact_mode", gui->compact_mode ? 1 : 0);
-    apply_compact_mode(gui);
-}
 
-static void on_highlight_line_toggled(GtkCheckButton *btn, gpointer user_data) {
-    AppGui *gui = (AppGui *)user_data;
-    gui->highlight_current_line = gtk_check_button_get_active(btn);
-    qirtas_pref_set_int("highlight_current_line", gui->highlight_current_line ? 1 : 0);
-    apply_editor_prefs(gui);
-}
 
-static void on_line_numbers_toggled(GtkCheckButton *btn, gpointer user_data) {
-    AppGui *gui = (AppGui *)user_data;
-    gui->show_line_numbers = gtk_check_button_get_active(btn);
-    qirtas_pref_set_int("show_line_numbers", gui->show_line_numbers ? 1 : 0);
-    apply_editor_prefs(gui);
-}
 
-static void on_restore_session_toggled(GtkCheckButton *btn, gpointer user_data) {
-    AppGui *gui = (AppGui *)user_data;
-    gui->restore_session = gtk_check_button_get_active(btn);
-    qirtas_pref_set_int("restore_session", gui->restore_session ? 1 : 0);
-}
 
-static void on_text_width_mode_changed(GObject *gobject, GParamSpec *pspec, gpointer user_data) {
-    (void)pspec;
-    AppGui *gui = (AppGui *)user_data;
-    GtkDropDown *dropdown = GTK_DROP_DOWN(gobject);
-    guint selected = gtk_drop_down_get_selected(dropdown);
-    gui->text_width_full_page = (selected == 1);
-    qirtas_pref_set_int("text_width_full_page", gui->text_width_full_page ? 1 : 0);
-    if (gui->editor_card) {
-        s_last_paper_width = -1; /* force the column tick to recompute */
-        paper_column_tick(gui->editor_card, NULL, gui);
-    }
-}
 
-static void on_focus_mode_toggled(GtkCheckButton *chk, gpointer user_data) {
-    AppGui *gui = (AppGui *)user_data;
-    gboolean active = gtk_check_button_get_active(chk);
-    if (gui->enable_focus_mode == active) return;
-    gui->enable_focus_mode = active;
-    zig_set_focus_mode(active ? 1 : 0);
-    apply_focus_mode(gui);
-}
+
+/* Card gap to the screen edge (how narrow the paper card sits from the desk
+ * edge when the layout border is on). Larger gap = narrower card. */
+
 
 static const IconPair icon_table[] = {
     { "search",      "system-search-symbolic",       "preferences-system-search-symbolic" },
@@ -2889,14 +1282,15 @@ static const IconPair icon_table[] = {
     { "keyboard",    "input-keyboard-symbolic",      "input-keyboard-symbolic" },
     { "quit",        "window-close-symbolic",        "application-exit-symbolic" },
     { "filemanager", "system-file-manager-symbolic", "system-file-manager-symbolic" },
+    { "history",     "document-open-recent-symbolic", "document-open-recent-symbolic" },
 };
 
 static void on_pointer_color_custom_toggled(GtkCheckButton *chk, gpointer user_data) {
     AppGui *gui = (AppGui *)user_data;
     gboolean active = gtk_check_button_get_active(chk);
-    gui->use_custom_pointer_color = active;
-    if (gui->pointer_color_btn) {
-        gtk_widget_set_sensitive(gui->pointer_color_btn, active);
+    gui->cursor.use_custom_pointer_color = active;
+    if (gui->cursor.pointer_color_btn) {
+        gtk_widget_set_sensitive(gui->cursor.pointer_color_btn, active);
     }
     save_pointer_color_settings(gui);
     apply_theme(gui, current_theme);
@@ -2906,58 +1300,22 @@ static void on_pointer_color_custom_toggled(GtkCheckButton *chk, gpointer user_d
 static void on_pointer_color_changed(GObject *object, GParamSpec *pspec, gpointer user_data) {
     (void)pspec;
     AppGui *gui = (AppGui *)user_data;
-    if (!gui || !gui->use_custom_pointer_color) return;
+    if (!gui || !gui->cursor.use_custom_pointer_color) return;
     GtkColorDialogButton *btn = GTK_COLOR_DIALOG_BUTTON(object);
     const GdkRGBA *rgba = gtk_color_dialog_button_get_rgba(btn);
     if (rgba) {
-        gui->custom_pointer_color = *rgba;
+        gui->cursor.custom_pointer_color = *rgba;
         save_pointer_color_settings(gui);
         apply_theme(gui, current_theme);
         update_editor_font(gui);
     }
 }
 
-static void apply_editor_prefs(AppGui *gui) {
-    if (!gui || !gui->source_view) return;
-    GtkTextView   *view = GTK_TEXT_VIEW(gui->source_view);
-    GtkSourceView *sv   = GTK_SOURCE_VIEW(gui->source_view);
-
-    gtk_text_view_set_wrap_mode(view, gui->wrap_lines ? GTK_WRAP_WORD_CHAR : GTK_WRAP_NONE);
-
-    /* Flip the RTL-paragraph left-justify override (see update_paragraph_direction)
-     * to match the new wrap state — avoids the right-side blank gap on Arabic
-     * text when wrap is off. */
-    {
-        GtkTextBuffer *buf = gtk_text_view_get_buffer(view);
-        GtkTextTag *rtl_tag = gtk_text_tag_table_lookup(gtk_text_buffer_get_tag_table(buf), "rtl-tag");
-        if (rtl_tag) {
-            g_object_set(rtl_tag,
-                          "justification", GTK_JUSTIFY_LEFT,
-                          "justification-set", !gui->wrap_lines,
-                          NULL);
-        }
-    }
-
-    gtk_source_view_set_show_line_numbers(sv, gui->show_line_numbers);
-    gtk_source_view_set_highlight_current_line(sv, gui->highlight_current_line);
-    gtk_source_view_set_show_right_margin(sv, gui->show_right_margin);
-    if (gui->right_margin_pos < 20)  gui->right_margin_pos = 20;
-    if (gui->right_margin_pos > 200) gui->right_margin_pos = 200;
-    gtk_source_view_set_right_margin_position(sv, (guint)gui->right_margin_pos);
-    if (gui->source_map) gtk_widget_set_visible(gui->source_map, gui->show_overview_map);
-}
 
 /* forward decls */
 const char *qirtas_icon(const char *key);
-static void apply_layout_dividers(AppGui *gui);
-static int paper_edge_margin(AppGui *gui, GtkWidget *overlay);
-static void on_column_resize_motion(GtkEventControllerMotion *ctrl, gdouble x, gdouble y, gpointer user_data);
-static void on_column_resize_begin(GtkGestureDrag *gesture, gdouble x, gdouble y, gpointer user_data);
-static void on_column_resize_update(GtkGestureDrag *gesture, gdouble offset_x, gdouble offset_y, gpointer user_data);
-static void on_column_resize_end(GtkGestureDrag *gesture, gdouble offset_x, gdouble offset_y, gpointer user_data);
 static void on_header_outline_clicked(GtkButton *btn, gpointer user_data);
 static GtkWidget *editor_header_icon_btn(const char *icon_key, const char *tip, GCallback cb, gpointer data);
-static void apply_compact_mode(AppGui *gui);
 
 const char *qirtas_icon(const char *key) {
     for (size_t i = 0; i < G_N_ELEMENTS(icon_table); i++) {
@@ -2967,105 +1325,11 @@ const char *qirtas_icon(const char *key) {
     return key;
 }
 
-static void apply_layout_dividers(AppGui *gui) {
-    if (!gui || !gui->main_vertical_box || !gui->sidebar_editor_box) return;
 
-    if (gui->show_layout_dividers) {
-        gtk_widget_add_css_class(gui->main_vertical_box, "layout-dividers-on");
-        gtk_widget_remove_css_class(gui->main_vertical_box, "layout-dividers-off");
-        gtk_widget_add_css_class(gui->sidebar_editor_box, "layout-dividers-on");
-        gtk_widget_remove_css_class(gui->sidebar_editor_box, "layout-dividers-off");
-    } else {
-        gtk_widget_add_css_class(gui->main_vertical_box, "layout-dividers-off");
-        gtk_widget_remove_css_class(gui->main_vertical_box, "layout-dividers-on");
-        gtk_widget_add_css_class(gui->sidebar_editor_box, "layout-dividers-off");
-        gtk_widget_remove_css_class(gui->sidebar_editor_box, "layout-dividers-on");
-    }
-}
 
-static int paper_edge_margin(AppGui *gui, GtkWidget *overlay) {
-    (void)overlay;
-    return gui->desk_gap;
-}
 
-static void on_column_resize_motion(GtkEventControllerMotion *ctrl, gdouble x, gdouble y, gpointer user_data) {
-    (void)y;
-    AppGui *gui = user_data;
-    GtkWidget *overlay = gtk_event_controller_get_widget(GTK_EVENT_CONTROLLER(ctrl));
-    if (gui->resizing_text_column) return;
-    int width = gtk_widget_get_width(overlay);
-    int margin = paper_edge_margin(gui, overlay);
-    gboolean near_edge = (fabs(x - margin) < QIRTAS_RESIZE_HOTZONE) ||
-                         (fabs(x - (width - margin)) < QIRTAS_RESIZE_HOTZONE);
-    GdkCursor *cursor = near_edge ? gdk_cursor_new_from_name("col-resize", NULL) : NULL;
-    gtk_widget_set_cursor(overlay, cursor);
-    if (cursor) g_object_unref(cursor);
-}
 
-static void on_column_resize_begin(GtkGestureDrag *gesture, gdouble x, gdouble y, gpointer user_data) {
-    (void)y;
-    AppGui *gui = user_data;
-    GtkWidget *overlay = gtk_event_controller_get_widget(GTK_EVENT_CONTROLLER(gesture));
-    int width = gtk_widget_get_width(overlay);
-    int margin = paper_edge_margin(gui, overlay);
 
-    if (fabs(x - margin) < QIRTAS_RESIZE_HOTZONE) {
-        gui->resize_drag_edge = -1;
-    } else if (fabs(x - (width - margin)) < QIRTAS_RESIZE_HOTZONE) {
-        gui->resize_drag_edge = 1;
-    } else {
-        gui->resize_drag_edge = 0;
-        gtk_gesture_set_state(GTK_GESTURE(gesture), GTK_EVENT_SEQUENCE_DENIED);
-        return;
-    }
-
-    gui->resizing_text_column = TRUE;
-    gui->resize_drag_start_gap = gui->desk_gap;
-
-    /* Run the margin recompute at full frame rate only for the duration of
-     * the drag; steady state relies on the low-frequency timeout instead. */
-    if (gui->editor_card && gui->resize_column_tick_id == 0) {
-        gui->resize_column_tick_id =
-            gtk_widget_add_tick_callback(gui->editor_card, paper_column_tick, gui, NULL);
-    }
-}
-
-static void on_column_resize_update(GtkGestureDrag *gesture, gdouble offset_x, gdouble offset_y, gpointer user_data) {
-    (void)gesture; (void)offset_y;
-    AppGui *gui = user_data;
-    if (!gui->resizing_text_column || gui->resize_drag_edge == 0) return;
-
-    /* Dragging an edge outward (away from the desk centre) shrinks that
-     * edge's gap; dragging inward grows it. resize_drag_edge flips the sign
-     * so either edge behaves the same way relative to its own side. */
-    int new_gap = gui->resize_drag_start_gap - gui->resize_drag_edge * (int)offset_x;
-    if (new_gap < QIRTAS_DESK_GAP_MIN) new_gap = QIRTAS_DESK_GAP_MIN;
-    if (new_gap > QIRTAS_DESK_GAP_MAX) new_gap = QIRTAS_DESK_GAP_MAX;
-    if (new_gap != gui->desk_gap) {
-        gui->desk_gap = new_gap;
-        s_last_paper_width = -1;
-        apply_editor_border(gui); /* live-resize the visible paper card */
-    }
-}
-
-static void on_column_resize_end(GtkGestureDrag *gesture, gdouble offset_x, gdouble offset_y, gpointer user_data) {
-    (void)gesture; (void)offset_x; (void)offset_y;
-    AppGui *gui = user_data;
-    if (!gui->resizing_text_column) return;
-    gui->resizing_text_column = FALSE;
-    gui->resize_drag_edge = 0;
-
-    if (gui->editor_card && gui->resize_column_tick_id != 0) {
-        gtk_widget_remove_tick_callback(gui->editor_card, gui->resize_column_tick_id);
-        gui->resize_column_tick_id = 0;
-        /* Final recompute so the margins land at their settled value
-         * immediately rather than waiting for the next timeout tick. */
-        s_last_paper_width = -1;
-        paper_column_tick(gui->editor_card, NULL, gui);
-    }
-
-    qirtas_pref_set_int("desk_gap", gui->desk_gap);
-}
 
 static void on_header_outline_clicked(GtkButton *btn, gpointer user_data) {
     (void)btn;
@@ -3101,7 +1365,13 @@ static void activate(GtkApplication *app, gpointer user_data) {
      * qirtas_tr()/qirtas_icon() are called during UI construction. */
     {
         const char *perf_env = g_getenv("QIRTAS_PERF");
-        qirtas_perf_enabled = (perf_env && perf_env[0] == '1') ? 1 : 0;
+        /* QIRTAS_PERF=1: log main-loop callbacks over 8 ms.
+         * QIRTAS_PERF=2: also log a full per-pass breakdown every stats pass
+         *               and any per-keystroke edit cost over 1 ms. */
+        qirtas_perf_enabled = perf_env ? atoi(perf_env) : 0;
+        const char *nc_env = g_getenv("QIRTAS_NO_CONCEAL");
+        if (nc_env) qirtas_no_conceal = (nc_env[0] == '1');
+        else qirtas_no_conceal = qirtas_pref_get_int("conceal_enabled", 1) ? 0 : 1;
     }
     qirtas_app_language = qirtas_pref_get_int("app_language", 0);
     qirtas_icon_style   = qirtas_pref_get_int("icon_style", 0);
@@ -3112,27 +1382,42 @@ static void activate(GtkApplication *app, gpointer user_data) {
     /* ── Window ── */
     GtkWidget *window = adw_application_window_new(app);
     gtk_window_set_title(GTK_WINDOW(window), "Qirtas");
-    gtk_window_set_default_size(GTK_WINDOW(window), 1180, 760);
+    /* Restore the last window size (falls back to the original default). */
+    {
+        int win_w = qirtas_pref_get_int("window_width", 1180);
+        int win_h = qirtas_pref_get_int("window_height", 760);
+        if (win_w < 350) win_w = 1180;
+        if (win_h < 250) win_h = 760;
+        gtk_window_set_default_size(GTK_WINDOW(window), win_w, win_h);
+    }
     gtk_widget_set_size_request(window, 350, 250);
     gtk_window_set_decorated(GTK_WINDOW(window), FALSE);
 
     AppGui *gui = g_new0(AppGui, 1);
-    gui->last_scroll_requested_line = -1;
+    gui->conceal_dirty_start = -1;
+    gui->conceal_dirty_end = -1;
+    gui->outline_dirty = TRUE;
     gui->window       = window;
     g_strlcpy(gui->current_en_font, "Inter", sizeof(gui->current_en_font));
     g_strlcpy(gui->current_ar_font, "Amiri", sizeof(gui->current_ar_font));
-    gui->current_font_size = 16.0;
+    /* Restore the saved editor font size (clamped to the stepper's range). */
+    {
+        int saved_fs = qirtas_pref_get_int("font_size", 16);
+        if (saved_fs < 10) saved_fs = 10;
+        if (saved_fs > 26) saved_fs = 26;
+        gui->current_font_size = (double)saved_fs;
+    }
     gui->search_visible = FALSE;
     gui->font_provider  = NULL;
     gui->css_provider   = NULL;
-    gui->enable_cursor_trail = zig_get_cursor_trail();
+    gui->cursor.enable_trail = zig_get_cursor_trail();
     gui->show_layout_dividers = zig_get_layout_dividers();
     gui->enable_bottom_margin = zig_get_bottom_margin();
     gui->enable_editor_border = zig_get_editor_border();
     gui->enable_focus_mode = zig_get_focus_mode();
     load_trail_color_settings(gui);
     load_pointer_color_settings(gui);
-    gui->active_tab_index = -1;
+    gui->tabs.active = -1;
 
     /* Editor preferences from the app_prefs store */
     gui->wrap_lines             = qirtas_pref_get_int("wrap_lines", 1) != 0;
@@ -3141,8 +1426,12 @@ static void activate(GtkApplication *app, gpointer user_data) {
     gui->show_right_margin      = qirtas_pref_get_int("show_right_margin", 0) != 0;
     gui->right_margin_pos       = qirtas_pref_get_int("right_margin_pos", 80);
     gui->text_width_full_page   = qirtas_pref_get_int("text_width_full_page", 0) != 0;
+    gui->centered_text_width    = qirtas_pref_get_int("centered_text_width", QIRTAS_TEXT_COLUMN_MAX);
+    if (gui->centered_text_width < QIRTAS_TEXT_COLUMN_MIN) gui->centered_text_width = QIRTAS_TEXT_COLUMN_MIN;
+    if (gui->centered_text_width > 1400) gui->centered_text_width = 1400;
     gui->show_overview_map      = qirtas_pref_get_int("show_overview_map", 0) != 0;
     gui->restore_session        = qirtas_pref_get_int("restore_session", 1) != 0;
+    gui->autosave_enabled       = qirtas_pref_get_int("autosave_enabled", 1) != 0;
     gui->compact_mode           = qirtas_pref_get_int("compact_mode", 0) != 0;
     gui->desk_gap                = qirtas_pref_get_int("desk_gap", QIRTAS_DESK_GAP_DEFAULT);
     if (gui->desk_gap < QIRTAS_DESK_GAP_MIN) gui->desk_gap = QIRTAS_DESK_GAP_MIN;
@@ -3163,22 +1452,50 @@ static void activate(GtkApplication *app, gpointer user_data) {
      * We set main_vertical_box as the content below.
      */
 
-     /* 1. Resolve dynamic icon search path absolute location */
-    char exe_path[PATH_MAX];
+     /* 1. Resolve the bundled icons directory. Search order mirrors
+      *    resolve_resource_path(): $QIRTAS_DATA_DIR, the build tree
+      *    (<exe>/../../), then the system install (/usr/share/qirtas). */
     char custom_icon_path[PATH_MAX] = "";
-    ssize_t link_len = readlink("/proc/self/exe", exe_path, sizeof(exe_path)-1);
-    if (link_len != -1) {
-        exe_path[link_len] = '\0';
-        char *dir = dirname(exe_path);
-        // The binary is in <project_root>/zig-out/bin/qirtas, so we go up two levels to get the project root.
-        snprintf(custom_icon_path, sizeof(custom_icon_path), "%s/../../src/ui/icons", dir);
+    {
+        char exe_path[PATH_MAX];
+        char exe_dir[PATH_MAX] = "";
+        ssize_t link_len = readlink("/proc/self/exe", exe_path, sizeof(exe_path)-1);
+        if (link_len != -1) {
+            exe_path[link_len] = '\0';
+            g_strlcpy(exe_dir, dirname(exe_path), sizeof(exe_dir));
+        }
+        char cand[3][PATH_MAX];
+        const char *candidates[3];
+        int nc = 0;
+        const char *data_dir = g_getenv("QIRTAS_DATA_DIR");
+        if (data_dir && data_dir[0]) {
+            snprintf(cand[nc], PATH_MAX, "%s/src/ui/icons", data_dir);
+            candidates[nc] = cand[nc]; nc++;
+        }
+        if (exe_dir[0]) {
+            snprintf(cand[nc], PATH_MAX, "%s/../../src/ui/icons", exe_dir);
+            candidates[nc] = cand[nc]; nc++;
+        }
+        snprintf(cand[nc], PATH_MAX, "/usr/share/qirtas/src/ui/icons");
+        candidates[nc] = cand[nc]; nc++;
+        for (int i = 0; i < nc; i++) {
+            if (access(candidates[i], F_OK) == 0) {
+                g_strlcpy(custom_icon_path, candidates[i], sizeof(custom_icon_path));
+                break;
+            }
+        }
     }
 
     /* 2. Retrieve active icon theme name and dynamically prepare its layout */
     gchar *theme_name = NULL;
     g_object_get(gtk_settings_get_default(), "gtk-icon-theme-name", &theme_name, NULL);
 
-    if (theme_name && strlen(theme_name) > 0 && strlen(custom_icon_path) > 0) {
+    /* This step writes a per-theme alias dir (symlinks + index.theme) into the
+     * icons directory. On a read-only system install (/usr/share) that isn't
+     * writable, so only attempt it when the dir is writable. Icons still
+     * resolve via the bundled hicolor/ fallback in the search path below. */
+    if (theme_name && strlen(theme_name) > 0 && strlen(custom_icon_path) > 0 &&
+        access(custom_icon_path, W_OK) == 0) {
         char theme_dir[PATH_MAX];
         snprintf(theme_dir, sizeof(theme_dir), "%s/%s", custom_icon_path, theme_name);
         mkdir(theme_dir, 0755);
@@ -3235,9 +1552,10 @@ static void activate(GtkApplication *app, gpointer user_data) {
     }
     g_free(theme_name);
 
-    /* 3. Register custom icon theme paths to default GTK display icon theme */
+    /* 3. Register the bundled icons directory with the display icon theme.
+     *    GTK looks under <path>/hicolor/... automatically, so the custom
+     *    qirtas-* icons resolve from there even without the per-theme aliases. */
     GtkIconTheme *icon_theme = gtk_icon_theme_get_for_display(gdk_display_get_default());
-    gtk_icon_theme_add_search_path(icon_theme, "src/ui/icons");
     if (strlen(custom_icon_path) > 0) {
         char resolved_path[PATH_MAX];
         if (realpath(custom_icon_path, resolved_path) != NULL) {
@@ -3612,20 +1930,24 @@ static void activate(GtkApplication *app, gpointer user_data) {
     gtk_widget_set_focusable(trail_area, FALSE);
     gtk_overlay_add_overlay(GTK_OVERLAY(editor_overlay), trail_area);
     gtk_overlay_set_measure_overlay(GTK_OVERLAY(editor_overlay), trail_area, FALSE);
-    gui->cursor_trail_area = trail_area;
+    gui->cursor.trail_area = trail_area;
 
-    /* Resizable centred text column: cursor hint + drag handles on the
-     * paper's left/right margins (see on_column_resize_* above). */
-    GtkEventController *col_motion = gtk_event_controller_motion_new();
-    g_signal_connect(col_motion, "motion", G_CALLBACK(on_column_resize_motion), gui);
-    gtk_widget_add_controller(editor_overlay, col_motion);
-
-    GtkGesture *col_drag = gtk_gesture_drag_new();
-    gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(col_drag), GDK_BUTTON_PRIMARY);
-    g_signal_connect(col_drag, "drag-begin", G_CALLBACK(on_column_resize_begin), gui);
-    g_signal_connect(col_drag, "drag-update", G_CALLBACK(on_column_resize_update), gui);
-    g_signal_connect(col_drag, "drag-end", G_CALLBACK(on_column_resize_end), gui);
-    gtk_widget_add_controller(editor_overlay, GTK_EVENT_CONTROLLER(col_drag));
+    /* Transient "Copied" pill — a GtkRevealer at the bottom-centre of the
+     * editor, hidden until gui_show_toast() reveals it for a moment. */
+    g_toast_label = gtk_label_new("");
+    gtk_widget_add_css_class(g_toast_label, "copy-toast");
+    g_toast_revealer = gtk_revealer_new();
+    gtk_revealer_set_transition_type(GTK_REVEALER(g_toast_revealer),
+                                     GTK_REVEALER_TRANSITION_TYPE_CROSSFADE);
+    gtk_revealer_set_transition_duration(GTK_REVEALER(g_toast_revealer), 150);
+    gtk_revealer_set_child(GTK_REVEALER(g_toast_revealer), g_toast_label);
+    gtk_revealer_set_reveal_child(GTK_REVEALER(g_toast_revealer), FALSE);
+    gtk_widget_set_halign(g_toast_revealer, GTK_ALIGN_CENTER);
+    gtk_widget_set_valign(g_toast_revealer, GTK_ALIGN_END);
+    gtk_widget_set_margin_bottom(g_toast_revealer, 24);
+    gtk_widget_set_can_target(g_toast_revealer, FALSE);
+    gtk_overlay_add_overlay(GTK_OVERLAY(editor_overlay), g_toast_revealer);
+    gtk_overlay_set_measure_overlay(GTK_OVERLAY(editor_overlay), g_toast_revealer, FALSE);
 
     /* ── Paper card wrapper ──
      * The thread, the header band, and the scrolling text now live inside
@@ -3764,12 +2086,6 @@ static void activate(GtkApplication *app, gpointer user_data) {
     gtk_widget_add_css_class(source_view, "editor-source");
     gui->source_view = source_view;
 
-    /* Legacy aliases from the old virtual-layout box; coordinate
-     * conversions that targeted the box now resolve to the view itself. */
-    gui->virtual_layout_box = source_view;
-    gui->top_spacer = NULL;
-    gui->bottom_spacer = NULL;
-
     gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(scrolled), source_view);
 
     GtkAdjustment *vadj = gtk_scrolled_window_get_vadjustment(GTK_SCROLLED_WINDOW(scrolled));
@@ -3841,6 +2157,20 @@ static void activate(GtkApplication *app, gpointer user_data) {
         }
     }
     gtk_source_language_manager_append_search_path(lm, "src/ui");
+    /* Installed locations (makepkg, AppImage, system install): the .lang and
+     * .style-scheme.xml files live at <data>/src/ui. Mirror the search order in
+     * resolve_resource_path() so highlighting survives a real install, not just
+     * a run from the build tree. */
+    {
+        const char *data_dir = g_getenv("QIRTAS_DATA_DIR");
+        if (data_dir && data_dir[0]) {
+            char p[1024];
+            snprintf(p, sizeof(p), "%s/src/ui", data_dir);
+            gtk_source_language_manager_append_search_path(lm, p);
+        }
+    }
+    gtk_source_language_manager_append_search_path(lm, "/usr/share/qirtas/src/ui");
+    gtk_source_language_manager_append_search_path(lm, "/usr/local/share/qirtas/src/ui");
     GtkSourceLanguage *lang = gtk_source_language_manager_get_language(lm, "qirtas_markdown");
     if (!lang) lang = gtk_source_language_manager_get_language(lm, "markdown");
     if (lang) gtk_source_buffer_set_language(src_buf, lang);
@@ -3859,6 +2189,19 @@ static void activate(GtkApplication *app, gpointer user_data) {
         }
     }
     gtk_source_style_scheme_manager_append_search_path(sm, "src/ui");
+    /* Installed locations (makepkg, AppImage, system install) — see the language
+     * manager above. Without these the custom schemes are missing after install:
+     * light mode falls back to a stock scheme, dark mode finds nothing. */
+    {
+        const char *data_dir = g_getenv("QIRTAS_DATA_DIR");
+        if (data_dir && data_dir[0]) {
+            char p[1024];
+            snprintf(p, sizeof(p), "%s/src/ui", data_dir);
+            gtk_source_style_scheme_manager_append_search_path(sm, p);
+        }
+    }
+    gtk_source_style_scheme_manager_append_search_path(sm, "/usr/share/qirtas/src/ui");
+    gtk_source_style_scheme_manager_append_search_path(sm, "/usr/local/share/qirtas/src/ui");
     GtkSourceStyleScheme *scheme =
         gtk_source_style_scheme_manager_get_scheme(sm, "qirtas-dark");
     if (!scheme) scheme = gtk_source_style_scheme_manager_get_scheme(sm, "adwaita-dark");
@@ -3900,11 +2243,17 @@ static void activate(GtkApplication *app, gpointer user_data) {
     GtkEventController *editor_key_ctrl = gtk_event_controller_key_new();
     g_signal_connect(editor_key_ctrl, "key-pressed",
                      G_CALLBACK(on_editor_key_pressed), gui);
+    /* CAPTURE phase so our editor shortcuts (Home/End logical-line, numbered-
+     * list Enter, Alt+Up/Down, etc.) run BEFORE GtkTextView's built-in key
+     * bindings, which otherwise win in the default bubble phase and shadow
+     * them. on_editor_key_pressed returns FALSE for anything it doesn't claim,
+     * so plain typing and the input method still reach GtkTextView normally. */
+    gtk_event_controller_set_propagation_phase(editor_key_ctrl, GTK_PHASE_CAPTURE);
     gtk_widget_add_controller(source_view, editor_key_ctrl);
 
     /* ── Cursor-trail: wire draw function + frame-clock tick ── */
     gtk_drawing_area_set_draw_func(
-        GTK_DRAWING_AREA(gui->cursor_trail_area),
+        GTK_DRAWING_AREA(gui->cursor.trail_area),
         draw_cursor_trail,
         gui,
         NULL  /* GDestroyNotify — not needed */
@@ -3942,11 +2291,16 @@ static void activate(GtkApplication *app, gpointer user_data) {
     };
     GtkWidget *theme_dropdown = gtk_drop_down_new_from_strings(themes);
 
+    /* Reflect the saved theme (pref is the source of truth, written by
+     * apply_theme on every change). */
+    char *cur_theme = qirtas_pref_get_string("theme");
+    const char *theme_for_idx = (cur_theme && cur_theme[0]) ? cur_theme : current_theme;
     int theme_idx = 0;
-    if (strcmp(current_theme, "qirtas") == 0) theme_idx = 0;
-    else if (strcmp(current_theme, "qirtas-dark") == 0) theme_idx = 1;
-    else if (strcmp(current_theme, "navy") == 0) theme_idx = 2;
-    else if (strcmp(current_theme, "custom") == 0) theme_idx = 3;
+    if (strcmp(theme_for_idx, "qirtas") == 0) theme_idx = 0;
+    else if (strcmp(theme_for_idx, "qirtas-dark") == 0) theme_idx = 1;
+    else if (strcmp(theme_for_idx, "navy") == 0) theme_idx = 2;
+    else if (strcmp(theme_for_idx, "custom") == 0) theme_idx = 3;
+    g_free(cur_theme);
     gtk_drop_down_set_selected(GTK_DROP_DOWN(theme_dropdown), theme_idx);
     
     g_signal_connect(theme_dropdown, "notify::selected", G_CALLBACK(on_theme_dropdown_changed), gui);
@@ -3959,12 +2313,32 @@ static void activate(GtkApplication *app, gpointer user_data) {
     GtkWidget *font_lbl = gtk_label_new(qirtas_tr("Font Size"));
     gtk_widget_set_hexpand(font_lbl, TRUE);
     gtk_widget_set_halign(font_lbl, GTK_ALIGN_START);
-    GtkWidget *font_spin = gtk_spin_button_new_with_range(10.0, 26.0, 1.0);
-    gtk_spin_button_set_value(GTK_SPIN_BUTTON(font_spin), 16.0);
-    g_signal_connect(font_spin, "value-changed", G_CALLBACK(on_font_size_changed), gui);
-    on_font_size_changed(GTK_SPIN_BUTTON(font_spin), gui);
+
+    GtkWidget *stepper = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
+    gtk_widget_add_css_class(stepper, "font-stepper");
+
+    GtkWidget *minus_btn = gtk_button_new_with_label("−");
+    gtk_widget_add_css_class(minus_btn, "font-stepper-btn");
+    g_object_set_data(G_OBJECT(minus_btn), "qirtas-delta", GINT_TO_POINTER(-1));
+    g_signal_connect(minus_btn, "clicked", G_CALLBACK(on_font_size_step_clicked), gui);
+
+    char fs_buf[8];
+    snprintf(fs_buf, sizeof(fs_buf), "%d", (int)gui->current_font_size);
+    GtkWidget *value_lbl = gtk_label_new(fs_buf);
+    gtk_widget_add_css_class(value_lbl, "font-stepper-value");
+    gui->font_size_value_lbl = value_lbl;
+
+    GtkWidget *plus_btn = gtk_button_new_with_label("+");
+    gtk_widget_add_css_class(plus_btn, "font-stepper-btn");
+    g_object_set_data(G_OBJECT(plus_btn), "qirtas-delta", GINT_TO_POINTER(1));
+    g_signal_connect(plus_btn, "clicked", G_CALLBACK(on_font_size_step_clicked), gui);
+
+    gtk_box_append(GTK_BOX(stepper), minus_btn);
+    gtk_box_append(GTK_BOX(stepper), value_lbl);
+    gtk_box_append(GTK_BOX(stepper), plus_btn);
+
     gtk_box_append(GTK_BOX(font_row), font_lbl);
-    gtk_box_append(GTK_BOX(font_row), font_spin);
+    gtk_box_append(GTK_BOX(font_row), stepper);
     gtk_box_append(GTK_BOX(pop_box), font_row);
 
     // English Font Selection
@@ -4007,52 +2381,26 @@ static void activate(GtkApplication *app, gpointer user_data) {
     gtk_box_append(GTK_BOX(ar_font_row), ar_font_dropdown);
     gtk_box_append(GTK_BOX(pop_box), ar_font_row);
 
-    GtkWidget *compact_chk = gtk_check_button_new_with_label(qirtas_tr("Compact Layout"));
-    gtk_check_button_set_active(GTK_CHECK_BUTTON(compact_chk), gui->compact_mode);
-    g_signal_connect(compact_chk, "toggled", G_CALLBACK(on_compact_mode_toggled), gui);
-    gtk_box_append(GTK_BOX(pop_box), compact_chk);
+    gtk_box_append(GTK_BOX(pop_box), settings_switch_row(
+        qirtas_tr("Compact Layout"), qirtas_tr("Tighter rows in the sidebar"),
+        gui->compact_mode, G_CALLBACK(on_compact_mode_toggled), gui, NULL));
 
-    GtkWidget *border_chk = gtk_check_button_new_with_label(qirtas_tr("Show editor border"));
-    gtk_check_button_set_active(GTK_CHECK_BUTTON(border_chk), gui->enable_editor_border);
-    g_signal_connect(border_chk, "toggled", G_CALLBACK(on_editor_border_toggled), gui);
-    gtk_box_append(GTK_BOX(pop_box), border_chk);
+    gtk_box_append(GTK_BOX(pop_box), settings_switch_row(
+        qirtas_tr("Show editor border"), qirtas_tr("The floating paper card outline"),
+        gui->enable_editor_border, G_CALLBACK(on_editor_border_toggled), gui, NULL));
 
-    gui->focus_chk = gtk_check_button_new_with_label(qirtas_tr("Focus Mode"));
-    gtk_check_button_set_active(GTK_CHECK_BUTTON(gui->focus_chk), gui->enable_focus_mode);
-    g_signal_connect(gui->focus_chk, "toggled", G_CALLBACK(on_focus_mode_toggled), gui);
-    gtk_box_append(GTK_BOX(pop_box), gui->focus_chk);
+    gtk_box_append(GTK_BOX(pop_box), settings_switch_row(
+        qirtas_tr("Focus Mode"), qirtas_tr("Dim everything but the active line"),
+        gui->enable_focus_mode, G_CALLBACK(on_focus_mode_toggled), gui, &gui->focus_chk));
 
-    GtkWidget *trail_chk = gtk_check_button_new_with_label(qirtas_tr("Pointer Trail Animation"));
-    gtk_check_button_set_active(GTK_CHECK_BUTTON(trail_chk), gui->enable_cursor_trail);
-    g_signal_connect(trail_chk, "toggled", G_CALLBACK(on_trail_toggled), gui);
-    gtk_box_append(GTK_BOX(pop_box), trail_chk);
+    gtk_box_append(GTK_BOX(pop_box), settings_switch_row(
+        qirtas_tr("Pointer Trail Animation"), qirtas_tr("Ink-smear caret effect"),
+        gui->cursor.enable_trail, G_CALLBACK(on_trail_toggled), gui, NULL));
 
     /* Trail-color customization removed — the cursor trail uses the default
-     * (theme caret) color. gui->use_custom_trail_color stays 0. */
+     * (theme caret) color. gui->cursor.use_custom_trail_color stays 0. */
 
-    GtkWidget *pointer_color_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
-    GtkWidget *pointer_color_lbl = gtk_label_new(qirtas_tr("Pointer Color"));
-    gtk_widget_set_hexpand(pointer_color_lbl, TRUE);
-    gtk_widget_set_halign(pointer_color_lbl, GTK_ALIGN_START);
-    gtk_box_append(GTK_BOX(pointer_color_row), pointer_color_lbl);
-
-    GtkColorDialog *color_dialog = gtk_color_dialog_new();
-    gtk_color_dialog_set_modal(color_dialog, TRUE);
-    GtkWidget *pointer_color_btn = gtk_color_dialog_button_new(color_dialog);
-    gtk_color_dialog_button_set_rgba(GTK_COLOR_DIALOG_BUTTON(pointer_color_btn), &gui->custom_pointer_color);
-    gtk_widget_set_sensitive(pointer_color_btn, gui->use_custom_pointer_color);
-    g_signal_connect(pointer_color_btn, "notify::rgba", G_CALLBACK(on_pointer_color_changed), gui);
-    gtk_box_append(GTK_BOX(pointer_color_row), pointer_color_btn);
-    gui->pointer_color_btn = pointer_color_btn;
-
-    GtkWidget *pointer_color_custom_chk = gtk_check_button_new_with_label(qirtas_tr("Custom"));
-    gtk_check_button_set_active(GTK_CHECK_BUTTON(pointer_color_custom_chk), gui->use_custom_pointer_color);
-    g_signal_connect(pointer_color_custom_chk, "toggled", G_CALLBACK(on_pointer_color_custom_toggled), gui);
-    gtk_box_append(GTK_BOX(pointer_color_row), pointer_color_custom_chk);
-    gui->pointer_color_chk = pointer_color_custom_chk;
-
-    gtk_box_append(GTK_BOX(pop_box), pointer_color_row);
-
+    /* Pointer-color customization removed (the caret uses the theme color). */
 
     gtk_box_append(GTK_BOX(pop_box), gtk_separator_new(GTK_ORIENTATION_HORIZONTAL));
 
@@ -4062,38 +2410,46 @@ static void activate(GtkApplication *app, gpointer user_data) {
     gtk_widget_set_halign(ed_lbl, GTK_ALIGN_START);
     gtk_box_append(GTK_BOX(pop_box), ed_lbl);
 
-    GtkWidget *wrap_chk = gtk_check_button_new_with_label(qirtas_tr("Wrap Lines Automatically"));
-    gui->wrap_chk = wrap_chk;
-    gtk_check_button_set_active(GTK_CHECK_BUTTON(wrap_chk), gui->wrap_lines);
-    g_signal_connect(wrap_chk, "toggled", G_CALLBACK(on_wrap_toggled), gui);
-    gtk_box_append(GTK_BOX(pop_box), wrap_chk);
+    gtk_box_append(GTK_BOX(pop_box), settings_switch_row(
+        qirtas_tr("Wrap Lines Automatically"), NULL,
+        gui->wrap_lines, G_CALLBACK(on_wrap_toggled), gui->source_view, &gui->wrap_chk));
 
-    GtkWidget *ln_chk = gtk_check_button_new_with_label(qirtas_tr("Display Line Numbers"));
-    gtk_check_button_set_active(GTK_CHECK_BUTTON(ln_chk), gui->show_line_numbers);
-    g_signal_connect(ln_chk, "toggled", G_CALLBACK(on_line_numbers_toggled), gui);
-    gtk_box_append(GTK_BOX(pop_box), ln_chk);
+    gtk_box_append(GTK_BOX(pop_box), settings_switch_row(
+        qirtas_tr("Conceal Markdown Markers"), NULL,
+        !qirtas_no_conceal, G_CALLBACK(on_conceal_toggled), gui, NULL));
 
-    GtkWidget *hl_chk = gtk_check_button_new_with_label(qirtas_tr("Highlight Current Line"));
-    gtk_check_button_set_active(GTK_CHECK_BUTTON(hl_chk), gui->highlight_current_line);
-    g_signal_connect(hl_chk, "toggled", G_CALLBACK(on_highlight_line_toggled), gui);
-    gtk_box_append(GTK_BOX(pop_box), hl_chk);
+    gtk_box_append(GTK_BOX(pop_box), settings_switch_row(
+        qirtas_tr("Display Line Numbers"), NULL,
+        gui->show_line_numbers, G_CALLBACK(on_line_numbers_toggled), gui, NULL));
 
-    GtkWidget *restore_chk = gtk_check_button_new_with_label(qirtas_tr("Restore Session on Startup"));
-    gtk_check_button_set_active(GTK_CHECK_BUTTON(restore_chk), gui->restore_session);
-    g_signal_connect(restore_chk, "toggled", G_CALLBACK(on_restore_session_toggled), gui);
-    gtk_box_append(GTK_BOX(pop_box), restore_chk);
+    gtk_box_append(GTK_BOX(pop_box), settings_switch_row(
+        qirtas_tr("Highlight Current Line"), NULL,
+        gui->highlight_current_line, G_CALLBACK(on_highlight_line_toggled), gui, NULL));
 
-    const char *text_width_modes[] = { "Centered (Fixed Width)", "Full Page Width", NULL };
-    GtkWidget *text_width_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
-    GtkWidget *text_width_lbl = gtk_label_new(qirtas_tr("Text Width"));
-    gtk_widget_set_hexpand(text_width_lbl, TRUE);
-    gtk_widget_set_halign(text_width_lbl, GTK_ALIGN_START);
-    gui->text_width_dropdown = gtk_drop_down_new_from_strings(text_width_modes);
-    gtk_drop_down_set_selected(GTK_DROP_DOWN(gui->text_width_dropdown), gui->text_width_full_page ? 1 : 0);
-    g_signal_connect(gui->text_width_dropdown, "notify::selected", G_CALLBACK(on_text_width_mode_changed), gui);
-    gtk_box_append(GTK_BOX(text_width_row), text_width_lbl);
-    gtk_box_append(GTK_BOX(text_width_row), gui->text_width_dropdown);
-    gtk_box_append(GTK_BOX(pop_box), text_width_row);
+    gtk_box_append(GTK_BOX(pop_box), settings_switch_row(
+        qirtas_tr("Restore Session on Startup"), NULL,
+        gui->restore_session, G_CALLBACK(on_restore_session_toggled), gui, NULL));
+
+    gtk_box_append(GTK_BOX(pop_box), settings_switch_row(
+        qirtas_tr("Auto-save"), NULL,
+        gui->autosave_enabled, G_CALLBACK(on_autosave_toggled), gui, NULL));
+
+    /* Card Gap slider — the one width control: 0 = full page width, larger =
+     * narrower centred card. Auto-clamps so the card never overflows a narrow
+     * window. (Replaces the old Text Width dropdown + Column Width slider.) */
+    GtkWidget *gap_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
+    GtkWidget *gap_lbl = gtk_label_new(qirtas_tr("Card Gap"));
+    gtk_widget_set_halign(gap_lbl, GTK_ALIGN_START);
+    GtkWidget *gap_slider = gtk_scale_new_with_range(GTK_ORIENTATION_HORIZONTAL,
+                                                     QIRTAS_DESK_GAP_MIN, QIRTAS_DESK_GAP_MAX, 4);
+    gtk_range_set_value(GTK_RANGE(gap_slider), gui->desk_gap);
+    gtk_widget_set_hexpand(gap_slider, TRUE);
+    gtk_scale_set_draw_value(GTK_SCALE(gap_slider), TRUE);
+    gtk_scale_set_value_pos(GTK_SCALE(gap_slider), GTK_POS_RIGHT);
+    g_signal_connect(gap_slider, "value-changed", G_CALLBACK(on_card_gap_slider_changed), gui);
+    gtk_box_append(GTK_BOX(gap_row), gap_lbl);
+    gtk_box_append(GTK_BOX(gap_row), gap_slider);
+    gtk_box_append(GTK_BOX(pop_box), gap_row);
 
     const char *sidebar_sides[] = { "Left", "Right", NULL };
     GtkWidget *sb_side_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
@@ -4151,6 +2507,14 @@ static void activate(GtkApplication *app, gpointer user_data) {
     g_signal_connect(gui->sync_now_btn, "clicked", G_CALLBACK(on_sync_now_clicked), gui);
     gtk_box_append(GTK_BOX(gd_card), gui->sync_now_btn);
 
+    GtkWidget *gd_help = gtk_label_new(qirtas_tr(
+        "Advanced: needs your own Google app key (QIRTAS_GOOGLE_CLIENT_ID). "
+        "For easy setup, use GitHub or the Local folder below."));
+    gtk_widget_add_css_class(gd_help, "dim-label");
+    gtk_label_set_wrap(GTK_LABEL(gd_help), TRUE);
+    gtk_label_set_xalign(GTK_LABEL(gd_help), 0.0);
+    gtk_box_append(GTK_BOX(gd_card), gd_help);
+
     // --- DROPBOX SYNC ---
     GtkWidget *db_card = gtk_box_new(GTK_ORIENTATION_VERTICAL, 10);
     gtk_widget_add_css_class(db_card, "sync-card");
@@ -4169,7 +2533,7 @@ static void activate(GtkApplication *app, gpointer user_data) {
     gui->dropbox_connect_btn = gtk_button_new_with_label(qirtas_tr("Connect to Dropbox"));
     gtk_widget_set_tooltip_text(gui->dropbox_connect_btn,
         "Conflict-safe: if a note changed on two machines, both versions are kept "
-        "(the local one as <name>_conflict). See docs/SYNC.md.");
+        "(the local one as <name>_conflict_<timestamp>). See docs/SYNC.md.");
     gtk_widget_add_css_class(gui->dropbox_connect_btn, "pop-btn");
     gtk_widget_add_css_class(gui->dropbox_connect_btn, "sync-card-action");
     gtk_widget_set_hexpand(gui->dropbox_connect_btn, TRUE);
@@ -4189,6 +2553,14 @@ static void activate(GtkApplication *app, gpointer user_data) {
     gtk_widget_set_halign(gui->dropbox_now_btn, GTK_ALIGN_FILL);
     g_signal_connect(gui->dropbox_now_btn, "clicked", G_CALLBACK(on_dropbox_now_clicked), gui);
     gtk_box_append(GTK_BOX(db_card), gui->dropbox_now_btn);
+
+    GtkWidget *db_help = gtk_label_new(qirtas_tr(
+        "Advanced: needs your own Dropbox app key (QIRTAS_DROPBOX_APP_KEY). "
+        "For easy setup, use GitHub or the Local folder below."));
+    gtk_widget_add_css_class(db_help, "dim-label");
+    gtk_label_set_wrap(GTK_LABEL(db_help), TRUE);
+    gtk_label_set_xalign(GTK_LABEL(db_help), 0.0);
+    gtk_box_append(GTK_BOX(db_card), db_help);
 
     // --- GITHUB SYNC ---
     GtkWidget *gh_card = gtk_box_new(GTK_ORIENTATION_VERTICAL, 10);
@@ -4215,8 +2587,32 @@ static void activate(GtkApplication *app, gpointer user_data) {
     gtk_box_append(GTK_BOX(gh_row), gui->github_status_lbl);
     gtk_box_append(GTK_BOX(gh_card), gh_row);
 
+    /* Token-based connect is the reliable method (no GitHub-App permission
+     * headaches). Help text + a one-click link that opens GitHub's token page
+     * with the right scope pre-selected. Leave the token empty to instead sign
+     * in through the browser (device flow). */
+    GtkWidget *gh_help = gtk_label_new(qirtas_tr(
+        "Paste a GitHub token below, or leave it empty to sign in via your browser."));
+    gtk_widget_add_css_class(gh_help, "dim-label");
+    gtk_label_set_wrap(GTK_LABEL(gh_help), TRUE);
+    gtk_label_set_xalign(GTK_LABEL(gh_help), 0.0);
+    gtk_box_append(GTK_BOX(gh_card), gh_help);
+
+    GtkWidget *gh_token_link = gtk_link_button_new_with_label(
+        "https://github.com/settings/tokens/new?scopes=repo&description=Qirtas%20Sync",
+        qirtas_tr("Get a token from GitHub \xe2\x86\x92"));
+    gtk_widget_set_halign(gh_token_link, GTK_ALIGN_START);
+    gtk_box_append(GTK_BOX(gh_card), gh_token_link);
+
+    gui->github_token_entry = gtk_password_entry_new();
+    gtk_password_entry_set_show_peek_icon(GTK_PASSWORD_ENTRY(gui->github_token_entry), TRUE);
+    g_object_set(gui->github_token_entry, "placeholder-text",
+                 qirtas_tr("GitHub token (ghp_… or github_pat_…)"), NULL);
+    gtk_widget_set_hexpand(gui->github_token_entry, TRUE);
+    gtk_box_append(GTK_BOX(gh_card), gui->github_token_entry);
+
     gui->github_repo_entry = gtk_entry_new();
-    gtk_entry_set_placeholder_text(GTK_ENTRY(gui->github_repo_entry), qirtas_tr("Repo name (default: qirtas-notes)"));
+    gtk_entry_set_placeholder_text(GTK_ENTRY(gui->github_repo_entry), qirtas_tr("Repo name, owner/repo, or URL (default: qirtas-notes)"));
     gtk_widget_set_hexpand(gui->github_repo_entry, TRUE);
     gtk_box_append(GTK_BOX(gh_card), gui->github_repo_entry);
 
@@ -4250,7 +2646,7 @@ static void activate(GtkApplication *app, gpointer user_data) {
     gui->local_sync_btn = gtk_button_new_with_label(qirtas_tr("Sync Folder"));
     gtk_widget_set_tooltip_text(gui->local_sync_btn,
         "Conflict-safe: if a note changed on both sides, both versions are kept "
-        "(the local one as <name>_conflict). See docs/SYNC.md.");
+        "(the local one as <name>_conflict_<timestamp>). See docs/SYNC.md.");
     gtk_widget_add_css_class(gui->local_sync_btn, "pop-btn");
     gtk_widget_add_css_class(gui->local_sync_btn, "sync-card-action");
     gtk_widget_set_hexpand(gui->local_sync_btn, TRUE);
@@ -4439,6 +2835,7 @@ static void activate(GtkApplication *app, gpointer user_data) {
     gtk_widget_set_tooltip_text(gui->btn_status_actions, qirtas_tr("Menu"));
 
     GtkWidget *actions_popover = gtk_popover_new();
+    gtk_widget_add_css_class(actions_popover, "qirtas-menu");
     GtkWidget *actions_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 4);
     gtk_widget_set_margin_start(actions_box, 6);
     gtk_widget_set_margin_end(actions_box, 6);
@@ -4484,9 +2881,12 @@ static void activate(GtkApplication *app, gpointer user_data) {
     g_signal_connect(btn_pop_save, "clicked", G_CALLBACK(on_status_bar_save_file_clicked), gui);
     gtk_box_append(GTK_BOX(actions_box), btn_pop_save);
 
+    gtk_box_append(GTK_BOX(actions_box), gtk_separator_new(GTK_ORIENTATION_HORIZONTAL));
+
     // 4. Export as PDF button
     GtkWidget *btn_pop_pdf = gtk_button_new();
     gtk_widget_add_css_class(btn_pop_pdf, "pop-btn");
+    gtk_widget_add_css_class(btn_pop_pdf, "menu-highlight");
     GtkWidget *hbox_pdf = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
     gtk_widget_set_halign(hbox_pdf, GTK_ALIGN_START);
     GtkWidget *img_pdf = gtk_image_new_from_icon_name(qirtas_icon("pdf"));
@@ -4505,17 +2905,17 @@ static void activate(GtkApplication *app, gpointer user_data) {
         status_menu_item(qirtas_icon("saveas"), qirtas_tr("Save As…"), "Ctrl+Shift+S",
                          G_CALLBACK(on_status_menu_save_as), gui));
 
+    gtk_box_append(GTK_BOX(actions_box),
+        status_menu_item(qirtas_icon("history"), qirtas_tr("File History"), NULL,
+                         G_CALLBACK(on_status_menu_history), gui));
+
     gtk_box_append(GTK_BOX(actions_box), gtk_separator_new(GTK_ORIENTATION_HORIZONTAL));
 
-    gtk_box_append(GTK_BOX(actions_box),
-        status_menu_item(qirtas_icon("findreplace"), qirtas_tr("Find / Replace…"), "Ctrl+F",
-                         G_CALLBACK(on_status_menu_find_replace), gui));
+    /* Find / Replace removed from this menu — it duplicates the in-editor
+     * search (Ctrl+F) already reachable from the toolbar. */
     gtk_box_append(GTK_BOX(actions_box),
         status_menu_item(qirtas_icon("fullscreen"), qirtas_tr("Fullscreen"), "F11",
                          G_CALLBACK(on_status_menu_fullscreen), gui));
-
-    gtk_box_append(GTK_BOX(actions_box), gtk_separator_new(GTK_ORIENTATION_HORIZONTAL));
-
     gtk_box_append(GTK_BOX(actions_box),
         status_menu_item(qirtas_icon("prefs"), qirtas_tr("Preferences"), "Ctrl+,",
                          G_CALLBACK(on_status_menu_settings), gui));
@@ -4525,9 +2925,10 @@ static void activate(GtkApplication *app, gpointer user_data) {
 
     gtk_box_append(GTK_BOX(actions_box), gtk_separator_new(GTK_ORIENTATION_HORIZONTAL));
 
-    gtk_box_append(GTK_BOX(actions_box),
-        status_menu_item(qirtas_icon("quit"), qirtas_tr("Quit Qirtas"), "Ctrl+Q",
-                         G_CALLBACK(on_status_menu_quit), gui));
+    GtkWidget *quit_item = status_menu_item(qirtas_icon("quit"), qirtas_tr("Quit Qirtas"), "Ctrl+Q",
+                         G_CALLBACK(on_status_menu_quit), gui);
+    gtk_widget_add_css_class(quit_item, "destructive");
+    gtk_box_append(GTK_BOX(actions_box), quit_item);
 
     gtk_popover_set_child(GTK_POPOVER(actions_popover), actions_box);
     gtk_menu_button_set_popover(GTK_MENU_BUTTON(gui->btn_status_actions), actions_popover);
@@ -4559,41 +2960,41 @@ static void activate(GtkApplication *app, gpointer user_data) {
     gtk_widget_add_css_class(tab_strip, "tab-strip");
     gtk_widget_set_hexpand(tab_strip, TRUE);
     gtk_widget_set_halign(tab_strip, GTK_ALIGN_FILL);
-    gui->tab_strip = tab_strip;
+    gui->tabs.strip = tab_strip;
     /* Tab strip stays LTR even when the app runs RTL (Arabic). */
     gtk_widget_set_direction(tab_strip, GTK_TEXT_DIR_LTR);
 
-    gui->btn_tab_scroll_left = gtk_button_new_from_icon_name("pan-start-symbolic");
-    gtk_accessible_update_property(GTK_ACCESSIBLE(gui->btn_tab_scroll_left),
+    gui->tabs.scroll_left_btn = gtk_button_new_from_icon_name("pan-start-symbolic");
+    gtk_accessible_update_property(GTK_ACCESSIBLE(gui->tabs.scroll_left_btn),
                                    GTK_ACCESSIBLE_PROPERTY_LABEL,
                                    "Scroll tabs left", -1);
-    gtk_widget_add_css_class(gui->btn_tab_scroll_left, "tab-scroll-btn");
-    gtk_widget_set_tooltip_text(gui->btn_tab_scroll_left, qirtas_tr("Scroll tabs left"));
+    gtk_widget_add_css_class(gui->tabs.scroll_left_btn, "tab-scroll-btn");
+    gtk_widget_set_tooltip_text(gui->tabs.scroll_left_btn, qirtas_tr("Scroll tabs left"));
 
-    gui->tab_bar_scroll = gtk_scrolled_window_new();
-    gtk_widget_add_css_class(gui->tab_bar_scroll, "tab-bar-scroll");
-    gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(gui->tab_bar_scroll),
+    gui->tabs.bar_scroll = gtk_scrolled_window_new();
+    gtk_widget_add_css_class(gui->tabs.bar_scroll, "tab-bar-scroll");
+    gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(gui->tabs.bar_scroll),
                                    GTK_POLICY_AUTOMATIC, GTK_POLICY_NEVER);
-    gtk_scrolled_window_set_overlay_scrolling(GTK_SCROLLED_WINDOW(gui->tab_bar_scroll), TRUE);
-    gtk_widget_set_hexpand(gui->tab_bar_scroll, TRUE);
-    gtk_widget_set_hexpand_set(gui->tab_bar_scroll, TRUE);
+    gtk_scrolled_window_set_overlay_scrolling(GTK_SCROLLED_WINDOW(gui->tabs.bar_scroll), TRUE);
+    gtk_widget_set_hexpand(gui->tabs.bar_scroll, TRUE);
+    gtk_widget_set_hexpand_set(gui->tabs.bar_scroll, TRUE);
 
     GtkWidget *tab_bar = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
     gtk_widget_add_css_class(tab_bar, "tab-bar");
     gtk_widget_set_valign(tab_bar, GTK_ALIGN_CENTER);
-    gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(gui->tab_bar_scroll), tab_bar);
-    gui->tab_bar_box = tab_bar;
+    gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(gui->tabs.bar_scroll), tab_bar);
+    gui->tabs.bar_box = tab_bar;
 
-    gui->btn_tab_scroll_right = gtk_button_new_from_icon_name("pan-end-symbolic");
-    gtk_accessible_update_property(GTK_ACCESSIBLE(gui->btn_tab_scroll_right),
+    gui->tabs.scroll_right_btn = gtk_button_new_from_icon_name("pan-end-symbolic");
+    gtk_accessible_update_property(GTK_ACCESSIBLE(gui->tabs.scroll_right_btn),
                                    GTK_ACCESSIBLE_PROPERTY_LABEL,
                                    "Scroll tabs right", -1);
-    gtk_widget_add_css_class(gui->btn_tab_scroll_right, "tab-scroll-btn");
-    gtk_widget_set_tooltip_text(gui->btn_tab_scroll_right, qirtas_tr("Scroll tabs right"));
+    gtk_widget_add_css_class(gui->tabs.scroll_right_btn, "tab-scroll-btn");
+    gtk_widget_set_tooltip_text(gui->tabs.scroll_right_btn, qirtas_tr("Scroll tabs right"));
 
-    gtk_box_append(GTK_BOX(tab_strip), gui->btn_tab_scroll_left);
-    gtk_box_append(GTK_BOX(tab_strip), gui->tab_bar_scroll);
-    gtk_box_append(GTK_BOX(tab_strip), gui->btn_tab_scroll_right);
+    gtk_box_append(GTK_BOX(tab_strip), gui->tabs.scroll_left_btn);
+    gtk_box_append(GTK_BOX(tab_strip), gui->tabs.bar_scroll);
+    gtk_box_append(GTK_BOX(tab_strip), gui->tabs.scroll_right_btn);
     gui_tabs_setup_viewport(gui);
 
     /* The 🔍 search, 📖 read mode, and ⋮ menu live in the card header now.
@@ -4660,9 +3061,20 @@ static void activate(GtkApplication *app, gpointer user_data) {
     g_object_set_data_full(G_OBJECT(window), "app-gui", gui, g_free);
 
     populate_explorer(gui);
+    /* Restore the last-used theme (saved by apply_theme on every change). */
+    {
+        char *saved_theme = qirtas_pref_get_string("theme");
+        if (saved_theme && saved_theme[0]) {
+            g_strlcpy(current_theme, saved_theme, sizeof(current_theme));
+        }
+        g_free(saved_theme);
+    }
     apply_theme(gui, current_theme);
     apply_focus_mode(gui);
     gtk_window_present(GTK_WINDOW(window));
+    if (qirtas_pref_get_int("window_maximized", 0)) {
+        gtk_window_maximize(GTK_WINDOW(window));
+    }
     zig_on_gui_ready();
 
     /* Restore Session: reopen every tab from last run, active file last */
@@ -4722,12 +3134,17 @@ static void on_tree_open_clicked(GtkButton *btn, gpointer user_data) {
 static void on_tree_open_in_fm_clicked(GtkButton *btn, gpointer user_data) {
     popdown_ancestor_popover(GTK_WIDGET(btn));
     const char *path = (const char *)user_data;
-    GFile *file = g_file_new_for_path(path);
+    /* Tree paths are vault-relative ("./Notes/x.md"); a relative GFile won't
+     * resolve for the file launcher. Canonicalize against the cwd (vault root)
+     * to an absolute path first. */
+    char *abs = g_canonicalize_filename(path, NULL);
+    GFile *file = g_file_new_for_path(abs ? abs : path);
     GtkFileLauncher *launcher = gtk_file_launcher_new(file);
     GtkWindow *parent = global_gui ? GTK_WINDOW(global_gui->window) : NULL;
     gtk_file_launcher_open_containing_folder(launcher, parent, NULL, NULL, NULL);
     g_object_unref(launcher);
     g_object_unref(file);
+    g_free(abs);
 }
 
 /* Explorer header toolbar actions. */
@@ -4738,7 +3155,7 @@ static void on_exp_new_file_clicked(GtkButton *btn, gpointer user_data) {
 }
 static void on_exp_new_folder_clicked(GtkButton *btn, gpointer user_data) {
     (void)btn;
-    prompt_new_folder((AppGui *)user_data, NULL);
+    explorer_begin_new_folder((AppGui *)user_data, NULL);
 }
 static void on_exp_open_vault_fm_clicked(GtkButton *btn, gpointer user_data) {
     (void)btn; (void)user_data;
@@ -4752,13 +3169,19 @@ static void on_exp_open_vault_fm_clicked(GtkButton *btn, gpointer user_data) {
     g_free(cwd);
 }
 
+static void on_tree_history_clicked(GtkButton *btn, gpointer user_data) {
+    popdown_ancestor_popover(GTK_WIDGET(btn));
+    const char *path = (const char *)user_data;
+    show_file_history(global_gui, path);
+}
+
 /* New Folder, created as a sibling of the right-clicked file (same directory). */
 static void on_tree_new_folder_clicked(GtkButton *btn, gpointer user_data) {
     popdown_ancestor_popover(GTK_WIDGET(btn));
     const char *path = (const char *)user_data;
     char *parent = g_path_get_dirname(path);
     /* g_path_get_dirname returns "." for a bare filename → vault root. */
-    prompt_new_folder(global_gui, (parent && strcmp(parent, ".") != 0) ? parent : NULL);
+    explorer_begin_new_folder(global_gui, (parent && strcmp(parent, ".") != 0) ? parent : NULL);
     g_free(parent);
 }
 
@@ -4791,6 +3214,9 @@ void on_tree_file_right_click(GtkGestureClick *gesture, gint n_press,
     gtk_box_append(GTK_BOX(box),
         status_menu_item(qirtas_icon("folder"), qirtas_tr("New Folder"), NULL,
                          G_CALLBACK(on_tree_new_folder_clicked), (gpointer)path));
+    gtk_box_append(GTK_BOX(box),
+        status_menu_item(qirtas_icon("history"), qirtas_tr("File History"), NULL,
+                         G_CALLBACK(on_tree_history_clicked), (gpointer)path));
 
     gtk_popover_set_child(GTK_POPOVER(popover), box);
     gtk_popover_popup(GTK_POPOVER(popover));
@@ -4814,235 +3240,9 @@ int run_gui(int argc, char **argv) {
     return status;
 }
 
-void gui_index_all_files(void) {
-    sqlite3 *db = NULL;
-    if (sqlite3_open(DB_PATH, &db) != SQLITE_OK) {
-        if (db) sqlite3_close(db);
-        return;
-    }
+/* gui_index_all_files / gui_index_file / gui_remove_file_from_index
+ * moved to src/gui/gui_index.c */
 
-    sqlite3_exec(db, "CREATE TABLE IF NOT EXISTS file_metadata (filepath TEXT PRIMARY KEY, last_modified INTEGER NOT NULL, drive_file_id TEXT);", NULL, NULL, NULL);
-    sqlite3_exec(db, "ALTER TABLE file_metadata ADD COLUMN drive_file_id TEXT;", NULL, NULL, NULL);
-    sqlite3_exec(db, "CREATE VIRTUAL TABLE IF NOT EXISTS note_search USING fts5(filepath UNINDEXED, title, content);", NULL, NULL, NULL);
-    sqlite3_exec(db, "CREATE VIRTUAL TABLE IF NOT EXISTS file_content_fts USING fts5(content, filepath UNINDEXED);", NULL, NULL, NULL);
-    sqlite3_exec(db, "CREATE TABLE IF NOT EXISTS sync_tokens (id INTEGER PRIMARY KEY CHECK (id = 1), client_id TEXT NOT NULL, client_secret TEXT NOT NULL, access_token TEXT, refresh_token TEXT, expiry_time INTEGER DEFAULT 0);", NULL, NULL, NULL);
-
-    sqlite3_exec(db, "CREATE TABLE IF NOT EXISTS dropbox_sync_tokens (id INTEGER PRIMARY KEY CHECK (id = 1), client_id TEXT NOT NULL, client_secret TEXT NOT NULL, access_token TEXT, refresh_token TEXT, expiry_time INTEGER DEFAULT 0);", NULL, NULL, NULL);
-    sqlite3_exec(db, "CREATE TABLE IF NOT EXISTS github_sync_tokens (id INTEGER PRIMARY KEY CHECK (id = 1), personal_token TEXT, repo_name TEXT NOT NULL, access_token TEXT, expiry_time INTEGER DEFAULT 0);", NULL, NULL, NULL);
-
-    sqlite3_stmt *stmt_cnt = NULL;
-    int fts_count = 0;
-    if (sqlite3_prepare_v2(db, "SELECT COUNT(*) FROM file_content_fts;", -1, &stmt_cnt, NULL) == SQLITE_OK) {
-        if (sqlite3_step(stmt_cnt) == SQLITE_ROW) {
-            fts_count = sqlite3_column_int(stmt_cnt, 0);
-        }
-        sqlite3_finalize(stmt_cnt);
-    }
-    if (fts_count == 0) {
-        sqlite3_exec(db, "DELETE FROM file_metadata;", NULL, NULL, NULL);
-    }
-
-    GError *err = NULL;
-    GDir *dir = g_dir_open(".", 0, &err);
-    if (!dir) {
-        sqlite3_close(db);
-        return;
-    }
-
-    const char *nm;
-    while ((nm = g_dir_read_name(dir)) != NULL) {
-        if (nm[0] == '.') continue;
-        
-        gboolean is_md = g_str_has_suffix(nm, ".md") || g_str_has_suffix(nm, ".txt") ||
-                         g_str_has_suffix(nm, ".zig") || g_str_has_suffix(nm, ".zon") ||
-                         g_str_has_suffix(nm, ".c") || g_str_has_suffix(nm, ".h");
-        if (!is_md) continue;
-
-        struct stat st;
-        if (stat(nm, &st) != 0) continue;
-        long long last_mod = st.st_mtime;
-
-        sqlite3_stmt *stmt_check = NULL;
-        const char *sql_check = "SELECT last_modified FROM file_metadata WHERE filepath = ?;";
-        gboolean up_to_date = FALSE;
-        if (sqlite3_prepare_v2(db, sql_check, -1, &stmt_check, NULL) == SQLITE_OK) {
-            sqlite3_bind_text(stmt_check, 1, nm, -1, SQLITE_TRANSIENT);
-            if (sqlite3_step(stmt_check) == SQLITE_ROW) {
-                long long db_last_mod = sqlite3_column_int64(stmt_check, 0);
-                if (db_last_mod == last_mod) {
-                    up_to_date = TRUE;
-                }
-            }
-            sqlite3_finalize(stmt_check);
-        }
-
-        if (up_to_date) continue;
-
-        FILE *f = fopen(nm, "rb");
-        if (!f) continue;
-        fseek(f, 0, SEEK_END);
-        long sz = ftell(f);
-        fseek(f, 0, SEEK_SET);
-        char *content = g_malloc(sz + 1);
-        size_t read_bytes = fread(content, 1, sz, f);
-        content[read_bytes] = '\0';
-        fclose(f);
-
-        sqlite3_exec(db, "BEGIN TRANSACTION;", NULL, NULL, NULL);
-
-        sqlite3_stmt *stmt_del = NULL;
-        if (sqlite3_prepare_v2(db, "DELETE FROM note_search WHERE filepath = ?;", -1, &stmt_del, NULL) == SQLITE_OK) {
-            sqlite3_bind_text(stmt_del, 1, nm, -1, SQLITE_TRANSIENT);
-            sqlite3_step(stmt_del);
-            sqlite3_finalize(stmt_del);
-        }
-        
-        sqlite3_stmt *stmt_del_fts = NULL;
-        if (sqlite3_prepare_v2(db, "DELETE FROM file_content_fts WHERE filepath = ?;", -1, &stmt_del_fts, NULL) == SQLITE_OK) {
-            sqlite3_bind_text(stmt_del_fts, 1, nm, -1, SQLITE_TRANSIENT);
-            sqlite3_step(stmt_del_fts);
-            sqlite3_finalize(stmt_del_fts);
-        }
-
-        sqlite3_stmt *stmt_ins = NULL;
-        if (sqlite3_prepare_v2(db, "INSERT INTO note_search (filepath, title, content) VALUES (?, ?, ?);", -1, &stmt_ins, NULL) == SQLITE_OK) {
-            sqlite3_bind_text(stmt_ins, 1, nm, -1, SQLITE_TRANSIENT);
-            sqlite3_bind_text(stmt_ins, 2, nm, -1, SQLITE_TRANSIENT);
-            sqlite3_bind_text(stmt_ins, 3, content, -1, SQLITE_TRANSIENT);
-            sqlite3_step(stmt_ins);
-            sqlite3_finalize(stmt_ins);
-        }
-
-        sqlite3_stmt *stmt_ins_fts = NULL;
-        if (sqlite3_prepare_v2(db, "INSERT INTO file_content_fts (content, filepath) VALUES (?, ?);", -1, &stmt_ins_fts, NULL) == SQLITE_OK) {
-            sqlite3_bind_text(stmt_ins_fts, 1, content, -1, SQLITE_TRANSIENT);
-            sqlite3_bind_text(stmt_ins_fts, 2, nm, -1, SQLITE_TRANSIENT);
-            sqlite3_step(stmt_ins_fts);
-            sqlite3_finalize(stmt_ins_fts);
-        }
-
-        sqlite3_stmt *stmt_meta = NULL;
-        if (sqlite3_prepare_v2(db, "INSERT OR REPLACE INTO file_metadata (filepath, last_modified) VALUES (?, ?);", -1, &stmt_meta, NULL) == SQLITE_OK) {
-            sqlite3_bind_text(stmt_meta, 1, nm, -1, SQLITE_TRANSIENT);
-            sqlite3_bind_int64(stmt_meta, 2, last_mod);
-            sqlite3_step(stmt_meta);
-            sqlite3_finalize(stmt_meta);
-        }
-
-        sqlite3_exec(db, "COMMIT;", NULL, NULL, NULL);
-        g_free(content);
-    }
-
-    g_dir_close(dir);
-    sqlite3_close(db);
-}
-
-void gui_index_file(const char *filename) {
-    sqlite3 *db = NULL;
-    if (sqlite3_open(DB_PATH, &db) != SQLITE_OK) {
-        if (db) sqlite3_close(db);
-        return;
-    }
-
-    struct stat st;
-    if (stat(filename, &st) != 0) {
-        sqlite3_close(db);
-        return;
-    }
-    long long last_mod = st.st_mtime;
-
-    FILE *f = fopen(filename, "rb");
-    if (!f) {
-        sqlite3_close(db);
-        return;
-    }
-    fseek(f, 0, SEEK_END);
-    long sz = ftell(f);
-    fseek(f, 0, SEEK_SET);
-    char *content = g_malloc(sz + 1);
-    size_t read_bytes = fread(content, 1, sz, f);
-    content[read_bytes] = '\0';
-    fclose(f);
-
-    sqlite3_exec(db, "BEGIN TRANSACTION;", NULL, NULL, NULL);
-
-    sqlite3_stmt *stmt_del = NULL;
-    if (sqlite3_prepare_v2(db, "DELETE FROM note_search WHERE filepath = ?;", -1, &stmt_del, NULL) == SQLITE_OK) {
-        sqlite3_bind_text(stmt_del, 1, filename, -1, SQLITE_TRANSIENT);
-        sqlite3_step(stmt_del);
-        sqlite3_finalize(stmt_del);
-    }
-    
-    sqlite3_stmt *stmt_del_fts = NULL;
-    if (sqlite3_prepare_v2(db, "DELETE FROM file_content_fts WHERE filepath = ?;", -1, &stmt_del_fts, NULL) == SQLITE_OK) {
-        sqlite3_bind_text(stmt_del_fts, 1, filename, -1, SQLITE_TRANSIENT);
-        sqlite3_step(stmt_del_fts);
-        sqlite3_finalize(stmt_del_fts);
-    }
-
-    sqlite3_stmt *stmt_ins = NULL;
-    if (sqlite3_prepare_v2(db, "INSERT INTO note_search (filepath, title, content) VALUES (?, ?, ?);", -1, &stmt_ins, NULL) == SQLITE_OK) {
-        sqlite3_bind_text(stmt_ins, 1, filename, -1, SQLITE_TRANSIENT);
-        sqlite3_bind_text(stmt_ins, 2, filename, -1, SQLITE_TRANSIENT);
-        sqlite3_bind_text(stmt_ins, 3, content, -1, SQLITE_TRANSIENT);
-        sqlite3_step(stmt_ins);
-        sqlite3_finalize(stmt_ins);
-    }
-
-    sqlite3_stmt *stmt_ins_fts = NULL;
-    if (sqlite3_prepare_v2(db, "INSERT INTO file_content_fts (content, filepath) VALUES (?, ?);", -1, &stmt_ins_fts, NULL) == SQLITE_OK) {
-        sqlite3_bind_text(stmt_ins_fts, 1, content, -1, SQLITE_TRANSIENT);
-        sqlite3_bind_text(stmt_ins_fts, 2, filename, -1, SQLITE_TRANSIENT);
-        sqlite3_step(stmt_ins_fts);
-        sqlite3_finalize(stmt_ins_fts);
-    }
-
-    sqlite3_stmt *stmt_meta = NULL;
-    if (sqlite3_prepare_v2(db, "INSERT OR REPLACE INTO file_metadata (filepath, last_modified) VALUES (?, ?);", -1, &stmt_meta, NULL) == SQLITE_OK) {
-        sqlite3_bind_text(stmt_meta, 1, filename, -1, SQLITE_TRANSIENT);
-        sqlite3_bind_int64(stmt_meta, 2, last_mod);
-        sqlite3_step(stmt_meta);
-        sqlite3_finalize(stmt_meta);
-    }
-
-    sqlite3_exec(db, "COMMIT;", NULL, NULL, NULL);
-    g_free(content);
-    sqlite3_close(db);
-}
-
-void gui_remove_file_from_index(const char *filename) {
-    sqlite3 *db = NULL;
-    if (sqlite3_open(DB_PATH, &db) != SQLITE_OK) {
-        if (db) sqlite3_close(db);
-        return;
-    }
-
-    sqlite3_exec(db, "BEGIN TRANSACTION;", NULL, NULL, NULL);
-
-    sqlite3_stmt *stmt_del = NULL;
-    if (sqlite3_prepare_v2(db, "DELETE FROM note_search WHERE filepath = ?;", -1, &stmt_del, NULL) == SQLITE_OK) {
-        sqlite3_bind_text(stmt_del, 1, filename, -1, SQLITE_TRANSIENT);
-        sqlite3_step(stmt_del);
-        sqlite3_finalize(stmt_del);
-    }
-    
-    sqlite3_stmt *stmt_del_fts = NULL;
-    if (sqlite3_prepare_v2(db, "DELETE FROM file_content_fts WHERE filepath = ?;", -1, &stmt_del_fts, NULL) == SQLITE_OK) {
-        sqlite3_bind_text(stmt_del_fts, 1, filename, -1, SQLITE_TRANSIENT);
-        sqlite3_step(stmt_del_fts);
-        sqlite3_finalize(stmt_del_fts);
-    }
-
-    sqlite3_stmt *stmt_meta = NULL;
-    if (sqlite3_prepare_v2(db, "DELETE FROM file_metadata WHERE filepath = ?;", -1, &stmt_meta, NULL) == SQLITE_OK) {
-        sqlite3_bind_text(stmt_meta, 1, filename, -1, SQLITE_TRANSIENT);
-        sqlite3_step(stmt_meta);
-        sqlite3_finalize(stmt_meta);
-    }
-
-    sqlite3_exec(db, "COMMIT;", NULL, NULL, NULL);
-    sqlite3_close(db);
-}
 
 /* ============================================================
  * FFI — CALLED FROM ZIG (signatures MUST stay identical)
@@ -5065,7 +3265,18 @@ void gui_free_text(char *text) { g_free(text); }
 void gui_set_text(const char *text, int len) {
     if (!global_source_view || !global_gui) return;
     GtkTextBuffer *buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(global_source_view));
-    
+
+    /* Drop any table reveal state tied to the outgoing document before the
+     * content swap, so its mark can't re-grid a stale range. */
+    gui_table_reset_reveal(buf);
+
+    /* Wholesale content swap: invalidate any deferred conceal/wiki/HR passes
+     * queued against the OUTGOING document. Their generation guard cancels them
+     * instead of letting them run apply_tag/insert with now-stale iterators
+     * (the "Invalid text buffer iterator" / cross-buffer assertion storm). The
+     * passes scheduled below capture the new generation and run normally. */
+    global_gui->buffer_generation++;
+
     g_signal_handlers_block_by_func(buf, on_insert_text_before, global_gui);
     g_signal_handlers_block_by_func(buf, on_insert_text_after, global_gui);
     g_signal_handlers_block_by_func(buf, on_delete_range_before, global_gui);
@@ -5076,6 +3287,8 @@ void gui_set_text(const char *text, int len) {
     reset_cursor_trail(global_gui);
 
     parse_and_render_hrs(buf, global_gui);
+    parse_and_render_code_pills(buf, global_gui);
+    parse_and_render_tables(buf, global_gui);
     /* A freshly loaded file is not a user edit — don't mark it dirty (was
      * lighting the unsaved dot on every tab the moment it opened). */
     gtk_text_buffer_set_modified(buf, FALSE);
@@ -5139,11 +3352,31 @@ void gui_set_cursor_position(int line, int col) {
     reset_cursor_trail(global_gui);
 }
 
+/* Place the caret WITHOUT scrolling the viewport to it. on_mark_set bails out
+ * of its deferred scroll-to-cursor while loading_viewport is set, so toggling
+ * it across the select_range suppresses the scroll. Used by undo/redo so the
+ * page stays put instead of snapping to the restored caret (the "undo jumps
+ * the screen up" bug — the baseline snapshot's caret is at 0,0). The reload's
+ * own line-anchored viewport restore then keeps the visible text in place. */
+void gui_set_cursor_position_quiet(int line, int col) {
+    if (!global_gui) { gui_set_cursor_position(line, col); return; }
+    gboolean prev = global_gui->loading_viewport;
+    global_gui->loading_viewport = TRUE;
+    gui_set_cursor_position(line, col);
+    global_gui->loading_viewport = prev;
+}
+
 int gui_get_absolute_cursor_line(void) {
     if (!global_gui || !global_source_view) return 1;
     int line = 1, col = 0;
     gui_get_cursor_position(&line, &col);
     return line;
+}
+
+/* Whether the periodic/on-edit autosave triggers should fire. Manual save
+ * (Ctrl+S, via gui_manual_save) always saves regardless of this setting. */
+gboolean gui_autosave_enabled(void) {
+    return !global_gui || global_gui->autosave_enabled;
 }
 
 void gui_trigger_autosave(void) {
@@ -5158,22 +3391,26 @@ void gui_trigger_autosave(void) {
 
     gui_set_sync_status("Saving...");
 
-    GtkTextIter start_iter, end_iter;
-    gtk_text_buffer_get_bounds(buf, &start_iter, &end_iter);
-    char *page_text = gtk_text_buffer_get_text(buf, &start_iter, &end_iter, FALSE);
-
-    /* Full-buffer model: the buffer holds the whole document, so save the
-     * full line range [0, line_count) rather than an active page window. */
-    extern int zig_save_active_page(int start_line, int end_line, const char *text);
-    int status = zig_save_active_page(0, gtk_text_buffer_get_line_count(buf), page_text);
-    g_free(page_text);
+    /* Serialize the source of truth (Zig's doc_buf), NOT the decorated GTK view.
+     * View-only child anchors (HR / table header / code-fence pill) replace the
+     * raw markdown on screen, and gtk_text_buffer_get_text() omits those anchors
+     * — so serializing the view returned an empty string for every decorated
+     * line and silently destroyed it on save. zig_save_document writes doc_buf,
+     * which retains the raw markdown for those lines. */
+    extern int zig_save_document(void);
+    int status = zig_save_document();
 
     if (status == 0) {
         gui_set_sync_status("Saved");
         gtk_text_buffer_set_modified(buf, FALSE);  /* clears the unsaved dot + skips next idle save */
         gui_tabs_refresh(global_gui);
+        gui_show_toast(qirtas_tr("Saved"));        /* visible confirmation */
+
+        if (global_gui->tabs.active >= 0)
+            gui_history_record(global_gui->tabs.paths[global_gui->tabs.active]);
     } else {
         gui_set_sync_status("Save Failed");
+        gui_show_toast(qirtas_tr("Save failed"));
     }
 }
 
@@ -5189,6 +3426,7 @@ void gui_refresh_explorer(void) {
 }
 
 void gui_set_title(const char *title) {
+    if (!title) return;
     if (global_window)
         gtk_window_set_title(GTK_WINDOW(global_window), title);
     if (global_path_label) {
@@ -5216,8 +3454,8 @@ void gui_set_title(const char *title) {
 }
 
 void gui_set_sync_status(const char *status) {
-    if (!global_sync_label) return;
-    
+    if (!global_sync_label || !status) return;
+
     const char *display_status = status;
     if (strcmp(status, "Saved") == 0 || strcmp(status, "Synced") == 0 || strcmp(status, "Updated") == 0) {
         display_status = "Synced";
@@ -5239,265 +3477,15 @@ void gui_set_sync_status(const char *status) {
         gtk_widget_add_css_class(global_sync_label, "status-failed");
 }
 
-void gui_set_sync_state(QirtasSyncState state) {
-    if (!global_sync_label) return;
-
-    gtk_widget_remove_css_class(global_sync_label, "status-saved");
-    gtk_widget_remove_css_class(global_sync_label, "status-saving");
-    gtk_widget_remove_css_class(global_sync_label, "status-failed");
-
-    switch (state) {
-    case QIRTAS_SYNC_SYNCED:
-        gtk_widget_add_css_class(global_sync_label, "status-saved");
-        break;
-    case QIRTAS_SYNC_SAVING:
-        gtk_widget_add_css_class(global_sync_label, "status-saving");
-        break;
-    default:
-        gtk_widget_add_css_class(global_sync_label, "status-failed");
-        break;
-    }
-}
-
-static gboolean sync_status_is_busy(const char *status_text) {
-    return status_text &&
-           (strcmp(status_text, "Syncing...") == 0 ||
-            strcmp(status_text, "Exchanging code...") == 0 ||
-            strcmp(status_text, "Connecting...") == 0);
-}
-
-static gboolean sync_status_is_success(const char *status_text) {
-    return status_text &&
-           (strcmp(status_text, "Saved") == 0 ||
-            strcmp(status_text, "Synced") == 0 ||
-            strcmp(status_text, "Synced ✓") == 0 ||
-            strcmp(status_text, "Updated") == 0 ||
-            strcmp(status_text, "Connected") == 0);
-}
-
-static gboolean sync_status_is_error(const char *status_text) {
-    return status_text &&
-           (g_str_has_prefix(status_text, "Error:") ||
-            strcmp(status_text, "Authentication Failed") == 0 ||
-            strcmp(status_text, "Auth Expired (Reconnect)") == 0 ||
-            strcmp(status_text, "Offline") == 0 ||
-            strcmp(status_text, "Sync Failed") == 0);
-}
-
-static void set_sync_status_label(GtkWidget *label_widget, const char *status_text) {
-    if (!label_widget || !status_text) return;
-
-    gtk_label_set_text(GTK_LABEL(label_widget), status_text);
-    gtk_widget_remove_css_class(label_widget, "status-saved");
-    gtk_widget_remove_css_class(label_widget, "status-saving");
-    gtk_widget_remove_css_class(label_widget, "status-failed");
-
-    if (sync_status_is_busy(status_text)) {
-        gtk_widget_add_css_class(label_widget, "status-saving");
-    } else if (sync_status_is_success(status_text)) {
-        gtk_widget_add_css_class(label_widget, "status-saved");
-    } else if (sync_status_is_error(status_text)) {
-        gtk_widget_add_css_class(label_widget, "status-failed");
-    }
-}
-
-typedef struct {
-    int connected;
-    char *status_text;
-} SyncStatusUpdate;
-
-static void update_sync_status_callback(void *user_data) {
-    SyncStatusUpdate *up = (SyncStatusUpdate *)user_data;
-    if (global_gui) {
-        if (global_gui->sync_status_lbl) {
-            set_sync_status_label(global_gui->sync_status_lbl, up->status_text);
-        }
-        
-        if (up->connected == 2) {
-            if (global_gui->sync_code_box) {
-                gtk_widget_set_visible(global_gui->sync_code_box, TRUE);
-            }
-            if (global_gui->sync_now_btn) {
-                gtk_widget_set_visible(global_gui->sync_now_btn, FALSE);
-                gtk_widget_set_sensitive(global_gui->sync_now_btn, FALSE);
-            }
-        } else {
-            if (global_gui->sync_code_box) {
-                gtk_widget_set_visible(global_gui->sync_code_box, FALSE);
-            }
-            if (up->connected == 1) {
-                if (global_gui->sync_connect_btn) {
-                    gtk_button_set_label(GTK_BUTTON(global_gui->sync_connect_btn), "Disconnect");
-                }
-                if (global_gui->sync_now_btn) {
-                    gtk_widget_set_visible(global_gui->sync_now_btn, TRUE);
-                    gtk_widget_set_sensitive(global_gui->sync_now_btn, TRUE);
-                }
-            } else {
-                if (global_gui->sync_connect_btn) {
-                    gtk_button_set_label(GTK_BUTTON(global_gui->sync_connect_btn), "Connect to Google Drive");
-                }
-                if (global_gui->sync_now_btn) {
-                    gtk_widget_set_visible(global_gui->sync_now_btn, FALSE);
-                    gtk_widget_set_sensitive(global_gui->sync_now_btn, FALSE);
-                }
-            }
-        }
-
-        if (up->connected == 1) {
-            gui_set_sync_status("Synced");
-        } else if (up->connected == 2 && sync_status_is_busy(up->status_text)) {
-            gui_set_sync_status("Saving...");
-        } else {
-            gui_set_sync_status("Not Synced");
-        }
-    }
-    g_free(up->status_text);
-    g_free(up);
-}
-
-void gui_update_sync_status(int connected, const char *status_text) {
-    SyncStatusUpdate *up = g_new0(SyncStatusUpdate, 1);
-    up->connected = connected;
-    up->status_text = g_strdup(status_text);
-    gui_run_on_main_thread(update_sync_status_callback, up);
-}
-
-static void update_dropbox_status_callback(void *user_data) {
-    SyncStatusUpdate *up = (SyncStatusUpdate *)user_data;
-    if (global_gui) {
-        if (global_gui->dropbox_status_lbl) {
-            set_sync_status_label(global_gui->dropbox_status_lbl, up->status_text);
-        }
-        
-        if (up->connected == 2) {
-            if (global_gui->dropbox_code_box) {
-                gtk_widget_set_visible(global_gui->dropbox_code_box, TRUE);
-            }
-            if (global_gui->dropbox_now_btn) {
-                gtk_widget_set_visible(global_gui->dropbox_now_btn, FALSE);
-                gtk_widget_set_sensitive(global_gui->dropbox_now_btn, FALSE);
-            }
-        } else {
-            if (global_gui->dropbox_code_box) {
-                gtk_widget_set_visible(global_gui->dropbox_code_box, FALSE);
-            }
-            if (up->connected == 1) {
-                if (global_gui->dropbox_connect_btn) {
-                    gtk_button_set_label(GTK_BUTTON(global_gui->dropbox_connect_btn), "Disconnect");
-                }
-                if (global_gui->dropbox_now_btn) {
-                    gtk_widget_set_visible(global_gui->dropbox_now_btn, TRUE);
-                    gtk_widget_set_sensitive(global_gui->dropbox_now_btn, TRUE);
-                }
-            } else {
-                if (global_gui->dropbox_connect_btn) {
-                    gtk_button_set_label(GTK_BUTTON(global_gui->dropbox_connect_btn), "Connect to Dropbox");
-                }
-                if (global_gui->dropbox_now_btn) {
-                    gtk_widget_set_visible(global_gui->dropbox_now_btn, FALSE);
-                    gtk_widget_set_sensitive(global_gui->dropbox_now_btn, FALSE);
-                }
-            }
-        }
-
-        if (sync_status_is_busy(up->status_text)) {
-            gui_set_sync_status("Saving...");
-        } else if (sync_status_is_success(up->status_text)) {
-            gui_set_sync_status("Synced");
-        } else if (sync_status_is_error(up->status_text)) {
-            gui_set_sync_status("Not Synced");
-        }
-    }
-    g_free(up->status_text);
-    g_free(up);
-}
-
-void gui_update_dropbox_status(int connected, const char *status_text) {
-    SyncStatusUpdate *up = g_new0(SyncStatusUpdate, 1);
-    up->connected = connected;
-    up->status_text = g_strdup(status_text);
-    gui_run_on_main_thread(update_dropbox_status_callback, up);
-}
-
-static void update_github_status_callback(void *user_data) {
-    SyncStatusUpdate *up = (SyncStatusUpdate *)user_data;
-    if (global_gui) {
-        if (global_gui->github_status_lbl) {
-            set_sync_status_label(global_gui->github_status_lbl, up->status_text);
-        }
-        
-        if (up->connected == 1) {
-            if (global_gui->github_connect_btn) {
-                gtk_button_set_label(GTK_BUTTON(global_gui->github_connect_btn), "Disconnect");
-            }
-            if (global_gui->github_now_btn) {
-                gtk_widget_set_visible(global_gui->github_now_btn, TRUE);
-                gtk_widget_set_sensitive(global_gui->github_now_btn, TRUE);
-            }
-        } else {
-            if (global_gui->github_connect_btn) {
-                gtk_button_set_label(GTK_BUTTON(global_gui->github_connect_btn), "Connect to GitHub");
-            }
-            if (global_gui->github_now_btn) {
-                gtk_widget_set_visible(global_gui->github_now_btn, FALSE);
-                gtk_widget_set_sensitive(global_gui->github_now_btn, FALSE);
-            }
-        }
-
-        if (sync_status_is_busy(up->status_text)) {
-            gui_set_sync_status("Saving...");
-        } else if (sync_status_is_success(up->status_text)) {
-            gui_set_sync_status("Synced");
-        } else if (sync_status_is_error(up->status_text)) {
-            gui_set_sync_status("Not Synced");
-        }
-    }
-    g_free(up->status_text);
-    g_free(up);
-}
-
-void gui_update_github_status(int connected, const char *status_text) {
-    SyncStatusUpdate *up = g_new0(SyncStatusUpdate, 1);
-    up->connected = connected;
-    up->status_text = g_strdup(status_text);
-    gui_run_on_main_thread(update_github_status_callback, up);
-}
-
-static void update_local_sync_status_callback(void *user_data) {
-    SyncStatusUpdate *up = (SyncStatusUpdate *)user_data;
-    if (global_gui) {
-        if (global_gui->local_sync_status_lbl) {
-            set_sync_status_label(global_gui->local_sync_status_lbl, up->status_text);
-        }
-        if (global_gui->local_sync_btn) {
-            gtk_widget_set_sensitive(global_gui->local_sync_btn, up->connected != 2);
-        }
-
-        if (up->connected == 2) {
-            gui_set_sync_status("Saving...");
-        } else if (up->connected == 1) {
-            gui_set_sync_status("Synced");
-        } else if (sync_status_is_error(up->status_text)) {
-            gui_set_sync_status("Not Synced");
-        } else {
-            gui_set_sync_status("Not Synced");
-        }
-    }
-    g_free(up->status_text);
-    g_free(up);
-}
-
-void gui_update_local_sync_status(int connected, const char *status_text) {
-    SyncStatusUpdate *up = g_new0(SyncStatusUpdate, 1);
-    up->connected = connected;
-    up->status_text = g_strdup(status_text);
-    gui_run_on_main_thread(update_local_sync_status_callback, up);
-}
-
 void gui_show_editor(void) {
     if (global_gui && global_gui->stack && global_gui->btn_editor)
         set_active_tab(global_gui, global_gui->btn_editor, "editor");
+    /* Focus the text view so the caret is live immediately. Without this, a
+     * freshly opened (esp. empty / Untitled) document left focus on the file
+     * tree, and the first click in the editor only moved focus — the caret
+     * didn't land until a second interaction (right-click / save). */
+    if (global_gui && global_gui->source_view)
+        gtk_widget_grab_focus(global_gui->source_view);
 }
 
 typedef struct { GuiIdleCallback cb; void *data; } IdleData;
@@ -5515,3 +3503,9 @@ void gui_run_on_main_thread(GuiIdleCallback callback, void *user_data) {
     id->data = user_data;
     g_idle_add(idle_wrapper, id);
 }
+
+
+
+
+
+

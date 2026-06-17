@@ -91,11 +91,11 @@ void qirtas_pref_set_int(const char *key, int value) {
 
 void reset_cursor_trail(AppGui *gui) {
     if (!gui) return;
-    gui->cursor_initialized = FALSE;
-    gui->trail_len = 0;
-    gui->trail_needs_clear = TRUE;
-    if (gui->cursor_trail_area) {
-        gtk_widget_queue_draw(gui->cursor_trail_area);
+    gui->cursor.initialized = FALSE;
+    gui->cursor.trail_len = 0;
+    gui->cursor.trail_needs_clear = TRUE;
+    if (gui->cursor.trail_area) {
+        gtk_widget_queue_draw(gui->cursor.trail_area);
     }
 }
 
@@ -108,8 +108,8 @@ void draw_cursor_trail(GtkDrawingArea *drawing_area, cairo_t *cr, int width, int
 
 void load_trail_color_settings(AppGui *gui) {
     if (!gui) return;
-    gui->use_custom_trail_color = FALSE;
-    gui->custom_trail_color = trail_color_for_theme(gui->current_theme);
+    gui->cursor.use_custom_trail_color = FALSE;
+    gui->cursor.custom_trail_color = trail_color_for_theme(gui->current_theme);
     sqlite3 *db = NULL;
     if (sqlite3_open(DB_PATH, &db) != SQLITE_OK) {
         if (db) sqlite3_close(db);
@@ -120,13 +120,13 @@ void load_trail_color_settings(AppGui *gui) {
     if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) == SQLITE_OK) {
         if (sqlite3_step(stmt) == SQLITE_ROW) {
             if (sqlite3_column_type(stmt, 0) != SQLITE_NULL) {
-                gui->use_custom_trail_color = sqlite3_column_int(stmt, 0) != 0;
+                gui->cursor.use_custom_trail_color = sqlite3_column_int(stmt, 0) != 0;
             }
             const unsigned char *trail_color = sqlite3_column_text(stmt, 1);
             if (trail_color && trail_color[0] != '\0') {
                 GdkRGBA parsed;
                 if (gdk_rgba_parse(&parsed, (const char *)trail_color)) {
-                    gui->custom_trail_color = parsed;
+                    gui->cursor.custom_trail_color = parsed;
                 }
             }
         }
@@ -143,11 +143,11 @@ void save_trail_color_settings(AppGui *gui) {
         return;
     }
     sqlite3_busy_timeout(db, 5000);
-    char *rgba_str = gdk_rgba_to_string(&gui->custom_trail_color);
+    char *rgba_str = gdk_rgba_to_string(&gui->cursor.custom_trail_color);
     const char *sql = "UPDATE session_state SET enable_custom_trail_color = ?, trail_color = ? WHERE id = 1;";
     sqlite3_stmt *stmt = NULL;
     if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) == SQLITE_OK) {
-        sqlite3_bind_int(stmt, 1, gui->use_custom_trail_color ? 1 : 0);
+        sqlite3_bind_int(stmt, 1, gui->cursor.use_custom_trail_color ? 1 : 0);
         sqlite3_bind_text(stmt, 2, rgba_str ? rgba_str : "", -1, SQLITE_TRANSIENT);
         sqlite3_step(stmt);
         sqlite3_finalize(stmt);
@@ -158,8 +158,8 @@ void save_trail_color_settings(AppGui *gui) {
 
 void load_pointer_color_settings(AppGui *gui) {
     if (!gui) return;
-    gui->use_custom_pointer_color = FALSE;
-    gdk_rgba_parse(&gui->custom_pointer_color, "#1f6feb");
+    gui->cursor.use_custom_pointer_color = FALSE;
+    gdk_rgba_parse(&gui->cursor.custom_pointer_color, "#1f6feb");
     sqlite3 *db = NULL;
     if (sqlite3_open(DB_PATH, &db) != SQLITE_OK) {
         if (db) sqlite3_close(db);
@@ -170,13 +170,13 @@ void load_pointer_color_settings(AppGui *gui) {
     if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) == SQLITE_OK) {
         if (sqlite3_step(stmt) == SQLITE_ROW) {
             if (sqlite3_column_type(stmt, 0) != SQLITE_NULL) {
-                gui->use_custom_pointer_color = sqlite3_column_int(stmt, 0) != 0;
+                gui->cursor.use_custom_pointer_color = sqlite3_column_int(stmt, 0) != 0;
             }
             const unsigned char *p_color = sqlite3_column_text(stmt, 1);
             if (p_color && p_color[0] != '\0') {
                 GdkRGBA parsed;
                 if (gdk_rgba_parse(&parsed, (const char *)p_color)) {
-                    gui->custom_pointer_color = parsed;
+                    gui->cursor.custom_pointer_color = parsed;
                 }
             }
         }
@@ -193,11 +193,11 @@ void save_pointer_color_settings(AppGui *gui) {
         return;
     }
     sqlite3_busy_timeout(db, 5000);
-    char *rgba_str = gdk_rgba_to_string(&gui->custom_pointer_color);
+    char *rgba_str = gdk_rgba_to_string(&gui->cursor.custom_pointer_color);
     const char *sql = "UPDATE session_state SET enable_custom_pointer_color = ?, pointer_color = ? WHERE id = 1;";
     sqlite3_stmt *stmt = NULL;
     if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) == SQLITE_OK) {
-        sqlite3_bind_int(stmt, 1, gui->use_custom_pointer_color ? 1 : 0);
+        sqlite3_bind_int(stmt, 1, gui->cursor.use_custom_pointer_color ? 1 : 0);
         sqlite3_bind_text(stmt, 2, rgba_str ? rgba_str : "", -1, SQLITE_TRANSIENT);
         sqlite3_step(stmt);
         sqlite3_finalize(stmt);
@@ -210,13 +210,13 @@ gboolean on_cursor_tick(GtkWidget *widget, GdkFrameClock *frame_clock, gpointer 
     (void)widget;
     (void)frame_clock;
     AppGui *gui = (AppGui *)user_data;
-    if (!gui->enable_cursor_trail) {
-        gui->trail_len = 0;
-        gui->cursor_tick_id = 0;
+    if (!gui->cursor.enable_trail) {
+        gui->cursor.trail_len = 0;
+        gui->cursor.tick_id = 0;
         return G_SOURCE_REMOVE;
     }
     if (!gui->source_view || !gtk_widget_get_mapped(gui->source_view)) {
-        gui->cursor_tick_id = 0;
+        gui->cursor.tick_id = 0;
         return G_SOURCE_REMOVE;
     }
 
@@ -230,105 +230,105 @@ gboolean on_cursor_tick(GtkWidget *widget, GdkFrameClock *frame_clock, gpointer 
 
     double new_x       = (double)strong.x;
     double new_y       = (double)strong.y;
-    gui->cursor_height = (double)strong.height;
-    gui->cursor_width  = strong.width > 0 ? (double)strong.width : 2.0;
+    gui->cursor.height = (double)strong.height;
+    gui->cursor.width  = strong.width > 0 ? (double)strong.width : 2.0;
 
-    if (!gui->cursor_initialized) {
-        gui->cursor_current_x   = new_x;
-        gui->cursor_current_y   = new_y;
-        gui->cursor_target_x    = new_x;
-        gui->cursor_target_y    = new_y;
-        gui->cursor_initialized = TRUE;
-        gui->trail_len          = 0;
-        gui->trail_needs_clear  = FALSE;
+    if (!gui->cursor.initialized) {
+        gui->cursor.current_x   = new_x;
+        gui->cursor.current_y   = new_y;
+        gui->cursor.target_x    = new_x;
+        gui->cursor.target_y    = new_y;
+        gui->cursor.initialized = TRUE;
+        gui->cursor.trail_len          = 0;
+        gui->cursor.trail_needs_clear  = FALSE;
         return G_SOURCE_CONTINUE;
     }
 
-    gui->cursor_target_x = new_x;
-    gui->cursor_target_y = new_y;
+    gui->cursor.target_x = new_x;
+    gui->cursor.target_y = new_y;
 
-    double dx = gui->cursor_target_x - gui->cursor_current_x;
-    double dy = gui->cursor_target_y - gui->cursor_current_y;
+    double dx = gui->cursor.target_x - gui->cursor.current_x;
+    double dy = gui->cursor.target_y - gui->cursor.current_y;
     double dist = (dx < 0 ? -dx : dx) + (dy < 0 ? -dy : dy);
 
-    double jump_threshold = gui->cursor_height * 8.0;
+    double jump_threshold = gui->cursor.height * 8.0;
     if (dist > jump_threshold) {
-        gui->cursor_current_x = gui->cursor_target_x;
-        gui->cursor_current_y = gui->cursor_target_y;
-        gui->trail_len = 0;
+        gui->cursor.current_x = gui->cursor.target_x;
+        gui->cursor.current_y = gui->cursor.target_y;
+        gui->cursor.trail_len = 0;
     } else {
         if (dist > 0.05) {
-            gui->cursor_current_x += dx * SMEAR_STIFFNESS;
-            gui->cursor_current_y += dy * SMEAR_STIFFNESS;
+            gui->cursor.current_x += dx * SMEAR_STIFFNESS;
+            gui->cursor.current_y += dy * SMEAR_STIFFNESS;
         } else {
-            gui->cursor_current_x = gui->cursor_target_x;
-            gui->cursor_current_y = gui->cursor_target_y;
+            gui->cursor.current_x = gui->cursor.target_x;
+            gui->cursor.current_y = gui->cursor.target_y;
         }
     }
 
-    for (int i = 0; i < gui->trail_len; i++) {
-        gui->trail[i].alpha -= GHOST_DECAY;
+    for (int i = 0; i < gui->cursor.trail_len; i++) {
+        gui->cursor.trail[i].alpha -= GHOST_DECAY;
     }
 
     int alive = 0;
-    for (int i = 0; i < gui->trail_len; i++) {
-        if (gui->trail[i].alpha > 0.01) {
-            gui->trail[alive++] = gui->trail[i];
+    for (int i = 0; i < gui->cursor.trail_len; i++) {
+        if (gui->cursor.trail[i].alpha > 0.01) {
+            gui->cursor.trail[alive++] = gui->cursor.trail[i];
         }
     }
-    gui->trail_len = alive;
+    gui->cursor.trail_len = alive;
 
-    double last_x = (gui->trail_len > 0) ? gui->trail[gui->trail_len - 1].x : gui->cursor_current_x;
-    double last_y = (gui->trail_len > 0) ? gui->trail[gui->trail_len - 1].y : gui->cursor_current_y;
-    double move_dx = gui->cursor_current_x - last_x;
-    double move_dy = gui->cursor_current_y - last_y;
+    double last_x = (gui->cursor.trail_len > 0) ? gui->cursor.trail[gui->cursor.trail_len - 1].x : gui->cursor.current_x;
+    double last_y = (gui->cursor.trail_len > 0) ? gui->cursor.trail[gui->cursor.trail_len - 1].y : gui->cursor.current_y;
+    double move_dx = gui->cursor.current_x - last_x;
+    double move_dy = gui->cursor.current_y - last_y;
     double move_dist = (move_dx < 0 ? -move_dx : move_dx) + (move_dy < 0 ? -move_dy : move_dy);
 
     if (move_dist > 1.0) {
-        if (gui->trail_len < GHOST_COUNT) {
-            gui->trail[gui->trail_len].x     = last_x;
-            gui->trail[gui->trail_len].y     = last_y;
-            gui->trail[gui->trail_len].alpha = 0.5;
-            gui->trail_len++;
+        if (gui->cursor.trail_len < GHOST_COUNT) {
+            gui->cursor.trail[gui->cursor.trail_len].x     = last_x;
+            gui->cursor.trail[gui->cursor.trail_len].y     = last_y;
+            gui->cursor.trail[gui->cursor.trail_len].alpha = 0.5;
+            gui->cursor.trail_len++;
         } else {
             for (int i = 0; i < GHOST_COUNT - 1; i++) {
-                gui->trail[i] = gui->trail[i + 1];
+                gui->cursor.trail[i] = gui->cursor.trail[i + 1];
             }
-            gui->trail[GHOST_COUNT - 1].x     = last_x;
-            gui->trail[GHOST_COUNT - 1].y     = last_y;
-            gui->trail[GHOST_COUNT - 1].alpha = 0.5;
+            gui->cursor.trail[GHOST_COUNT - 1].x     = last_x;
+            gui->cursor.trail[GHOST_COUNT - 1].y     = last_y;
+            gui->cursor.trail[GHOST_COUNT - 1].alpha = 0.5;
         }
     }
 
-    gboolean needs_draw = (gui->trail_len > 0) ||
-                           (gui->cursor_current_x != gui->cursor_target_x) ||
-                           (gui->cursor_current_y != gui->cursor_target_y);
+    gboolean needs_draw = (gui->cursor.trail_len > 0) ||
+                           (gui->cursor.current_x != gui->cursor.target_x) ||
+                           (gui->cursor.current_y != gui->cursor.target_y);
     if (needs_draw) {
-        gui->trail_needs_clear = TRUE;
-        if (gui->cursor_trail_area) {
-            gtk_widget_queue_draw(gui->cursor_trail_area);
+        gui->cursor.trail_needs_clear = TRUE;
+        if (gui->cursor.trail_area) {
+            gtk_widget_queue_draw(gui->cursor.trail_area);
         }
         return G_SOURCE_CONTINUE;
     }
 
-    if (gui->trail_needs_clear) {
-        gui->trail_needs_clear = FALSE;
-        if (gui->cursor_trail_area) {
-            gtk_widget_queue_draw(gui->cursor_trail_area);
+    if (gui->cursor.trail_needs_clear) {
+        gui->cursor.trail_needs_clear = FALSE;
+        if (gui->cursor.trail_area) {
+            gtk_widget_queue_draw(gui->cursor.trail_area);
         }
         return G_SOURCE_CONTINUE;
     }
 
     /* Nothing animating — detach so the frame clock can go idle.
      * cursor_trail_wake() re-attaches on the next cursor move. */
-    gui->cursor_tick_id = 0;
+    gui->cursor.tick_id = 0;
     return G_SOURCE_REMOVE;
 }
 
 void cursor_trail_wake(AppGui *gui) {
-    if (!gui || gui->cursor_tick_id || !gui->enable_cursor_trail) return;
+    if (!gui || gui->cursor.tick_id || !gui->cursor.enable_trail) return;
     if (!gui->source_view) return;
-    gui->cursor_tick_id =
+    gui->cursor.tick_id =
         gtk_widget_add_tick_callback(gui->source_view, on_cursor_tick, gui, NULL);
 }
 
@@ -404,8 +404,8 @@ void draw_cursor_trail(GtkDrawingArea *drawing_area, cairo_t *cr, int width, int
     (void)width;
     (void)height;
     AppGui *gui = (AppGui *)user_data;
-    if (!gui->source_view || !gui->cursor_initialized) return;
-    if (gui->trail_len == 0 && gui->cursor_current_x == gui->cursor_target_x && gui->cursor_current_y == gui->cursor_target_y) return;
+    if (!gui->source_view || !gui->cursor.initialized) return;
+    if (gui->cursor.trail_len == 0 && gui->cursor.current_x == gui->cursor.target_x && gui->cursor.current_y == gui->cursor.target_y) return;
 
     GdkRGBA cursor_color = trail_color_for_theme(gui->current_theme);
     double r = cursor_color.red;
@@ -417,13 +417,13 @@ void draw_cursor_trail(GtkDrawingArea *drawing_area, cairo_t *cr, int width, int
     p_in.x = 0.0f;
     p_in.y = 0.0f;
     graphene_point_t p_out;
-    if (gtk_widget_compute_point(gui->source_view, gui->cursor_trail_area, &p_in, &p_out)) {
+    if (gtk_widget_compute_point(gui->source_view, gui->cursor.trail_area, &p_in, &p_out)) {
         ox = (double)p_out.x;
         oy = (double)p_out.y;
     }
 
-    double caret_w = gui->cursor_width  < 2.5 ? 2.5 : gui->cursor_width;
-    double caret_h = gui->cursor_height;
+    double caret_w = gui->cursor.width  < 2.5 ? 2.5 : gui->cursor.width;
+    double caret_h = gui->cursor.height;
 
     int count = 0;
     struct {
@@ -432,15 +432,15 @@ void draw_cursor_trail(GtkDrawingArea *drawing_area, cairo_t *cr, int width, int
         double alpha;
     } points[GHOST_COUNT + 2];
 
-    for (int i = 0; i < gui->trail_len; i++) {
+    for (int i = 0; i < gui->cursor.trail_len; i++) {
         int wx, wy;
         gtk_text_view_buffer_to_window_coords(
             GTK_TEXT_VIEW(gui->source_view), GTK_TEXT_WINDOW_WIDGET,
-            (int)gui->trail[i].x, (int)gui->trail[i].y,
+            (int)gui->cursor.trail[i].x, (int)gui->cursor.trail[i].y,
             &wx, &wy);
         points[count].x = (double)wx + ox;
         points[count].y = (double)wy + oy;
-        points[count].alpha = gui->trail[i].alpha;
+        points[count].alpha = gui->cursor.trail[i].alpha;
         count++;
     }
 
@@ -448,7 +448,7 @@ void draw_cursor_trail(GtkDrawingArea *drawing_area, cairo_t *cr, int width, int
         int wx, wy;
         gtk_text_view_buffer_to_window_coords(
             GTK_TEXT_VIEW(gui->source_view), GTK_TEXT_WINDOW_WIDGET,
-            (int)gui->cursor_current_x, (int)gui->cursor_current_y,
+            (int)gui->cursor.current_x, (int)gui->cursor.current_y,
             &wx, &wy);
         points[count].x = (double)wx + ox;
         points[count].y = (double)wy + oy;
@@ -460,7 +460,7 @@ void draw_cursor_trail(GtkDrawingArea *drawing_area, cairo_t *cr, int width, int
         int wx, wy;
         gtk_text_view_buffer_to_window_coords(
             GTK_TEXT_VIEW(gui->source_view), GTK_TEXT_WINDOW_WIDGET,
-            (int)gui->cursor_target_x, (int)gui->cursor_target_y,
+            (int)gui->cursor.target_x, (int)gui->cursor.target_y,
             &wx, &wy);
         points[count].x = (double)wx + ox;
         points[count].y = (double)wy + oy;
@@ -498,7 +498,7 @@ void init_cursor_trail(AppGui *gui) {
 
     cursor_trail_wake(gui);
 
-    gtk_drawing_area_set_draw_func(GTK_DRAWING_AREA(gui->cursor_trail_area),
+    gtk_drawing_area_set_draw_func(GTK_DRAWING_AREA(gui->cursor.trail_area),
                                    draw_cursor_trail,
                                    gui,
                                    NULL);

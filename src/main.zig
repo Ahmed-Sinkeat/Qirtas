@@ -1,6 +1,16 @@
 const std = @import("std");
 const Io = std.Io;
 const sync = @import("sync.zig");
+/// Portable markdown/text logic (see docs/PORTABILITY.md). Referenced here so
+/// its C-ABI exports are linked into the binary and its tests run under
+/// `zig build test`.
+pub const markdown = @import("markdown.zig");
+comptime {
+    _ = markdown;
+}
+test {
+    _ = markdown; // pull markdown.zig's tests into `zig build test`
+}
 
 /// XDG-correct config directory: $XDG_CONFIG_HOME/qirtas, falling back to
 /// $HOME/.config/qirtas, then /tmp/qirtas. Computed once.
@@ -60,6 +70,7 @@ const c = @cImport({
     @cInclude("dirent.h");
     @cInclude("stdlib.h");
     @cInclude("stdio.h");
+    @cInclude("time.h");
 });
 
 /// Atomic file write: write to `<path>.qirtas-tmp` in the same directory,
@@ -99,8 +110,26 @@ pub fn atomicWriteFile(path: []const u8, content: []const u8) !void {
 }
 
 extern fn run_gui(argc: c_int, argv: ?[*]? [*]const u8) c_int;
+extern fn qirtas_bench_stats(text: [*]const u8, len: c_int) void;
+extern fn qirtas_bench_outline_gate() c_int;
+extern fn qirtas_bench_wordcount() c_int;
 extern fn gui_set_text(text: [*]const u8, len: c_int) void;
 extern fn gui_set_title(title: [*:0]const u8) void;
+extern fn gui_show_toast(msg: [*:0]const u8) void;
+extern fn gui_set_sync_status(status: [*:0]const u8) void;
+
+// UI language picked in settings (0 = English, 1 = Arabic). Owned by gui.c.
+extern var qirtas_app_language: c_int;
+
+// Starter text seeded into a freshly created / blank note. The basmala, in the
+// active UI language. Kept as a single source so the encrypted-file path and
+// the blank "Untitled" buffer agree.
+fn newFileTemplate() []const u8 {
+    return if (qirtas_app_language == 1)
+        "بسم الله الرحمن الرحيم\n"
+    else
+        "In the name of Allah, the Most Gracious, the Most Merciful\n";
+}
 extern fn gui_set_sync_state(state: c_int) void;
 const SYNC_SYNCED: c_int = 0;
 const SYNC_SAVING: c_int = 1;
@@ -108,6 +137,7 @@ const SYNC_NOT_SYNCED: c_int = 2;
 extern fn gui_show_editor() void;
 extern fn gui_get_cursor_position(line: *c_int, col: *c_int) void;
 extern fn gui_set_cursor_position(line: c_int, col: c_int) void;
+extern fn gui_set_cursor_position_quiet(line: c_int, col: c_int) void;
 extern fn gui_reload_full_buffer() void;
 extern fn gui_set_buffer_modified(modified: c_int) void;
 extern fn gui_get_buffer_modified() c_int;
@@ -116,6 +146,7 @@ extern fn gui_index_all_files() void;
 extern fn gui_index_file(filename: [*:0]const u8) void;
 extern fn gui_remove_file_from_index(filename: [*:0]const u8) void;
 extern fn gui_trigger_autosave() void;
+extern fn gui_autosave_enabled() c_int;
 extern fn gui_tabs_save_active_to_cache() void;
 extern fn gui_tabs_restore_active_from_cache() void;
 
@@ -141,10 +172,35 @@ fn setActiveFilePath(path: []const u8) bool {
 }
 
 // Active file mapping variables
+// The live document buffer. Owns the bytes and keeps spare capacity across
+// edits, so per-keystroke insert/delete reuse the allocation (one in-place
+// memmove) instead of allocating a fresh page_allocator buffer — i.e. an
+// mmap/munmap syscall pair — on every keystroke. `active_mmap_ptr` /
+// `active_mmap_size` are a read-only VIEW into doc_buf, resynced after each
+// mutation so existing readers keep working unchanged.
+var doc_buf: std.ArrayList(u8) = .empty;
 var active_mmap_ptr: ?[*]const u8 = null;
 var active_mmap_size: usize = 0;
 var active_file_is_encrypted: bool = true;
+// Set when a file carries the encrypted-format magic header but cannot be
+// decrypted (no key / wrong key after a machine migration). Such a file is
+// shown read-only and NEVER overwritten — otherwise autosave would clobber the
+// recoverable ciphertext with garbage. Cleared on every successful load.
+var active_load_failed: bool = false;
 var line_offsets: std.ArrayList(usize) = .empty;
+
+// On-disk encrypted-file format header. Files written before this header
+// existed are "legacy" and detected by tag-verified trial decryption (see
+// load_file_mmap / decryptWithMasterKey). The magic deliberately starts with a
+// high byte + control bytes (PNG-style) so it can never be the start of a real
+// UTF-8 markdown document, making "is this file encrypted?" unambiguous.
+const ENC_MAGIC = [_]u8{ 0x89, 'Q', 'I', 'R', 0x0D, 0x0A, 0x1A, 0x0A };
+const ENC_VERSION: u8 = 1;
+const ENC_HEADER_LEN = ENC_MAGIC.len + 1; // magic + 1 version byte
+
+fn blobHasMagic(blob: []const u8) bool {
+    return blob.len >= ENC_MAGIC.len and std.mem.eql(u8, blob[0..ENC_MAGIC.len], &ENC_MAGIC);
+}
 
 // Global reference to the IO instance
 pub var global_io: Io = undefined;
@@ -275,32 +331,46 @@ pub fn encryptWithMasterKey(allocator: std.mem.Allocator, key: [32]u8, plaintext
     try fillRandomBytes(&nonce);
 
     const cipher = std.crypto.aead.chacha_poly.ChaCha20Poly1305;
-    const out_len = 12 + plaintext.len + 16;
+    // Layout: MAGIC(8) || VERSION(1) || nonce(12) || ciphertext || tag(16).
+    const out_len = ENC_HEADER_LEN + 12 + plaintext.len + 16;
     const raw_buf = try allocator.alloc(u8, out_len);
     errdefer allocator.free(raw_buf);
 
-    @memcpy(raw_buf[0..12], &nonce);
+    @memcpy(raw_buf[0..ENC_MAGIC.len], &ENC_MAGIC);
+    raw_buf[ENC_MAGIC.len] = ENC_VERSION;
+    const body = raw_buf[ENC_HEADER_LEN..];
+    @memcpy(body[0..12], &nonce);
     var tag: [16]u8 = undefined;
-    cipher.encrypt(raw_buf[12 .. 12 + plaintext.len], &tag, plaintext, "", nonce, key);
-    @memcpy(raw_buf[12 + plaintext.len ..], &tag);
+    cipher.encrypt(body[12 .. 12 + plaintext.len], &tag, plaintext, "", nonce, key);
+    @memcpy(body[12 + plaintext.len ..], &tag);
     return raw_buf;
 }
 
 pub fn decryptWithMasterKey(allocator: std.mem.Allocator, key: [32]u8, blob: []const u8) ![]u8 {
-    if (blob.len < 28) return error.InvalidFileFormat;
+    // Strip the format header if present. Headerless blobs are legacy files
+    // (written before the header existed); they decrypt the same way since the
+    // AEAD tag still validates the key — only the framing changed.
+    var body = blob;
+    if (blobHasMagic(blob)) {
+        if (blob.len < ENC_HEADER_LEN) return error.InvalidFileFormat;
+        if (blob[ENC_MAGIC.len] != ENC_VERSION) return error.UnsupportedVersion;
+        body = blob[ENC_HEADER_LEN..];
+    }
+
+    if (body.len < 28) return error.InvalidFileFormat;
 
     var nonce: [12]u8 = undefined;
-    @memcpy(&nonce, blob[0..12]);
+    @memcpy(&nonce, body[0..12]);
 
-    const ct_len = blob.len - 12 - 16;
+    const ct_len = body.len - 12 - 16;
     var tag: [16]u8 = undefined;
-    @memcpy(&tag, blob[12 + ct_len ..]);
+    @memcpy(&tag, body[12 + ct_len ..]);
 
     const pt_buf = try allocator.alloc(u8, ct_len);
     errdefer allocator.free(pt_buf);
 
     const cipher = std.crypto.aead.chacha_poly.ChaCha20Poly1305;
-    try cipher.decrypt(pt_buf, blob[12 .. 12 + ct_len], tag, "", nonce, key);
+    try cipher.decrypt(pt_buf, body[12 .. 12 + ct_len], tag, "", nonce, key);
     return pt_buf;
 }
 
@@ -416,6 +486,144 @@ fn initMasterKey() void {
     }
 }
 
+fn nowNs() i128 {
+    var ts: c.timespec = undefined;
+    _ = c.clock_gettime(c.CLOCK_MONOTONIC, &ts);
+    return @as(i128, ts.tv_sec) * 1_000_000_000 + @as(i128, ts.tv_nsec);
+}
+
+// QIRTAS_BENCH=<file> : drive the real per-keystroke edit path N times,
+// print min/avg/max ms for populate_line_offsets and full zig_insert_text.
+// Isolates "my-code per keystroke" cost from GTK. Exits before GUI.
+fn runEditBench(path: []const u8) void {
+    const gpa = std.heap.page_allocator;
+    const path_z = gpa.dupeZ(u8, path) catch return;
+    defer gpa.free(path_z);
+    var size: usize = 0;
+    const ptr = load_file_mmap(path_z.ptr, &size) catch {
+        _ = c.printf("[bench] cannot read %.*s\n", @as(c_int, @intCast(path.len)), path.ptr);
+        return;
+    };
+    loadDocFromSlice(if (size > 0) ptr[0..size] else "") catch {};
+    if (size > 0) unload_file_mmap(ptr, size);
+    const bytes = doc_buf.items.len;
+    const lines = line_offsets.items.len;
+
+    // Per-pause stats-callback cost (word-count + outline scan), measured on
+    // the freshly loaded document via a headless GtkTextBuffer.
+    if (doc_buf.items.len > 0)
+        qirtas_bench_stats(doc_buf.items.ptr, @intCast(doc_buf.items.len));
+
+    // Outline-gate decision self-test (line_is_heading + dirty predicate).
+    _ = qirtas_bench_outline_gate();
+    // Word-count self-test (range-sum == full walk; delta arithmetic).
+    _ = qirtas_bench_wordcount();
+
+    const N: usize = 2000;
+    var plo_min: i128 = std.math.maxInt(i128);
+    var plo_max: i128 = 0;
+    var plo_sum: i128 = 0;
+    var ins_min: i128 = std.math.maxInt(i128);
+    var ins_max: i128 = 0;
+    var ins_sum: i128 = 0;
+
+    var mismatches: usize = 0;
+    var first_bad: i64 = -1;
+    var verify_buf: std.ArrayList(usize) = .empty;
+    defer verify_buf.deinit(gpa);
+
+    var k: usize = 0;
+    while (k < N) : (k += 1) {
+        // insert one char mid-document (worst-ish: half the tail shifts)
+        const mid: Position = .{ .line = @intCast(line_offsets.items.len / 2), .col = 0 };
+
+        // incremental edit path (what ships)
+        const t0 = nowNs();
+        zig_insert_text(mid, "x");
+        const t1 = nowNs();
+        const ins_d = t1 - t0;
+        ins_sum += ins_d;
+        if (ins_d < ins_min) ins_min = ins_d;
+        if (ins_d > ins_max) ins_max = ins_d;
+
+        // snapshot the incremental result, then recompute from scratch and
+        // compare — proves the incremental offsets stay byte-correct.
+        verify_buf.clearRetainingCapacity();
+        verify_buf.appendSlice(gpa, line_offsets.items) catch {};
+
+        const t2 = nowNs();
+        populate_line_offsets(doc_buf.items) catch {};
+        const t3 = nowNs();
+        const plo_d = t3 - t2;
+        plo_sum += plo_d;
+        if (plo_d < plo_min) plo_min = plo_d;
+        if (plo_d > plo_max) plo_max = plo_d;
+
+        var ok = verify_buf.items.len == line_offsets.items.len;
+        if (ok) {
+            for (verify_buf.items, line_offsets.items) |a, b| {
+                if (a != b) {
+                    ok = false;
+                    break;
+                }
+            }
+        }
+        if (!ok) {
+            mismatches += 1;
+            if (first_bad < 0) first_bad = @intCast(k);
+        }
+    }
+
+    const f = struct {
+        fn ms(ns: i128) f64 {
+            return @as(f64, @floatFromInt(@as(i64, @intCast(ns)))) / 1_000_000.0;
+        }
+    };
+    _ = c.printf("[bench] file=%.*s bytes=%zu lines=%zu iters=%zu\n", @as(c_int, @intCast(path.len)), path.ptr, bytes, lines, N);
+    _ = c.printf("[bench] incremental zig_insert_text  min=%.4f avg=%.4f max=%.4f ms\n", f.ms(ins_min), f.ms(@divTrunc(ins_sum, @as(i128, N))), f.ms(ins_max));
+    _ = c.printf("[bench] full populate_line_offsets   min=%.4f avg=%.4f max=%.4f ms\n", f.ms(plo_min), f.ms(@divTrunc(plo_sum, @as(i128, N))), f.ms(plo_max));
+    _ = c.printf("[bench] correctness(insert): %zu/%zu mismatches (first_bad_iter=%lld)\n", mismatches, N, @as(c_longlong, first_bad));
+
+    // Mixed-edit correctness sweep: delete, replace, multi-char + newline
+    // inserts at varied offsets, each checked against a full rescan.
+    var mixed_bad: usize = 0;
+    var step: usize = 0;
+    while (step < 4000) : (step += 1) {
+        const len = doc_buf.items.len;
+        if (len < 8) break;
+        const a: Position = .{ .line = @intCast((line_offsets.items.len / 3) + (step % 7)), .col = 0 };
+        switch (step % 4) {
+            0 => zig_insert_text(a, "hello\nworld\n"), // multi-char + newlines
+            1 => {
+                const b: Position = .{ .line = a.line + 1, .col = 0 };
+                zig_delete_range(a, b); // delete a whole line (crosses '\n')
+            },
+            2 => {
+                const b: Position = .{ .line = a.line, .col = 3 };
+                zig_replace_range(a, b, "XY"); // shrink replace
+            },
+            else => {
+                const b: Position = .{ .line = a.line, .col = 2 };
+                zig_replace_range(a, b, "a\nbc\n"); // grow replace w/ newlines
+            },
+        }
+        verify_buf.clearRetainingCapacity();
+        verify_buf.appendSlice(gpa, line_offsets.items) catch {};
+        populate_line_offsets(doc_buf.items) catch {};
+        var ok2 = verify_buf.items.len == line_offsets.items.len;
+        if (ok2) {
+            for (verify_buf.items, line_offsets.items) |x, y| {
+                if (x != y) {
+                    ok2 = false;
+                    break;
+                }
+            }
+        }
+        if (!ok2) mixed_bad += 1;
+    }
+    _ = c.printf("[bench] correctness(mixed del/replace/nl): %zu/%zu mismatches\n", mixed_bad, step);
+}
+
 pub fn main(init: std.process.Init) !void {
     // Ensure the XDG config directory exists.
     {
@@ -437,6 +645,11 @@ pub fn main(init: std.process.Init) !void {
 
     global_io = init.io;
     line_offsets = .empty;
+
+    if (c.getenv("QIRTAS_BENCH")) |bench_path| {
+        runEditBench(std.mem.span(bench_path));
+        return;
+    }
 
     const gpa = std.heap.page_allocator;
 
@@ -648,25 +861,25 @@ pub export fn zig_open_file(filename_ptr: [*:0]const u8) callconv(.c) void {
     if (std.mem.eql(u8, filename, "Untitled")) {
         zig_undo_clear();
 
-        // Unload existing mapping
-        if (active_mmap_ptr) |ptr| {
-            unload_file_mmap(ptr, active_mmap_size);
-            active_mmap_ptr = null;
-            active_mmap_size = 0;
-        }
-
-        // Clear line offsets
-        line_offsets.clearRetainingCapacity();
-        const gpa = std.heap.page_allocator;
-        line_offsets.append(gpa, 0) catch {};
+        // Fresh blank note: seed the basmala (per UI language). If this is a
+        // RE-opened Untitled tab, gui_tabs_restore_active_from_cache() below
+        // overwrites this with the cached content, so user edits aren't lost.
+        const tmpl = newFileTemplate();
+        loadDocFromSlice(tmpl) catch {};
 
         if (!setActiveFilePath(filename)) return;
 
-        gui_set_text("", 0);
+        gui_set_text(tmpl.ptr, @intCast(tmpl.len));
         gui_set_title("Untitled - Qirtas");
         gui_set_sync_state(SYNC_NOT_SYNCED);
         gui_show_editor();
         gui_tabs_restore_active_from_cache();
+        // Drop the caret on the blank line after the seeded basmala.
+        var seed_lines: c_int = 1;
+        for (tmpl) |ch| {
+            if (ch == '\n') seed_lines += 1;
+        }
+        gui_set_cursor_position(seed_lines, 0);
         var seed_line: c_int = 0;
         var seed_col: c_int = 0;
         gui_get_cursor_position(&seed_line, &seed_col);
@@ -690,10 +903,15 @@ pub export fn zig_open_file(filename_ptr: [*:0]const u8) callconv(.c) void {
                         display_name = filename;
                     }
                 } else {
-                    display_name = get_basename(filename);
+                    // Outside the vault: keep the ABSOLUTE path. Reducing to the
+                    // basename made access()/load_file_mmap look it up relative
+                    // to the vault root — the real file was never found, so the
+                    // editor opened a blank buffer (and created a stray empty
+                    // file in the vault). Absolute paths load + save correctly.
+                    display_name = filename;
                 }
             } else {
-                display_name = get_basename(filename);
+                display_name = filename;
             }
         }
 
@@ -1089,11 +1307,9 @@ pub export fn zig_on_shutdown() callconv(.c) void {
     if (active_file_path_len > 0 and !std.mem.eql(u8, active_file_path[0..active_file_path_len], "Untitled")) {
         save_session(active_file_path[0..active_file_path_len], line, col) catch {};
     }
-    if (active_mmap_ptr) |ptr| {
-        unload_file_mmap(ptr, active_mmap_size);
-        active_mmap_ptr = null;
-        active_mmap_size = 0;
-    }
+    doc_buf.deinit(std.heap.page_allocator);
+    active_mmap_ptr = null;
+    active_mmap_size = 0;
     line_offsets.deinit(std.heap.page_allocator);
 }
 
@@ -1131,6 +1347,7 @@ fn load_file_mmap(filename: [*:0]const u8, size: *usize) ![*]const u8 {
     if (file_size == 0) {
         size.* = 0;
         active_file_is_encrypted = false;
+        active_load_failed = false;
         return "";
     }
 
@@ -1140,17 +1357,45 @@ fn load_file_mmap(filename: [*:0]const u8, size: *usize) ![*]const u8 {
 
     const mmap_slice: [*]const u8 = @ptrCast(ptr);
     const mmap_content = mmap_slice[0..file_size];
+    const gpa = std.heap.page_allocator;
+
+    if (blobHasMagic(mmap_content)) {
+        // Definitively a Qirtas-encrypted file. It MUST decrypt — never fall
+        // through to loading the raw ciphertext as plaintext, because the 2.5s
+        // autosave would then atomically overwrite the recoverable original
+        // with garbage. On failure (no key, or wrong key after a machine
+        // migration) mark the load failed so every save path refuses to write.
+        if (active_master_key) |key| {
+            if (decryptWithMasterKey(gpa, key, mmap_content) catch null) |buf| {
+                active_file_is_encrypted = true;
+                active_load_failed = false;
+                size.* = buf.len;
+                return buf.ptr;
+            }
+        }
+        active_file_is_encrypted = true; // it is encrypted; we just can't read it
+        active_load_failed = true;
+        size.* = 0;
+        return "";
+    }
+
+    // No magic header: either genuine plaintext, or a legacy (pre-header)
+    // encrypted file. Try a trial decrypt only when a key is present — the AEAD
+    // tag means this succeeds only on real legacy ciphertext, so true plaintext
+    // still loads as plaintext. (The legacy migration hole remains for old
+    // files until they're re-saved with the new header.)
     if (active_master_key) |key| {
-        const pt_buf = decryptWithMasterKey(std.heap.page_allocator, key, mmap_content) catch null;
-        if (pt_buf) |buf| {
+        if (decryptWithMasterKey(gpa, key, mmap_content) catch null) |buf| {
             active_file_is_encrypted = true;
+            active_load_failed = false;
             size.* = buf.len;
             return buf.ptr;
         }
     }
 
-    const plain_buf = try std.heap.page_allocator.dupe(u8, mmap_content);
+    const plain_buf = try gpa.dupe(u8, mmap_content);
     active_file_is_encrypted = false;
+    active_load_failed = false;
     size.* = plain_buf.len;
     return plain_buf.ptr;
 }
@@ -1158,6 +1403,39 @@ fn load_file_mmap(filename: [*:0]const u8, size: *usize) ![*]const u8 {
 fn unload_file_mmap(ptr: [*]const u8, size: usize) void {
     if (size == 0) return;
     std.heap.page_allocator.free(ptr[0..size]);
+}
+
+// Point the legacy view at doc_buf's current bytes. Call after every mutation;
+// ArrayList growth may move the backing allocation.
+fn syncActiveView() void {
+    active_mmap_ptr = if (doc_buf.items.len > 0) doc_buf.items.ptr else null;
+    active_mmap_size = doc_buf.items.len;
+}
+
+// Replace the whole document with `slice` (load / tab-switch / undo restore).
+// Reuses doc_buf's capacity; only grows when the new content is larger than
+// any document held so far.
+fn loadDocFromSlice(slice: []const u8) !void {
+    const gpa = std.heap.page_allocator;
+    doc_buf.clearRetainingCapacity();
+    // Normalize line endings to LF. GtkTextView keeps a lone '\r' as a content
+    // character, so CRLF/CR files leave a stray '\r' on every line — that
+    // desyncs the conceal/tag passes' offset math and produces an
+    // "Invalid text buffer iterator" / apply_tag assertion storm (and garbled
+    // rendering) on files like CRLF-exported Markdown. Strip it once at load so
+    // every downstream pass sees clean LF text.
+    try doc_buf.ensureTotalCapacity(gpa, slice.len);
+    var i: usize = 0;
+    while (i < slice.len) : (i += 1) {
+        if (slice[i] == '\r') {
+            try doc_buf.append(gpa, '\n');
+            if (i + 1 < slice.len and slice[i + 1] == '\n') i += 1; // CRLF → one LF
+        } else {
+            try doc_buf.append(gpa, slice[i]);
+        }
+    }
+    syncActiveView();
+    try populate_line_offsets(doc_buf.items);
 }
 
 fn populate_line_offsets(content: []const u8) !void {
@@ -1177,6 +1455,58 @@ fn populate_line_offsets(content: []const u8) !void {
     }
 }
 
+// First index i where line_offsets[i] > threshold (binary search).
+fn lineIdxFirstGreater(threshold: usize) usize {
+    var lo: usize = 0;
+    var hi: usize = line_offsets.items.len;
+    while (lo < hi) {
+        const mid = lo + (hi - lo) / 2;
+        if (line_offsets.items[mid] > threshold) hi = mid else lo = mid + 1;
+    }
+    return lo;
+}
+
+// Incremental line_offsets maintenance — avoids the O(document) full rescan in
+// populate_line_offsets on every keystroke. Mirrors its semantics exactly:
+// one entry per '\n' (the offset just after it), entry 0 always present.
+fn lineOffsetsInsert(off: usize, text: []const u8) !void {
+    const gpa = std.heap.page_allocator;
+    const L = text.len;
+    if (L == 0) return;
+    const idx = lineIdxFirstGreater(off);
+    // Shift every line start after the insertion point right by L.
+    var i = idx;
+    while (i < line_offsets.items.len) : (i += 1) line_offsets.items[i] += L;
+    // Each '\n' in the inserted text starts a new line at off+k+1. These all
+    // fall in (off, off+L], i.e. before the just-shifted entries, so they
+    // insert in order at idx.
+    var tmp: std.ArrayList(usize) = .empty;
+    defer tmp.deinit(gpa);
+    var k: usize = 0;
+    while (k < text.len) : (k += 1) {
+        if (text[k] == '\n') try tmp.append(gpa, off + k + 1);
+    }
+    if (tmp.items.len > 0) try line_offsets.insertSlice(gpa, idx, tmp.items);
+}
+
+fn lineOffsetsDelete(start: usize, end: usize) void {
+    const gpa = std.heap.page_allocator;
+    if (end <= start) return;
+    const D = end - start;
+    const idx_lo = lineIdxFirstGreater(start); // first entry with value > start
+    const idx_hi = lineIdxFirstGreater(end); // first entry with value > end
+    // Entries in [idx_lo, idx_hi) have start < value <= end → inside the
+    // deleted bytes → gone. Entries from idx_hi shift left by D.
+    var i = idx_hi;
+    while (i < line_offsets.items.len) : (i += 1) line_offsets.items[i] -= D;
+    if (idx_hi > idx_lo) {
+        line_offsets.replaceRange(gpa, idx_lo, idx_hi - idx_lo, &[_]usize{}) catch {
+            // Shrink-only replaceRange shouldn't fail; rescan if it ever does.
+            populate_line_offsets(doc_buf.items) catch {};
+        };
+    }
+}
+
 fn remap_active_file() !void {
     if (!file_open_in_progress.load(.acquire)) return error.RemapWithoutGuard;
     const gpa = std.heap.page_allocator;
@@ -1184,20 +1514,13 @@ fn remap_active_file() !void {
     const path_z = try gpa.dupeZ(u8, path);
     defer gpa.free(path_z);
 
-    // Unload existing mapping
-    if (active_mmap_ptr) |ptr| {
-        unload_file_mmap(ptr, active_mmap_size);
-        active_mmap_ptr = null;
-        active_mmap_size = 0;
-    }
-
     var size: usize = 0;
     const ptr = try load_file_mmap(path_z.ptr, &size);
-    active_mmap_ptr = ptr;
-    active_mmap_size = size;
-
+    // load_file_mmap hands back an owned page_allocator buffer (decrypt result
+    // or plaintext dupe). Copy it into doc_buf, then release the temp.
     const content = if (size > 0) ptr[0..size] else "";
-    try populate_line_offsets(content);
+    try loadDocFromSlice(content);
+    if (size > 0) unload_file_mmap(ptr, size);
 }
 
 fn load_file_and_update_gui(filename: []const u8) !void {
@@ -1216,7 +1539,7 @@ fn load_file_and_update_gui(filename: []const u8) !void {
         
         if (active_master_key) |key| {
             active_file_is_encrypted = true;
-            const pt = "# New Notebook Document\n\n- Start writing here...\n";
+            const pt = newFileTemplate();
             const enc_blob = encryptWithMasterKey(std.heap.page_allocator, key, pt) catch return;
             defer std.heap.page_allocator.free(enc_blob);
             try f.writeStreamingAll(global_io, enc_blob);
@@ -1239,7 +1562,15 @@ fn load_file_and_update_gui(filename: []const u8) !void {
     defer gpa.free(title_z);
 
     gui_set_title(title_z.ptr);
-    gui_set_sync_state(SYNC_SYNCED);
+    if (active_load_failed) {
+        // Encrypted file we can't read (wrong key / machine migration). The
+        // editor shows it empty but every save path is blocked, so the
+        // original ciphertext on disk stays intact and recoverable.
+        gui_show_toast("Cannot decrypt — wrong key. File is read-only; original left untouched.");
+        gui_set_sync_status("Read-only — cannot decrypt");
+    } else {
+        gui_set_sync_state(SYNC_SYNCED);
+    }
     gui_show_editor();
 
     // Baseline undo snapshot: without it the first edit can never be undone
@@ -1258,10 +1589,18 @@ fn autosave_thread_loop() void {
 
 fn autosave_callback(user_data: ?*anyopaque) callconv(.c) void {
     _ = user_data;
+    if (gui_autosave_enabled() == 0) return;
     gui_trigger_autosave();
 }
 
 pub export fn zig_get_text_for_line_range(start_line: c_int, end_line: c_int, out_len: *c_int) callconv(.c) ?[*]const u8 {
+    // Symmetric with zig_save_active_page's guard: a negative line @intCast to
+    // usize wraps to a huge index. ReleaseSmall's bounds check happens to catch
+    // it, but ReleaseSafe/Debug panic. Reject up front.
+    if (start_line < 0 or end_line < 0) {
+        out_len.* = 0;
+        return "";
+    }
     const start_idx = @as(usize, @intCast(start_line));
     const end_idx = @as(usize, @intCast(end_line));
     
@@ -1301,6 +1640,7 @@ pub export fn zig_get_text_for_line_range(start_line: c_int, end_line: c_int, ou
 
 pub export fn zig_save_active_page(start_line: c_int, end_line: c_int, text: [*:0]const u8) callconv(.c) c_int {
     if (start_line < 0 or end_line < 0) return 1;
+    if (active_load_failed) return 1; // undecryptable file is read-only
     if (active_file_is_encrypted and active_master_key == null) return 1;
 
     const gpa = std.heap.page_allocator;
@@ -1343,12 +1683,20 @@ pub export fn zig_save_active_page(start_line: c_int, end_line: c_int, text: [*:
         atomicWriteFile(path, new_content) catch return 1;
     }
 
-    remap_active_file() catch return 1;
-    
+    // remap_active_file() requires the file_open_in_progress guard.
+    // zig_save_active_page is only ever called from the GUI thread, never
+    // from within zig_open_file, so the flag is always false here.
+    file_open_in_progress.store(true, .release);
+    remap_active_file() catch {
+        file_open_in_progress.store(false, .release);
+        return 1;
+    };
+    file_open_in_progress.store(false, .release);
+
     const path_z = gpa.dupeZ(u8, path) catch return 1;
     defer gpa.free(path_z);
     gui_index_file(path_z.ptr);
-    
+
     return 0;
 }
 
@@ -1673,14 +2021,7 @@ fn write_document_content_and_remap(new_content: []const u8) !void {
     const gpa = std.heap.page_allocator;
 
     if (std.mem.eql(u8, path, "Untitled")) {
-        const plain_buf = try gpa.dupe(u8, new_content);
-        if (active_mmap_ptr) |ptr| {
-            gpa.free(ptr[0..active_mmap_size]);
-        }
-        active_mmap_ptr = plain_buf.ptr;
-        active_mmap_size = plain_buf.len;
-        try populate_line_offsets(new_content);
-
+        try loadDocFromSlice(new_content);
         return;
     }
 
@@ -1704,14 +2045,7 @@ fn write_document_content_and_remap(new_content: []const u8) !void {
 /// save / autosave / close (zig_save_document). The old path wrote, encrypted
 /// and remapped the whole file on every keystroke — the typing-lag bug.
 fn update_document_content_in_memory(new_content: []const u8) !void {
-    const gpa = std.heap.page_allocator;
-    const buf = try gpa.dupe(u8, new_content);
-    if (active_mmap_ptr) |ptr| {
-        unload_file_mmap(ptr, active_mmap_size);
-    }
-    active_mmap_ptr = buf.ptr;
-    active_mmap_size = buf.len;
-    try populate_line_offsets(buf);
+    try loadDocFromSlice(new_content);
 }
 
 fn restoreSnapshot(entry: UndoEntry) void {
@@ -1719,7 +2053,9 @@ fn restoreSnapshot(entry: UndoEntry) void {
     gui_reload_full_buffer();
     gui_set_buffer_modified(1);
     gui_set_sync_state(SYNC_NOT_SYNCED);
-    gui_set_cursor_position(entry.cursor_line, entry.cursor_col);
+    // Quiet caret move: keep the page where the user is looking instead of
+    // snapping the viewport to the restored caret (undo-jumps-up bug).
+    gui_set_cursor_position_quiet(entry.cursor_line, entry.cursor_col);
 }
 
 pub export fn zig_undo_push(cursor_line: c_int, cursor_col: c_int) callconv(.c) void {
@@ -1780,61 +2116,43 @@ pub export fn zig_insert_text(pos: Position, text: [*:0]const u8) callconv(.c) v
     if (text_slice.len == 0) return;
 
     const gpa = std.heap.page_allocator;
-    const content = if (active_mmap_ptr) |ptr| ptr[0..active_mmap_size] else "";
-
     const offset = positionToOffset(pos);
-    const new_size = content.len + text_slice.len;
-    const new_content = gpa.alloc(u8, new_size) catch return;
-    defer gpa.free(new_content);
+    if (offset > doc_buf.items.len) return;
 
-    @memcpy(new_content[0..offset], content[0..offset]);
-    @memcpy(new_content[offset .. offset + text_slice.len], text_slice);
-    @memcpy(new_content[offset + text_slice.len ..], content[offset..]);
-
-    update_document_content_in_memory(new_content) catch {};
+    // In-place splice: reuses doc_buf's capacity, shifts only the tail. No
+    // per-keystroke allocation unless the buffer must grow.
+    doc_buf.insertSlice(gpa, offset, text_slice) catch return;
+    syncActiveView();
+    lineOffsetsInsert(offset, text_slice) catch populate_line_offsets(doc_buf.items) catch {};
 }
 
 pub export fn zig_delete_range(start: Position, end: Position) callconv(.c) void {
-    const content = if (active_mmap_ptr) |ptr| ptr[0..active_mmap_size] else "";
     const start_offset = positionToOffset(start);
     const end_offset = positionToOffset(end);
-
-    if (start_offset >= end_offset) return;
+    if (start_offset >= end_offset or end_offset > doc_buf.items.len) return;
 
     const gpa = std.heap.page_allocator;
-    const deleted_len = end_offset - start_offset;
-    const new_size = content.len - deleted_len;
-    const new_content = gpa.alloc(u8, new_size) catch return;
-    defer gpa.free(new_content);
-
-    @memcpy(new_content[0..start_offset], content[0..start_offset]);
-    @memcpy(new_content[start_offset..], content[end_offset..]);
-
-    update_document_content_in_memory(new_content) catch {};
+    doc_buf.replaceRange(gpa, start_offset, end_offset - start_offset, "") catch return;
+    syncActiveView();
+    lineOffsetsDelete(start_offset, end_offset);
 }
 
 pub export fn zig_replace_range(start: Position, end: Position, text: [*:0]const u8) callconv(.c) void {
     const text_slice = std.mem.span(text);
-    const content = if (active_mmap_ptr) |ptr| ptr[0..active_mmap_size] else "";
     const start_offset = positionToOffset(start);
     const end_offset = positionToOffset(end);
-
-    if (start_offset > end_offset) return;
+    if (start_offset > end_offset or end_offset > doc_buf.items.len) return;
 
     const gpa = std.heap.page_allocator;
-    const deleted_len = end_offset - start_offset;
-    const new_size = content.len - deleted_len + text_slice.len;
-    const new_content = gpa.alloc(u8, new_size) catch return;
-    defer gpa.free(new_content);
-
-    @memcpy(new_content[0..start_offset], content[0..start_offset]);
-    @memcpy(new_content[start_offset .. start_offset + text_slice.len], text_slice);
-    @memcpy(new_content[start_offset + text_slice.len ..], content[end_offset..]);
-
-    update_document_content_in_memory(new_content) catch {};
+    doc_buf.replaceRange(gpa, start_offset, end_offset - start_offset, text_slice) catch return;
+    syncActiveView();
+    // Delete the old span, then insert the new text at the same offset.
+    lineOffsetsDelete(start_offset, end_offset);
+    lineOffsetsInsert(start_offset, text_slice) catch populate_line_offsets(doc_buf.items) catch {};
 }
 
 pub export fn zig_save_document() callconv(.c) c_int {
+    if (active_load_failed) return 1; // undecryptable file is read-only
     if (active_file_path_len == 0) return 1;
     const path = active_file_path[0..active_file_path_len];
     if (std.mem.eql(u8, path, "Untitled")) return 0;
@@ -1850,6 +2168,14 @@ pub export fn zig_save_document() callconv(.c) c_int {
     } else {
         atomicWriteFile(path, content) catch return 1;
     }
+
+    // Keep the search index fresh — autosave now routes through here, so this
+    // is the single place every doc_buf write lands. Index failure is
+    // non-fatal: the bytes are already on disk.
+    const path_z = gpa.dupeZ(u8, path) catch return 0;
+    defer gpa.free(path_z);
+    gui_index_file(path_z.ptr);
+
     return 0;
 }
 
@@ -1857,6 +2183,15 @@ pub export fn zig_get_document_text() ?[*:0]const u8 {
     const content = if (active_mmap_ptr) |ptr| ptr[0..active_mmap_size] else "";
     const gpa = std.heap.page_allocator;
     const content_z = gpa.dupeZ(u8, content) catch return null;
+    // zig_free_document_text derives the length with mem.len(), which stops at
+    // the first interior NUL — a binary paste containing '\0' would then be
+    // freed with a smaller length than was allocated (page_allocator size
+    // mismatch). Replace any embedded NUL so freed-length == allocated-length.
+    // The C consumers treat this as a NUL-terminated string anyway, so an
+    // interior NUL would already truncate their view.
+    for (content_z[0..content.len]) |*b| {
+        if (b.* == 0) b.* = ' ';
+    }
     return content_z.ptr;
 }
 
@@ -2025,11 +2360,35 @@ fn setTestDocument(path: []const u8, content: []const u8) !void {
     try std.testing.expect(setActiveFilePath(path));
     active_file_is_encrypted = false;
     active_master_key = null;
+    active_load_failed = false;
     try update_document_content_in_memory(content);
 }
 
 fn testDocText() []const u8 {
     return if (active_mmap_ptr) |ptr| ptr[0..active_mmap_size] else "";
+}
+
+test "large-doc edit stress: many in-place inserts/deletes stay consistent" {
+    // Build a 700KB document, then hammer the per-keystroke path. This is the
+    // size class where the old "rebuild whole buffer per keystroke" model
+    // allocated a fresh page_allocator buffer (mmap/munmap) on every edit;
+    // doc_buf now splices in place. Assert the buffer stays correct after a
+    // long edit run.
+    const big = try std.heap.page_allocator.alloc(u8, 700_000);
+    defer std.heap.page_allocator.free(big);
+    var i: usize = 0;
+    while (i < big.len) : (i += 1) big[i] = if (i % 80 == 79) '\n' else 'a';
+    try setTestDocument("Untitled", big);
+
+    const before = active_mmap_size;
+    var k: usize = 0;
+    while (k < 4000) : (k += 1) {
+        zig_insert_text(.{ .line = 100, .col = 10 }, "x");
+        zig_delete_range(.{ .line = 100, .col = 10 }, .{ .line = 100, .col = 11 });
+    }
+    // Net zero change in size, content unchanged, offsets still valid.
+    try std.testing.expectEqual(before, active_mmap_size);
+    try std.testing.expectEqualStrings(big, testDocText());
 }
 
 test "insert/delete/replace round-trip in memory" {
@@ -2124,4 +2483,265 @@ test "setActiveFilePath refuses oversized and empty paths" {
     try std.testing.expectEqual(saved_len, active_file_path_len);
     try std.testing.expect(setActiveFilePath("notes/ملف.md"));
     try std.testing.expectEqualStrings("notes/ملف.md", active_file_path[0..active_file_path_len]);
+}
+
+// ============================================================
+// INTEGRATION SUITE — tests prefixed "integration:" chain the real
+// editing-core entry points end-to-end (load → edit → save → reload),
+// including the encrypt-at-rest path. Run with `zig build test-integration`;
+// `zig build test-regression` runs these plus every unit test as the CI gate.
+// ============================================================
+
+test "integration: encrypted save writes ciphertext, reload restores plaintext" {
+    const saved_key = active_master_key;
+    const saved_enc = active_file_is_encrypted;
+    defer {
+        active_master_key = saved_key;
+        active_file_is_encrypted = saved_enc;
+    }
+
+    const path = "/tmp/qirtas-itest-encrypted.md";
+    defer _ = c.unlink(path);
+
+    var key: [32]u8 = undefined;
+    try fillRandomBytes(&key);
+
+    // Author a document, mark it encrypted, save it.
+    try setTestDocument(path, "TOPSECRET سرّي\nsecond line\n"); // resets key=null, enc=false
+    active_master_key = key;
+    active_file_is_encrypted = true;
+    const plaintext = try std.testing.allocator.dupe(u8, testDocText());
+    defer std.testing.allocator.free(plaintext);
+    try std.testing.expectEqual(@as(c_int, 0), zig_save_document());
+
+    // On-disk bytes must be ciphertext — the plaintext marker must not survive.
+    const fd = c.open(path, c.O_RDONLY);
+    try std.testing.expect(fd >= 0);
+    var raw: [512]u8 = undefined;
+    const n = c.read(fd, &raw, raw.len);
+    _ = c.close(fd);
+    try std.testing.expect(n > 0);
+    try std.testing.expect(std.mem.indexOf(u8, raw[0..@intCast(n)], "TOPSECRET") == null);
+
+    // Reload through the real load path → decrypts back to the original.
+    var size: usize = 0;
+    const loaded = try load_file_mmap(path, &size);
+    defer unload_file_mmap(loaded, size);
+    try std.testing.expect(active_file_is_encrypted);
+    try std.testing.expectEqualStrings(plaintext, loaded[0..size]);
+}
+
+test "integration: encrypted file with wrong key is read-only, save refuses, ciphertext survives" {
+    const saved_key = active_master_key;
+    const saved_enc = active_file_is_encrypted;
+    const saved_failed = active_load_failed;
+    defer {
+        active_master_key = saved_key;
+        active_file_is_encrypted = saved_enc;
+        active_load_failed = saved_failed;
+    }
+
+    const path = "/tmp/qirtas-itest-wrongkey.md";
+    defer _ = c.unlink(path);
+
+    var good_key: [32]u8 = undefined;
+    try fillRandomBytes(&good_key);
+
+    // Author and save an encrypted file with the good key.
+    try setTestDocument(path, "TOPSECRET سرّي\n");
+    active_master_key = good_key;
+    active_file_is_encrypted = true;
+    try std.testing.expectEqual(@as(c_int, 0), zig_save_document());
+
+    // Capture the on-disk ciphertext as written.
+    const before = try std.testing.allocator.alloc(u8, 4096);
+    defer std.testing.allocator.free(before);
+    const fd0 = c.open(path, c.O_RDONLY);
+    try std.testing.expect(fd0 >= 0);
+    const before_n = c.read(fd0, before.ptr, before.len);
+    _ = c.close(fd0);
+    try std.testing.expect(before_n > 0);
+    // It must carry the magic header.
+    try std.testing.expect(blobHasMagic(before[0..@intCast(before_n)]));
+
+    // Simulate a machine migration: a different (wrong) master key.
+    var wrong_key: [32]u8 = undefined;
+    try fillRandomBytes(&wrong_key);
+    active_master_key = wrong_key;
+
+    var size: usize = 0;
+    const loaded = try load_file_mmap(path, &size);
+    defer unload_file_mmap(loaded, size);
+
+    // Must NOT load the ciphertext as plaintext, and must mark the load failed.
+    try std.testing.expect(active_load_failed);
+    try std.testing.expectEqual(@as(usize, 0), size);
+
+    // Every save path must refuse while load-failed — the original is read-only.
+    try std.testing.expectEqual(@as(c_int, 1), zig_save_document());
+    try std.testing.expectEqual(@as(c_int, 1), zig_save_active_page(0, 1, "garbage"));
+
+    // The ciphertext on disk must be byte-for-byte untouched.
+    const after = try std.testing.allocator.alloc(u8, 4096);
+    defer std.testing.allocator.free(after);
+    const fd1 = c.open(path, c.O_RDONLY);
+    try std.testing.expect(fd1 >= 0);
+    const after_n = c.read(fd1, after.ptr, after.len);
+    _ = c.close(fd1);
+    try std.testing.expectEqual(before_n, after_n);
+    try std.testing.expectEqualStrings(before[0..@intCast(before_n)], after[0..@intCast(after_n)]);
+}
+
+test "integration: plaintext edit then save then reload from disk matches in-memory text" {
+    const saved_key = active_master_key;
+    defer active_master_key = saved_key;
+    active_master_key = null; // force the plaintext load path
+
+    const path = "/tmp/qirtas-itest-plain.md";
+    defer _ = c.unlink(path);
+    try setTestDocument(path, "alpha\nbeta\n");
+    zig_insert_text(.{ .line = 0, .col = 5 }, " one");
+    zig_replace_range(.{ .line = 1, .col = 0 }, .{ .line = 1, .col = 4 }, "BETA");
+    const expected = try std.testing.allocator.dupe(u8, testDocText());
+    defer std.testing.allocator.free(expected);
+    try std.testing.expectEqual(@as(c_int, 0), zig_save_document());
+
+    var size: usize = 0;
+    const loaded = try load_file_mmap(path, &size);
+    defer unload_file_mmap(loaded, size);
+    try std.testing.expect(!active_file_is_encrypted);
+    try std.testing.expectEqualStrings(expected, loaded[0..size]);
+}
+
+test "integration: undo after a multi-edit session restores the loaded document" {
+    try setTestDocument("Untitled", "one two three\n");
+    const original = try std.testing.allocator.dupe(u8, testDocText());
+    defer std.testing.allocator.free(original);
+
+    // Baseline snapshot (mirrors load_file_and_update_gui), then two word edits,
+    // each sealed at a commit boundary.
+    zig_undo_push(0, 0);
+    zig_undo_commit();
+
+    zig_insert_text(.{ .line = 0, .col = 13 }, " four");
+    zig_undo_push(0, 18);
+    zig_undo_commit();
+    zig_insert_text(.{ .line = 0, .col = 18 }, " five");
+    zig_undo_push(0, 23);
+    zig_undo_commit();
+    try std.testing.expectEqualStrings("one two three four five\n", testDocText());
+
+    // Undo both edits → back to the exact loaded bytes.
+    zig_undo();
+    zig_undo();
+    try std.testing.expectEqualStrings(original, testDocText());
+}
+
+// ── C behavioral tests: pure-logic, no GTK display required ──────────────
+// Functions live in gui_buffer.c, compiled into the test binary via
+// addCSourceFile. No gtk_init() or display needed — pure string logic.
+
+extern fn arabize_digits(in: [*:0]const u8, out: [*]u8, out_size: usize) void;
+extern fn arabic_count_phrase(n: c_long, feminine: c_int, out: [*]u8, out_size: usize) void;
+extern fn arabic_lines_phrase(n: c_long, out: [*]u8, out_size: usize) void;
+extern fn advance_position(pos: Position, text: [*:0]const u8) Position;
+
+test "C arabize_digits: full digit string → Eastern Arabic numerals" {
+    var buf: [64]u8 = undefined;
+    arabize_digits("0123456789", &buf, buf.len);
+    try std.testing.expectEqualStrings("٠١٢٣٤٥٦٧٨٩", std.mem.sliceTo(&buf, 0));
+}
+
+test "C arabize_digits: non-digit ASCII passes through unchanged" {
+    var buf: [64]u8 = undefined;
+    arabize_digits("abc", &buf, buf.len);
+    try std.testing.expectEqualStrings("abc", std.mem.sliceTo(&buf, 0));
+}
+
+test "C arabize_digits: mixed latin + digits" {
+    var buf: [64]u8 = undefined;
+    arabize_digits("page 42", &buf, buf.len);
+    try std.testing.expectEqualStrings("page ٤٢", std.mem.sliceTo(&buf, 0));
+}
+
+test "C arabic_count_phrase: singular feminine (1 word)" {
+    var buf: [64]u8 = undefined;
+    arabic_count_phrase(1, 1, &buf, buf.len);
+    try std.testing.expectEqualStrings("كلمة واحدة", std.mem.sliceTo(&buf, 0));
+}
+
+test "C arabic_count_phrase: dual feminine (2 words)" {
+    var buf: [64]u8 = undefined;
+    arabic_count_phrase(2, 1, &buf, buf.len);
+    try std.testing.expectEqualStrings("كلمتان", std.mem.sliceTo(&buf, 0));
+}
+
+test "C arabic_count_phrase: 3-10 gender-polarity feminine (6 words)" {
+    var buf: [64]u8 = undefined;
+    arabic_count_phrase(6, 1, &buf, buf.len);
+    // feminine noun → number takes feminine form (ست, no ة)
+    try std.testing.expectEqualStrings("ست كلمات", std.mem.sliceTo(&buf, 0));
+}
+
+test "C arabic_count_phrase: 3-10 gender-polarity masculine (6 chars)" {
+    var buf: [64]u8 = undefined;
+    arabic_count_phrase(6, 0, &buf, buf.len);
+    // masculine noun → number takes masculine form (ستة, with ة)
+    try std.testing.expectEqualStrings("ستة حروف", std.mem.sliceTo(&buf, 0));
+}
+
+test "C arabic_count_phrase: 11+ uses Eastern Arabic numeral + singular" {
+    var buf: [64]u8 = undefined;
+    arabic_count_phrase(11, 1, &buf, buf.len);
+    try std.testing.expectEqualStrings("١١ كلمة", std.mem.sliceTo(&buf, 0));
+}
+
+test "C arabic_count_phrase: 0 uses Eastern Arabic numeral + singular" {
+    var buf: [64]u8 = undefined;
+    arabic_count_phrase(0, 1, &buf, buf.len);
+    try std.testing.expectEqualStrings("٠ كلمة", std.mem.sliceTo(&buf, 0));
+}
+
+test "C arabic_lines_phrase: singular masculine (1 line)" {
+    var buf: [64]u8 = undefined;
+    arabic_lines_phrase(1, &buf, buf.len);
+    try std.testing.expectEqualStrings("سطر واحد", std.mem.sliceTo(&buf, 0));
+}
+
+test "C arabic_lines_phrase: dual (2 lines)" {
+    var buf: [64]u8 = undefined;
+    arabic_lines_phrase(2, &buf, buf.len);
+    try std.testing.expectEqualStrings("سطران", std.mem.sliceTo(&buf, 0));
+}
+
+test "C arabic_lines_phrase: masculine polarity 3-10 (3 lines)" {
+    var buf: [64]u8 = undefined;
+    arabic_lines_phrase(3, &buf, buf.len);
+    // masculine noun (سطر) → number takes masculine form (ثلاثة, with ة)
+    try std.testing.expectEqualStrings("ثلاثة أسطر", std.mem.sliceTo(&buf, 0));
+}
+
+test "C advance_position: ASCII advances col" {
+    const result = advance_position(.{ .line = 0, .col = 0 }, "hello");
+    try std.testing.expectEqual(@as(c_int, 0), result.line);
+    try std.testing.expectEqual(@as(c_int, 5), result.col);
+}
+
+test "C advance_position: newline increments line and resets col" {
+    const result = advance_position(.{ .line = 0, .col = 0 }, "hi\nbye");
+    try std.testing.expectEqual(@as(c_int, 1), result.line);
+    try std.testing.expectEqual(@as(c_int, 3), result.col);
+}
+
+test "C advance_position: Arabic codepoints each count as 1 col" {
+    // "مرحبا" = 5 Arabic codepoints, 10 UTF-8 bytes
+    const result = advance_position(.{ .line = 0, .col = 0 }, "مرحبا");
+    try std.testing.expectEqual(@as(c_int, 0), result.line);
+    try std.testing.expectEqual(@as(c_int, 5), result.col);
+}
+
+test "C advance_position: accumulates from non-zero start" {
+    const result = advance_position(.{ .line = 2, .col = 3 }, "!!");
+    try std.testing.expectEqual(@as(c_int, 2), result.line);
+    try std.testing.expectEqual(@as(c_int, 5), result.col);
 }

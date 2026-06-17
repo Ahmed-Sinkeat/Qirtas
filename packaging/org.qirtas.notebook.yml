@@ -1,0 +1,67 @@
+# Flatpak manifest for Qirtas.
+#
+# Build & install locally:
+#   flatpak install -y flathub org.gnome.Platform//48 org.gnome.Sdk//48
+#   flatpak-builder --user --install --force-clean build-dir \
+#       packaging/org.qirtas.notebook.yml
+#   flatpak run org.qirtas.notebook
+#
+# Before this builds you MUST pin the Zig tarball checksum (see the zig module):
+#   curl -L https://ziglang.org/download/0.16.0/zig-x86_64-linux-0.16.0.tar.xz \
+#     | sha256sum
+# and paste the hash into `sha256` below.
+#
+# Notes:
+#   - app-id matches the GApplication id set in src/gui.c (org.qirtas.notebook),
+#     so D-Bus/window/icon integration line up.
+#   - Assets are installed under /app/share/qirtas/src/ui and found via the
+#     QIRTAS_DATA_DIR env (resolve_resource_path checks it first).
+#   - The GitHub *device-flow* connect shells out to the `curl` binary, which is
+#     not in the GNOME runtime. The recommended Personal Access Token path uses
+#     native Zig HTTP and works fine; bundle curl as a module if you need the
+#     device flow inside the sandbox.
+app-id: org.qirtas.notebook
+runtime: org.gnome.Platform
+runtime-version: "48"
+sdk: org.gnome.Sdk
+command: qirtas
+
+finish-args:
+  - --share=ipc
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --device=dri
+  - --share=network            # cloud sync + OAuth loopback
+  - --filesystem=home          # notes live in a user-chosen folder
+  - --env=QIRTAS_DATA_DIR=/app/share/qirtas
+
+modules:
+  - name: zig
+    buildsystem: simple
+    build-commands:
+      - mkdir -p /app/zig
+      - cp -r ./* /app/zig/
+    cleanup:
+      - '*'          # build-only toolchain; don't ship it in the final app
+    sources:
+      - type: archive
+        url: https://ziglang.org/download/0.16.0/zig-x86_64-linux-0.16.0.tar.xz
+        sha256: REPLACE_WITH_REAL_SHA256
+        strip-components: 1
+
+  - name: qirtas
+    buildsystem: simple
+    build-commands:
+      # This build.zig sets preferred_optimize_mode → release is --release=<mode>.
+      - /app/zig/zig build --release=safe --global-cache-dir "$PWD/.zig-global"
+      - install -Dm755 zig-out/bin/qirtas /app/bin/qirtas
+      # Runtime assets, preserving the src/ui layout the resolver expects.
+      - install -d /app/share/qirtas/src/ui
+      - cp -r src/ui/themes /app/share/qirtas/src/ui/
+      - cp -r src/ui/icons /app/share/qirtas/src/ui/
+      # Desktop entry + app icon (named after the app-id so Flatpak exports them).
+      - install -Dm644 packaging/qirtas.desktop /app/share/applications/org.qirtas.notebook.desktop
+      - install -Dm644 src/ui/icons/qirtas-logo.png /app/share/icons/hicolor/512x512/apps/org.qirtas.notebook.png
+    sources:
+      - type: dir
+        path: ..

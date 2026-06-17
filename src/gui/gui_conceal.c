@@ -137,24 +137,51 @@ static void update_paragraph_direction(GtkTextBuffer *buf, GtkTextIter *iter) {
     }
 }
 
-static void apply_regex_conceal(GtkTextBuffer *buf, const gchar *text, const gchar *pattern, gint cursor_char, gint delim_len, GtkTextTag *conceal_tag) {
-    static GRegex *regex_bold = NULL;
-    static GRegex *regex_highlight = NULL;
-    static GRegex *regex_italic = NULL;
-    GRegex *regex = NULL;
+/* Compile each conceal pattern at most once, ever. The conceal pass runs a
+ * fixed set of ~10 patterns; compiling them fresh per call (the old `else`
+ * branch did) showed up as avoidable cost in the full-buffer pass. Cache is
+ * keyed by pattern content and never freed — the pattern set is closed and
+ * lives for the whole process. */
+static GRegex *get_cached_regex(const gchar *pattern) {
+    enum { MAX_CACHED = 16 };
+    static const gchar *keys[MAX_CACHED];
+    static GRegex      *vals[MAX_CACHED];
+    static int          count = 0;
 
-    if (strcmp(pattern, "\\*\\*([^\\n]*?[^\\n\\*][^\\n]*?)\\*\\*") == 0) {
-        if (!regex_bold) regex_bold = g_regex_new(pattern, G_REGEX_DEFAULT, 0, NULL);
-        regex = regex_bold;
-    } else if (strcmp(pattern, "==([^\\n]*?[^\\n=][^\\n]*?)==") == 0) {
-        if (!regex_highlight) regex_highlight = g_regex_new(pattern, G_REGEX_DEFAULT, 0, NULL);
-        regex = regex_highlight;
-    } else if (strcmp(pattern, "(?<!\\*)\\*([^\\n\\*]+?)\\*(?!\\*)") == 0) {
-        if (!regex_italic) regex_italic = g_regex_new(pattern, G_REGEX_DEFAULT, 0, NULL);
-        regex = regex_italic;
-    } else {
-        regex = g_regex_new(pattern, G_REGEX_DEFAULT, 0, NULL);
+    for (int i = 0; i < count; i++) {
+        if (strcmp(keys[i], pattern) == 0) return vals[i];
     }
+    GRegex *re = g_regex_new(pattern, G_REGEX_OPTIMIZE, 0, NULL);
+    if (re && count < MAX_CACHED) {
+        keys[count] = g_strdup(pattern);
+        vals[count] = re;
+        count++;
+    }
+    return re;
+}
+
+/* Some lines make GTK's text layout abort when conceal (scale) tags are applied
+ * over them — inline HTML, tables, and very long lines (seen with the
+ * markdown-test-file). Concealing markdown markers inside those isn't meaningful
+ * anyway, so skip them: the markers render raw but the editor stays crash-safe.
+ * Keyed off the buffer line containing `char_off`. */
+static gboolean conceal_line_hostile(GtkTextBuffer *buf, gint char_off) {
+    GtkTextIter it;
+    gtk_text_buffer_get_iter_at_offset(buf, &it, char_off);
+    gint line = gtk_text_iter_get_line(&it);
+    GtkTextIter ls, le;
+    gtk_text_buffer_get_iter_at_line(buf, &ls, line);
+    le = ls;
+    if (!gtk_text_iter_ends_line(&le)) gtk_text_iter_forward_to_line_end(&le);
+    if (gtk_text_iter_get_offset(&le) - gtk_text_iter_get_offset(&ls) > 2000) return TRUE;
+    gchar *t = gtk_text_buffer_get_text(buf, &ls, &le, TRUE);
+    gboolean hostile = t && (strchr(t, '<') != NULL || strchr(t, '|') != NULL);
+    g_free(t);
+    return hostile;
+}
+
+static void apply_regex_conceal(GtkTextBuffer *buf, const gchar *text, const gchar *pattern, gint cursor_char, gint delim_len, GtkTextTag *conceal_tag) {
+    GRegex *regex = get_cached_regex(pattern);
     if (!regex) return;
 
     GError *error = NULL;
@@ -167,7 +194,7 @@ static void apply_regex_conceal(GtkTextBuffer *buf, const gchar *text, const gch
             gint start_char = g_utf8_pointer_to_offset(text, text + start_byte);
             gint end_char = g_utf8_pointer_to_offset(text, text + end_byte);
             gboolean cursor_inside = (cursor_char >= start_char && cursor_char <= end_char);
-            if (!cursor_inside) {
+            if (!cursor_inside && !conceal_line_hostile(buf, start_char)) {
                 GtkTextIter start_iter, end_iter;
                 gtk_text_buffer_get_iter_at_offset(buf, &start_iter, start_char);
                 gtk_text_buffer_get_iter_at_offset(buf, &end_iter, start_char + delim_len);
@@ -181,29 +208,10 @@ static void apply_regex_conceal(GtkTextBuffer *buf, const gchar *text, const gch
         has_match = g_match_info_next(match_info, &error);
     }
     g_match_info_free(match_info);
-    if (regex != regex_bold && regex != regex_highlight && regex != regex_italic) {
-        g_regex_unref(regex);
-    }
 }
 
 static void apply_regex_conceal_local(GtkTextBuffer *buf, const gchar *text, gint range_start_offset, const gchar *pattern, gint cursor_char, gint delim_len, GtkTextTag *conceal_tag) {
-    static GRegex *regex_bold = NULL;
-    static GRegex *regex_highlight = NULL;
-    static GRegex *regex_italic = NULL;
-    GRegex *regex = NULL;
-
-    if (strcmp(pattern, "\\*\\*([^\\n]*?[^\\n\\*][^\\n]*?)\\*\\*") == 0) {
-        if (!regex_bold) regex_bold = g_regex_new(pattern, G_REGEX_DEFAULT, 0, NULL);
-        regex = regex_bold;
-    } else if (strcmp(pattern, "==([^\\n]*?[^\\n=][^\\n]*?)==") == 0) {
-        if (!regex_highlight) regex_highlight = g_regex_new(pattern, G_REGEX_DEFAULT, 0, NULL);
-        regex = regex_highlight;
-    } else if (strcmp(pattern, "(?<!\\*)\\*([^\\n\\*]+?)\\*(?!\\*)") == 0) {
-        if (!regex_italic) regex_italic = g_regex_new(pattern, G_REGEX_DEFAULT, 0, NULL);
-        regex = regex_italic;
-    } else {
-        regex = g_regex_new(pattern, G_REGEX_DEFAULT, 0, NULL);
-    }
+    GRegex *regex = get_cached_regex(pattern);
     if (!regex) return;
 
     GError *error = NULL;
@@ -219,7 +227,7 @@ static void apply_regex_conceal_local(GtkTextBuffer *buf, const gchar *text, gin
             gint start_char = range_start_offset + start_char_local;
             gint end_char = range_start_offset + end_char_local;
             gboolean cursor_inside = (cursor_char >= start_char && cursor_char <= end_char);
-            if (!cursor_inside) {
+            if (!cursor_inside && !conceal_line_hostile(buf, start_char)) {
                 gint total_chars = gtk_text_buffer_get_char_count(buf);
 
                 gint c_start1 = start_char;
@@ -251,9 +259,60 @@ static void apply_regex_conceal_local(GtkTextBuffer *buf, const gchar *text, gin
         has_match = g_match_info_next(match_info, &error);
     }
     g_match_info_free(match_info);
-    if (regex != regex_bold && regex != regex_highlight && regex != regex_italic) {
-        g_regex_unref(regex);
+}
+
+/* Underline is HTML in markdown (`<u>…</u>`). Unlike bold/italic — whose only
+ * editor treatment is hiding the markers — underline has no other visual cue,
+ * so we both (a) conceal the `<u>` / `</u>` tags and (b) apply a real Pango
+ * underline to the inner text. base_offset maps the regex match (run against a
+ * substring in the range pass) back to absolute buffer offsets. */
+static void apply_underline_md(GtkTextBuffer *buf, const gchar *text, gint base_offset,
+                               gint cursor_char, GtkTextTag *conceal_tag) {
+    GtkTextTagTable *table = gtk_text_buffer_get_tag_table(buf);
+    GtkTextTag *u_tag = gtk_text_tag_table_lookup(table, "md-underline");
+    if (!u_tag)
+        u_tag = gtk_text_buffer_create_tag(buf, "md-underline",
+                                           "underline", PANGO_UNDERLINE_SINGLE, NULL);
+
+    GRegex *regex = get_cached_regex("<u>(.+?)</u>");
+    if (!regex) return;
+
+    const int OPEN = 3;   /* "<u>"  */
+    const int CLOSE = 4;  /* "</u>" */
+    gint total = gtk_text_buffer_get_char_count(buf);
+
+    GError *error = NULL;
+    GMatchInfo *match_info = NULL;
+    gboolean has_match = g_regex_match(regex, text, 0, &match_info);
+    while (has_match) {
+        gint start_byte = 0, end_byte = 0;
+        if (g_match_info_fetch_pos(match_info, 0, &start_byte, &end_byte)) {
+            gint sc = base_offset + g_utf8_pointer_to_offset(text, text + start_byte);
+            gint ec = base_offset + g_utf8_pointer_to_offset(text, text + end_byte);
+            if (sc < 0) sc = 0;
+            if (ec > total) ec = total;
+
+            GtkTextIter a, b;
+            /* Inner text → real underline. */
+            if (ec - CLOSE > sc + OPEN) {
+                gtk_text_buffer_get_iter_at_offset(buf, &a, sc + OPEN);
+                gtk_text_buffer_get_iter_at_offset(buf, &b, ec - CLOSE);
+                gtk_text_buffer_apply_tag(buf, u_tag, &a, &b);
+            }
+            /* Hide the markers unless the caret is inside (so they can be edited). */
+            gboolean cursor_inside = (cursor_char >= sc && cursor_char <= ec);
+            if (!cursor_inside && conceal_tag) {
+                gtk_text_buffer_get_iter_at_offset(buf, &a, sc);
+                gtk_text_buffer_get_iter_at_offset(buf, &b, sc + OPEN);
+                gtk_text_buffer_apply_tag(buf, conceal_tag, &a, &b);
+                gtk_text_buffer_get_iter_at_offset(buf, &a, ec - CLOSE);
+                gtk_text_buffer_get_iter_at_offset(buf, &b, ec);
+                gtk_text_buffer_apply_tag(buf, conceal_tag, &a, &b);
+            }
+        }
+        has_match = g_match_info_next(match_info, &error);
     }
+    g_match_info_free(match_info);
 }
 
 static gboolean local_conceal_queued = FALSE;
@@ -278,9 +337,15 @@ static void update_conceal_markdown_all_impl(GtkTextBuffer *buf) {
                                                  "foreground", "rgba(0,0,0,0)",
                                                  NULL);
     }
-    /* Conceal must outrank heading/syntax tags or their scale wins. */
-    gtk_text_tag_set_priority(conceal_tag,
-        gtk_text_tag_table_get_size(table) - 1);
+    /* Conceal must outrank heading/syntax tags or their scale wins. Only
+     * reassign when actually wrong — set_priority dirties the buffer, and this
+     * runs on every cursor move / edit, so skipping the no-op avoids needless
+     * redraw churn. */
+    {
+        const int want = gtk_text_tag_table_get_size(table) - 1;
+        if (gtk_text_tag_get_priority(conceal_tag) != want)
+            gtk_text_tag_set_priority(conceal_tag, want);
+    }
     GtkTextTag *h1_tag = gtk_text_buffer_get_tag_table(buf);
     GtkTextTag *h1_tag_lookup = gtk_text_tag_table_lookup(table, "heading1");
     if (!h1_tag_lookup) h1_tag_lookup = gtk_text_buffer_create_tag(buf, "heading1", "scale", 2.0, NULL);
@@ -298,6 +363,10 @@ static void update_conceal_markdown_all_impl(GtkTextBuffer *buf) {
     gtk_text_buffer_remove_tag(buf, h2_tag_lookup, &start, &end);
     gtk_text_buffer_remove_tag(buf, h3_tag_lookup, &start, &end);
     gtk_text_buffer_remove_tag(buf, h4_tag_lookup, &start, &end);
+    {
+        GtkTextTag *u_clear = gtk_text_tag_table_lookup(table, "md-underline");
+        if (u_clear) gtk_text_buffer_remove_tag(buf, u_clear, &start, &end);
+    }
 
     gchar *text = gtk_text_buffer_get_text(buf, &start, &end, TRUE);
     if (!text || strlen(text) == 0) {
@@ -334,6 +403,9 @@ static void update_conceal_markdown_all_impl(GtkTextBuffer *buf) {
     /* Images: match and conceal entire match */
     apply_regex_conceal(buf, text, "!\\[[^\\]]*\\]\\([^)]*\\)", cursor_char, 2, conceal_tag);
 
+    /* Underline: conceal <u>/</u> and underline the inner text. */
+    apply_underline_md(buf, text, 0, cursor_char, conceal_tag);
+
     g_free(text);
 
     /* Heading size tags pass */
@@ -350,7 +422,8 @@ static void update_conceal_markdown_all_impl(GtkTextBuffer *buf) {
             while (line_text[h_level] == '#') {
                 h_level++;
             }
-            if (h_level > 0 && (line_text[h_level] == ' ' || line_text[h_level] == '\0')) {
+            if (h_level > 0 && (line_text[h_level] == ' ' || line_text[h_level] == '\0') &&
+                !strchr(line_text, '<') && !strchr(line_text, '|')) {
                 if (h_level == 1) {
                     gtk_text_buffer_apply_tag(buf, h1_tag_lookup, &line_start, &line_end);
                 } else if (h_level == 2) {
@@ -401,6 +474,7 @@ void update_conceal_markdown_all_sync(GtkTextBuffer *buf) {
 
 void update_conceal_markdown_all(GtkTextBuffer *buf) {
     (void)buf;
+    if (qirtas_no_conceal) return;
     if (global_conceal_queued) return;
     if (!global_gui) return;
     
@@ -411,21 +485,26 @@ void update_conceal_markdown_all(GtkTextBuffer *buf) {
     g_idle_add(idle_global_conceal_cb, d);
 }
 
-static void update_conceal_markdown_impl(GtkTextBuffer *buf) {
+/* Reconceal exactly the line span [first_line, last_line] (inclusive),
+ * clamped to the buffer. The single O(N) full-buffer pass lives in
+ * update_conceal_markdown_all_impl; this is what the edit path and the
+ * cursor-move path use so cost scales with the edit, not the document. */
+static void update_conceal_markdown_range_impl(GtkTextBuffer *buf, int first_line, int last_line) {
     if (global_gui && global_gui->in_conceal_update) return;
     if (global_gui) global_gui->in_conceal_update = TRUE;
 
     GtkTextMark *insert_mark = gtk_text_buffer_get_insert(buf);
-    GtkTextIter cursor_iter;
-    gtk_text_buffer_get_iter_at_mark(buf, &cursor_iter, insert_mark);
 
-    int cursor_line = gtk_text_iter_get_line(&cursor_iter);
     int total_lines = gtk_text_buffer_get_line_count(buf);
 
-    int start_line = cursor_line - 1;
+    int start_line = first_line;
     if (start_line < 0) start_line = 0;
-    int end_line = cursor_line + 1;
+    int end_line = last_line;
     if (end_line >= total_lines) end_line = total_lines - 1;
+    if (end_line < start_line) {
+        if (global_gui) global_gui->in_conceal_update = FALSE;
+        return;
+    }
 
     GtkTextIter start, end;
     gtk_text_buffer_get_iter_at_line(buf, &start, start_line);
@@ -447,9 +526,14 @@ static void update_conceal_markdown_impl(GtkTextBuffer *buf) {
                                                  "foreground", "rgba(0,0,0,0)",
                                                  NULL);
     }
-    /* Conceal must outrank heading/syntax tags or their scale wins. */
-    gtk_text_tag_set_priority(conceal_tag,
-        gtk_text_tag_table_get_size(table) - 1);
+    /* Conceal must outrank heading/syntax tags or their scale wins. Only
+     * reassign when actually wrong — set_priority dirties the buffer and this
+     * runs on every cursor move / edit. */
+    {
+        const int want = gtk_text_tag_table_get_size(table) - 1;
+        if (gtk_text_tag_get_priority(conceal_tag) != want)
+            gtk_text_tag_set_priority(conceal_tag, want);
+    }
     GtkTextTag *h1_tag = gtk_text_tag_table_lookup(table, "heading1");
     if (!h1_tag) h1_tag = gtk_text_buffer_create_tag(buf, "heading1", "scale", 2.0, NULL);
     GtkTextTag *h2_tag = gtk_text_tag_table_lookup(table, "heading2");
@@ -468,10 +552,14 @@ static void update_conceal_markdown_impl(GtkTextBuffer *buf) {
     gtk_text_buffer_remove_tag(buf, h2_tag, &start, &end);
     gtk_text_buffer_remove_tag(buf, h3_tag, &start, &end);
     gtk_text_buffer_remove_tag(buf, h4_tag, &start, &end);
+    {
+        GtkTextTag *u_clear = gtk_text_tag_table_lookup(table, "md-underline");
+        if (u_clear) gtk_text_buffer_remove_tag(buf, u_clear, &start, &end);
+    }
 
     if (!strchr(text, '*') && !strchr(text, '=') && !strchr(text, '#') &&
         !strchr(text, '[') && !strchr(text, ']') && !strchr(text, '(') &&
-        !strchr(text, ')') && !strchr(text, '!')) {
+        !strchr(text, ')') && !strchr(text, '!') && !strchr(text, '<')) {
         g_free(text);
         if (global_gui) global_gui->in_conceal_update = FALSE;
         return;
@@ -499,6 +587,9 @@ static void update_conceal_markdown_impl(GtkTextBuffer *buf) {
     apply_regex_conceal_local(buf, text, range_start_offset, "\\[([^\\]]+)\\]\\([^)]*\\)", cursor_char, 1, conceal_tag);
     apply_regex_conceal_local(buf, text, range_start_offset, "!\\[[^\\]]*\\]\\([^)]*\\)", cursor_char, 2, conceal_tag);
 
+    /* Underline: conceal <u>/</u> and underline the inner text. */
+    apply_underline_md(buf, text, range_start_offset, cursor_char, conceal_tag);
+
     g_free(text);
 
     for (int i = start_line; i <= end_line; i++) {
@@ -513,7 +604,8 @@ static void update_conceal_markdown_impl(GtkTextBuffer *buf) {
             while (line_text[h_level] == '#') {
                 h_level++;
             }
-            if (h_level > 0 && (line_text[h_level] == ' ' || line_text[h_level] == '\0')) {
+            if (h_level > 0 && (line_text[h_level] == ' ' || line_text[h_level] == '\0') &&
+                !strchr(line_text, '<') && !strchr(line_text, '|')) {
                 if (h_level == 1) {
                     gtk_text_buffer_apply_tag(buf, h1_tag, &line_start, &line_end);
                 } else if (h_level == 2) {
@@ -529,6 +621,23 @@ static void update_conceal_markdown_impl(GtkTextBuffer *buf) {
     }
 
     if (global_gui) global_gui->in_conceal_update = FALSE;
+}
+
+/* Public ranged reconceal — used by the edit-debounce path to touch only the
+ * lines that actually changed instead of the whole document. */
+void update_conceal_markdown_range(GtkTextBuffer *buf, int first_line, int last_line) {
+    if (qirtas_no_conceal) return;
+    update_conceal_markdown_range_impl(buf, first_line, last_line);
+}
+
+/* Cursor-move reconceal: the line under the caret plus one on each side, so
+ * syntax markers reveal/hide as the caret enters/leaves them. */
+static void update_conceal_markdown_impl(GtkTextBuffer *buf) {
+    GtkTextMark *insert_mark = gtk_text_buffer_get_insert(buf);
+    GtkTextIter cursor_iter;
+    gtk_text_buffer_get_iter_at_mark(buf, &cursor_iter, insert_mark);
+    int cursor_line = gtk_text_iter_get_line(&cursor_iter);
+    update_conceal_markdown_range_impl(buf, cursor_line - 1, cursor_line + 1);
 }
 
 static gboolean idle_local_conceal_cb(gpointer user_data) {
@@ -552,6 +661,7 @@ static gboolean idle_local_conceal_cb(gpointer user_data) {
 
 void update_conceal_markdown(GtkTextBuffer *buf) {
     (void)buf;
+    if (qirtas_no_conceal) return;
     if (local_conceal_queued) return;
     if (!global_gui) return;
     
@@ -564,9 +674,9 @@ void update_conceal_markdown(GtkTextBuffer *buf) {
 
 void on_buffer_modified_changed(GtkTextBuffer *buf, gpointer user_data) {
     AppGui *gui = (AppGui *)user_data;
-    if (gui && gui->active_tab_index != -1 && gui->active_tab_index < gui->num_tabs) {
+    if (gui && gui->tabs.active != -1 && gui->tabs.active < gui->tabs.count) {
         gboolean is_modified = gtk_text_buffer_get_modified(buf);
-        gui->tab_modified[gui->active_tab_index] = is_modified;
+        gui->tabs.modified[gui->tabs.active] = is_modified;
         gui_tabs_refresh(gui);
     }
 }
@@ -583,6 +693,9 @@ void on_mark_set(GtkTextBuffer *buf, GtkTextIter *location, GtkTextMark *mark, g
         cursor_trail_wake(gui);
         /* Defer tag updates to idle so Pango layout is stable and doesn't get stale byte-index cache. */
         update_conceal_markdown(buf);
+        /* Reveal a markdown table to raw text when the cursor enters it, and
+         * re-grid it when the cursor leaves (deferred to idle internally). */
+        gui_table_on_cursor_moved(buf, gui);
 
         if (!gtk_widget_get_realized(gui->source_view)) return;
         if (gui->primary_button_down && !gui->mouse_dragging) return;

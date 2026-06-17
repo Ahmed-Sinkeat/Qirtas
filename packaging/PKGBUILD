@@ -1,0 +1,54 @@
+# Maintainer: Ahmed Sinkeat <ahmedsinkeat2002@gmail.com>
+#
+# Builds Qirtas from the checkout this file lives in. Run `makepkg -si` from
+# this packaging/ directory. The PKGBUILD lives in a subdirectory on purpose:
+# makepkg's $srcdir is "$startdir/src", and putting the PKGBUILD at the repo
+# root would make that collide with the project's own src/ (a `makepkg -C`
+# would then delete the real source). From here, the repo root is "$startdir/..".
+pkgname=qirtas
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Focused markdown notebook — Zig backend, GTK4/Libadwaita frontend"
+arch=('x86_64')
+url="https://github.com/Ahmed-Sinkeat/qirtas"
+license=('GPL3')
+depends=('gtk4' 'gtksourceview5' 'libadwaita' 'sqlite' 'curl' 'adwaita-icon-theme')
+makedepends=('zig')
+source=()
+sha256sums=()
+
+build() {
+  cd "$startdir/.."
+  # This build.zig sets preferred_optimize_mode, so release mode is selected
+  # with --release=<mode> (not -Doptimize=...). 'safe' keeps bounds/overflow
+  # checks — sensible for code touching user files, crypto, and sync.
+  zig build --release=safe
+}
+
+package() {
+  local root="$startdir/.."
+
+  # Executable.
+  install -Dm755 "$root/zig-out/bin/qirtas" "$pkgdir/usr/bin/qirtas"
+
+  # Runtime assets (CSS themes + bundled icon set). The binary looks for these
+  # under /usr/share/qirtas/<repo-relative-path>, so preserve the src/ui layout.
+  install -d "$pkgdir/usr/share/qirtas/src/ui"
+  cp -r "$root/src/ui/themes" "$pkgdir/usr/share/qirtas/src/ui/"
+  cp -r "$root/src/ui/icons"  "$pkgdir/usr/share/qirtas/src/ui/"
+  # GtkSourceView language def + style schemes live at src/ui top level, not in
+  # themes/. Without these the editor loses syntax highlighting after install
+  # (light mode falls back to a stock scheme, dark mode finds none).
+  install -Dm644 -t "$pkgdir/usr/share/qirtas/src/ui" \
+    "$root/src/ui/qirtas_markdown.lang" \
+    "$root/src/ui"/*.style-scheme.xml
+
+  # Desktop entry.
+  install -Dm644 "$startdir/qirtas.desktop" \
+    "$pkgdir/usr/share/applications/org.qirtas.notebook.desktop"
+
+  # App icon (matches the GTK application id org.qirtas.notebook, so it is used
+  # for the window/taskbar too). qirtas-logo.png is not square; GTK scales it.
+  install -Dm644 "$root/src/ui/icons/qirtas-logo.png" \
+    "$pkgdir/usr/share/icons/hicolor/512x512/apps/org.qirtas.notebook.png"
+}

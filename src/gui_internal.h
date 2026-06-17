@@ -109,10 +109,9 @@ typedef struct {
     GtkWidget *btn_sync_icon_bottom;
     GtkWidget *btn_status_actions;
 
-    /* Virtual document layout */
-    GtkWidget     *virtual_layout_box;
-    GtkWidget     *top_spacer;
-    GtkWidget     *bottom_spacer;
+    /* Scroll / mouse-drag / buffer-generation state (residual virtual-scroll
+     * fields removed — see ADR-0002; loading_viewport is now a generic
+     * suppress-side-effects-during-load guard). */
     GtkAdjustment *vadjustment;
     gboolean       in_scroll_update;
     gboolean       scroll_queued;
@@ -121,27 +120,37 @@ typedef struct {
     gboolean       primary_button_down;
     double         mouse_press_x;
     double         mouse_press_y;
-    double         last_v_offset;
-    int            last_scroll_requested_line;
     guint          buffer_generation;
 
-    /* Cursor trail animation */
-    GtkWidget *cursor_trail_area;
-    gboolean   cursor_initialized;
-    double     cursor_target_x;
-    double     cursor_target_y;
-    double     cursor_current_x;
-    double     cursor_current_y;
-    double     cursor_height;
-    double     cursor_width;
+    /* Cursor trail animation + caret/pointer colour (owned by gui_cursor.c).
+     * See docs/adr/0006-appgui-substructs.md for the grouping convention. */
     struct {
-        double x;
-        double y;
-        double alpha;
-    } trail[GHOST_COUNT];
-    int      trail_len;
-    gboolean trail_needs_clear;
-    guint    cursor_tick_id;
+        GtkWidget *trail_area;
+        gboolean   initialized;
+        double     target_x;
+        double     target_y;
+        double     current_x;
+        double     current_y;
+        double     height;
+        double     width;
+        struct {
+            double x;
+            double y;
+            double alpha;
+        } trail[GHOST_COUNT];
+        int        trail_len;
+        gboolean   trail_needs_clear;
+        guint      tick_id;
+        gboolean   enable_trail;
+        gboolean   use_custom_trail_color;
+        GdkRGBA    custom_trail_color;
+        GtkWidget *trail_color_btn;
+        GtkWidget *trail_color_chk;
+        gboolean   use_custom_pointer_color;
+        GdkRGBA    custom_pointer_color;
+        GtkWidget *pointer_color_btn;
+        GtkWidget *pointer_color_chk;
+    } cursor;
 
     /* Layout preferences */
     GtkWidget *main_vertical_box;
@@ -154,38 +163,56 @@ typedef struct {
     GtkWidget *focus_chk;
     gboolean   enable_focus_mode;
     GtkWidget *wrap_chk;
+    GtkWidget *font_size_value_lbl;
     int        document_total_lines;
     int        line_height;
     /* Vault system */
     GtkWidget *vault_path_lbl_val;
 
-    /* Cursor trail */
-    gboolean enable_cursor_trail;
+    /* Editor chrome toggles (not cursor; cursor colour fields are in `cursor`). */
     gboolean enable_bottom_margin;
     gboolean enable_editor_border;
-    gboolean use_custom_trail_color;
-    GdkRGBA  custom_trail_color;
-    GtkWidget *trail_color_btn;
-    GtkWidget *trail_color_chk;
-    gboolean use_custom_pointer_color;
-    GdkRGBA  custom_pointer_color;
-    GtkWidget *pointer_color_btn;
-    GtkWidget *pointer_color_chk;
 
-    /* Tabs system */
-    char *open_tabs[20];
-    char *tab_contents[20];
-    gboolean tab_modified[20];
-    int num_tabs;
-    int active_tab_index;
-    GtkWidget *tab_bar_box;
-    GtkWidget *tab_bar_scroll;
-    GtkWidget *btn_tab_scroll_left;
-    GtkWidget *btn_tab_scroll_right;
+    /* Open document tabs + tab strip (owned by gui_tabs.c). See ADR-0006. */
+    struct {
+        char     *paths[20];
+        char     *contents[20];
+        gboolean  modified[20];
+        int       count;
+        int       active;
+        GtkWidget *strip;            /* top tab strip container */
+        GtkWidget *bar_box;
+        GtkWidget *bar_scroll;
+        GtkWidget *scroll_left_btn;
+        GtkWidget *scroll_right_btn;
+    } tabs;
 
     /* Re-entrancy guard */
     gboolean in_conceal_update;
     gboolean show_layout_dividers;
+
+    /* Dirty-line range accumulated across edits within one stats-debounce
+     * window. buffer_stats_timeout_cb reconceals only this range instead of
+     * the whole document. -1 = nothing dirty. */
+    int conceal_dirty_start;
+    int conceal_dirty_end;
+
+    /* TRUE when an edit since the last debounce inserted a backtick — a code
+     * fence may have just been typed or pasted (e.g. a block copied from a
+     * chat UI). The stats debounce then re-runs the code-pill pass; staying
+     * FALSE keeps the O(document) pill scan off the hot path for normal edits. */
+    gboolean code_pill_dirty;
+
+    /* TRUE when an edit inserted a '|' — a markdown table row may have been
+     * typed or pasted. The stats debounce then re-runs the table render pass.
+     * See gui_table.c (reveal-on-cursor grid rendering). */
+    gboolean table_dirty;
+
+    /* TRUE when an edit since the last debounce may have changed the heading
+     * outline (line added/removed, or a heading line touched). The stats
+     * debounce rebuilds gui_outline_refresh only when set — a plain keystroke
+     * inside a paragraph leaves it FALSE and skips the O(document) scan. */
+    gboolean outline_dirty;
 
     /* Editor preferences */
     gboolean  wrap_lines;
@@ -196,12 +223,12 @@ typedef struct {
     gboolean  text_width_full_page;
     gboolean  show_overview_map;
     gboolean  restore_session;
+    gboolean  autosave_enabled;
     gboolean  compact_mode;
     GtkWidget *source_map;
     GtkWidget *outline_box;
 
-    /* Redesign: top tab strip, card header band, desk outline panel */
-    GtkWidget *tab_strip;            /* moved to top of main_vertical_box */
+    /* Redesign: card header band, desk outline panel (tab strip → gui->tabs.strip) */
     GtkWidget *editor_card;          /* paper card wrapper: thread+header+text */
     GtkWidget *editor_header;        /* 46px card header band */
     GtkWidget *editor_thread;        /* 2px gradient thread on card top */
@@ -210,11 +237,13 @@ typedef struct {
     GtkWidget *outline_panel_inner;  /* content box, auto-hidden when empty */
     gboolean   outline_panel_visible;
 
-    /* User-resizable gap between the paper card and the desk edge (drag the
-     * card's outer edge); text_column_width is derived from the card width
-     * each tick, not persisted directly. */
+    /* Card Gap: symmetric margin between the paper card and the desk edge.
+     * 0 = full page width, larger = narrower centred card. Clamped each tick
+     * so the card never overflows a narrow window. */
     int        desk_gap;
     int        text_column_width;    /* derived cache, recomputed by paper_column_tick */
+    int        centered_text_width;  /* legacy pref, unused since Card-Gap-only model */
+    GtkWidget *width_slider;
     gboolean   resizing_text_column;
     int        resize_drag_start_gap;
     int        resize_drag_edge;     /* -1 = left edge, +1 = right edge, 0 = none */
@@ -241,6 +270,7 @@ void gui_outline_refresh(AppGui *gui);
 
 /* Perf observability: QIRTAS_PERF=1 logs main-loop callbacks > 8 ms. */
 extern int qirtas_perf_enabled;
+extern int qirtas_no_conceal;
 #define QIRTAS_PERF_BEGIN gint64 _qp_t0 = qirtas_perf_enabled ? g_get_monotonic_time() : 0
 #define QIRTAS_PERF_END(name) do { \
     if (qirtas_perf_enabled) { \
@@ -281,6 +311,98 @@ gboolean idle_render_hrs_cb(gpointer user_data);
 
 void gui_remeasure_line_height(void);
 
+void gui_set_sync_status(const char *status);
+void gui_show_toast(const char *msg);
+void gui_run_on_main_thread(GuiIdleCallback callback, void *user_data);
+
+/* Add/open popover widget bundle (gui_dialogs.c, built in activate). */
+typedef struct {
+    GtkWidget *popover;
+    GtkWidget *box_actions;
+    GtkWidget *box_input;
+    GtkWidget *entry_name;
+    AppGui *gui;
+} AddPopoverWidgets;
+
+/* Dialogs, add/open popover, folder prompt, shutdown (gui_dialogs.c). */
+void on_open_dialog_response(GObject *source_object, GAsyncResult *res, gpointer user_data);
+void on_vault_dialog_response(GObject *source_object, GAsyncResult *res, gpointer user_data);
+void on_open_vault_clicked(GtkButton *btn, gpointer user_data);
+void on_open_existing_clicked(GtkButton *btn, gpointer user_data);
+void on_create_submit(GtkEntry *entry, gpointer user_data);
+void on_create_new_clicked(GtkButton *btn, gpointer user_data);
+void on_popover_closed(GtkPopover *popover, gpointer user_data);
+void on_app_shutdown(GApplication *app, gpointer user_data);
+gboolean on_window_close_request(GtkWindow *window, gpointer user_data);
+void on_save_as_dialog_response(GObject *source_object, GAsyncResult *res, gpointer user_data);
+void prompt_new_folder(AppGui *gui, const char *parent_dir);
+
+/* Settings window opener (gui.c). */
+void on_settings_btn_clicked(GtkButton *btn, gpointer user_data);
+
+/* Status bar actions + overflow menu (gui_statusbar.c). */
+void popdown_ancestor_popover(GtkWidget *w);
+GtkWidget *status_menu_item(const char *icon, const char *label, const char *hint, GCallback cb, gpointer user_data);
+void on_status_menu_shortcuts(GtkButton *btn, gpointer user_data);
+void on_status_menu_settings(GtkButton *btn, gpointer user_data);
+void on_status_menu_quit(GtkButton *btn, gpointer user_data);
+void on_status_menu_find_replace(GtkButton *btn, gpointer user_data);
+void on_status_menu_fullscreen(GtkButton *btn, gpointer user_data);
+void on_status_menu_history(GtkButton *btn, gpointer user_data);
+void gui_save_window_geometry(AppGui *gui);
+void on_status_menu_copy_file(GtkButton *btn, gpointer user_data);
+void on_status_menu_save_as(GtkButton *btn, gpointer user_data);
+void on_status_bar_open_file_clicked(GtkButton *btn, gpointer user_data);
+void on_status_bar_new_file_clicked(GtkButton *btn, gpointer user_data);
+void on_status_bar_save_file_clicked(GtkButton *btn, gpointer user_data);
+void on_status_bar_export_pdf_clicked(GtkButton *btn, gpointer user_data);
+void on_read_mode_toggle_clicked(GtkButton *btn, gpointer user_data);
+void on_restart_clicked(GtkButton *btn, gpointer user_data);
+
+/* Paper-card geometry (shared between gui.c and gui_layout.c). */
+#define QIRTAS_DESK_GAP_MIN 0          /* 0 = full page width */
+#define QIRTAS_DESK_GAP_MAX 360
+#define QIRTAS_CARD_CHROME       160
+#define QIRTAS_TEXT_COLUMN_MIN   420
+#define QIRTAS_TEXT_COLUMN_MAX   840
+#define QIRTAS_CARD_MIN_WIDTH    280   /* gap auto-clamps so the card never goes below this */
+#define QIRTAS_CARD_INNER_PAD     28   /* breathing room between card edge and text */
+
+typedef struct {
+    AppGui *gui;
+    GtkTextMark *mark;
+    guint generation;
+} ReadModeScrollData;
+
+void zig_set_focus_mode(int enabled);
+
+/* Editor layout & display preferences (gui_layout.c). */
+void reorder_main_layout(AppGui *gui);
+void apply_editor_border(AppGui *gui);
+gboolean paper_column_tick(GtkWidget *widget, GdkFrameClock *clock, gpointer data);
+void apply_focus_mode(AppGui *gui);
+void toggle_read_mode(AppGui *gui);
+void apply_compact_mode(AppGui *gui);
+void apply_editor_prefs(AppGui *gui);
+void apply_layout_dividers(AppGui *gui);
+int  paper_edge_margin(AppGui *gui, GtkWidget *overlay);
+gboolean paper_column_timeout_wrapper(gpointer data);
+void on_editor_border_toggled(GObject *gobject, GParamSpec *pspec, gpointer user_data);
+void on_outline_close_clicked(GtkButton *btn, gpointer user_data);
+void on_compact_mode_toggled(GObject *gobject, GParamSpec *pspec, gpointer user_data);
+void on_highlight_line_toggled(GObject *gobject, GParamSpec *pspec, gpointer user_data);
+void on_line_numbers_toggled(GObject *gobject, GParamSpec *pspec, gpointer user_data);
+void on_restore_session_toggled(GObject *gobject, GParamSpec *pspec, gpointer user_data);
+void on_autosave_toggled(GObject *gobject, GParamSpec *pspec, gpointer user_data);
+void on_text_width_mode_changed(GObject *gobject, GParamSpec *pspec, gpointer user_data);
+void on_width_slider_changed(GtkRange *range, gpointer user_data);
+void on_card_gap_slider_changed(GtkRange *range, gpointer user_data);
+void on_focus_mode_toggled(GObject *gobject, GParamSpec *pspec, gpointer user_data);
+void on_column_resize_motion(GtkEventControllerMotion *ctrl, gdouble x, gdouble y, gpointer user_data);
+void on_column_resize_begin(GtkGestureDrag *gesture, gdouble x, gdouble y, gpointer user_data);
+void on_column_resize_update(GtkGestureDrag *gesture, gdouble offset_x, gdouble offset_y, gpointer user_data);
+void on_column_resize_end(GtkGestureDrag *gesture, gdouble offset_x, gdouble offset_y, gpointer user_data);
+
 extern AppGui *global_gui;
 extern GtkWidget *main_window;
 extern GtkWidget *global_window;
@@ -293,26 +415,36 @@ void init_css(AppGui *gui);
 void init_cursor_trail(AppGui *gui);
 void cursor_trail_wake(AppGui *gui);
 void gui_trigger_autosave(void);
+gboolean gui_autosave_enabled(void);
 void gui_history_record(const char *path);
+void show_file_history(AppGui *gui, const char *path);
 void draw_cursor_trail(GtkDrawingArea *area, cairo_t *cr, int width, int height, gpointer user_data);
 gboolean on_cursor_tick(GtkWidget *widget, GdkFrameClock *frame_clock, gpointer user_data);
 void gui_tabs_refresh(AppGui *gui);
 void gui_tabs_add_or_select(AppGui *gui, const char *filepath);
+void gui_tabs_close_all(AppGui *gui);
 void gui_tabs_setup_viewport(AppGui *gui);
 void qirtas_export_to_pdf(AppGui *gui);          /* themed chooser (gui_export.c) */
 void arabize_digits(const char *in, char *out, size_t out_size);
 int gui_get_absolute_cursor_line(void);
-void on_font_size_changed(GtkSpinButton *spin, gpointer user_data);
 void on_en_font_changed(GObject *gobject, GParamSpec *pspec, gpointer user_data);
 void on_ar_font_changed(GObject *gobject, GParamSpec *pspec, gpointer user_data);
 void on_theme_dropdown_changed(GObject *gobject, GParamSpec *pspec, gpointer user_data);
 void check_and_insert_hr(GtkTextBuffer *buf, AppGui *gui);
 void parse_and_render_hrs(GtkTextBuffer *buf, AppGui *gui);
+void parse_and_render_code_pills(GtkTextBuffer *buf, AppGui *gui);
+void parse_and_render_tables(GtkTextBuffer *buf, AppGui *gui);
+gboolean gui_table_reveal_at_cursor(GtkTextBuffer *buf, AppGui *gui);
+void gui_table_on_cursor_moved(GtkTextBuffer *buf, AppGui *gui);
+void gui_table_reset_reveal(GtkTextBuffer *buf);
 void apply_theme(AppGui *gui, const char *theme_name);
 gboolean qirtas_theme_is_dark(const char *theme_name);
 void gui_update_brand_logo(AppGui *gui);
 void toggle_read_mode(AppGui *gui);
 void update_editor_font(AppGui *gui);
+void gui_zoom_in(AppGui *gui);
+void gui_zoom_out(AppGui *gui);
+void gui_zoom_reset(AppGui *gui);
 void reset_cursor_trail(AppGui *gui);
 void gui_push_undo_snapshot(void);
 void gui_reload_full_buffer(void);
@@ -326,6 +458,7 @@ void on_replace_all_clicked(GtkButton *btn, gpointer user_data);
 gboolean on_search_entry_key(GtkEventControllerKey *ctrl, guint keyval, guint keycode, GdkModifierType state, gpointer user_data);
 void toggle_search(AppGui *gui);
 void toggle_fullscreen(AppGui *gui);
+void toggle_focus_mode(AppGui *gui);
 void on_search_icon_clicked(GtkButton *btn, gpointer user_data);
 void on_close_search_clicked(GtkButton *btn, gpointer user_data);
 void apply_wiki_link_tags(GtkTextBuffer *buf);
@@ -337,6 +470,7 @@ void apply_paragraph_alignment(GtkTextBuffer *buf, GtkJustification justificatio
 void on_editor_left_click(GtkGestureClick *gesture, gint n_press, gdouble x, gdouble y, gpointer user_data);
 void on_editor_motion(GtkEventControllerMotion *controller, gdouble x, gdouble y, gpointer user_data);
 void update_conceal_markdown(GtkTextBuffer *buf);
+void update_conceal_markdown_range(GtkTextBuffer *buf, int first_line, int last_line);
 void update_conceal_markdown_all(GtkTextBuffer *buf);
 void update_conceal_markdown_all_sync(GtkTextBuffer *buf);
 void on_buffer_changed(GtkTextBuffer *buf, gpointer user_data);
@@ -350,6 +484,7 @@ void save_pointer_color_settings(AppGui *gui);
 void load_trail_color_settings(AppGui *gui);
 void load_pointer_color_settings(AppGui *gui);
 void populate_explorer(AppGui *gui);
+void explorer_begin_new_folder(AppGui *gui, const char *parent_dir);
 void on_explorer_search_changed(GtkSearchEntry *entry, gpointer user_data);
 void on_file_card_clicked(GtkButton *btn, gpointer user_data);
 int explorer_sort_func(GtkListBoxRow *row1, GtkListBoxRow *row2, gpointer user_data);
@@ -370,6 +505,7 @@ void move_current_line(GtkTextBuffer *buf, gboolean up);
 gboolean on_editor_key_pressed(GtkEventControllerKey *ctrl, guint keyval, guint keycode, GdkModifierType state, gpointer user_data);
 void trigger_save_as(AppGui *gui);
 void gui_manual_save(AppGui *gui);
+void gui_paste_plain_text(AppGui *gui);
 void toggle_comment_current_line(GtkTextBuffer *buf);
 void clear_selection_formatting(GtkTextBuffer *buf);
 int gui_get_buffer_modified(void);
@@ -380,6 +516,7 @@ Position advance_position(Position pos, const char *text);
 void update_paragraph_direction_lines(GtkTextBuffer *buf, gint first_line, gint last_line);
 void update_all_paragraphs_direction(GtkTextBuffer *buf);
 void gui_refresh_buffer_stats(void);
+void gui_word_count_invalidate(void);
 Position gui_buffer_replace(GtkTextBuffer *buf, int start_off, int end_off, const char *replacement);
 void on_tree_file_right_click(GtkGestureClick *gesture, gint n_press, gdouble x, gdouble y, gpointer user_data);
 

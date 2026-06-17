@@ -43,28 +43,7 @@ static void switcher_scan_dir(GPtrArray *files, const char *dir, const char *pre
 
 /* Subsequence fuzzy score on normalized lowercase text.
  * -1 = no match. Bonuses: consecutive runs, match at a word start. */
-static int fuzzy_score(const char *haystack, const char *needle) {
-    if (!needle[0]) return 0;
-    int score = 0;
-    int run = 0;
-    const char *h = haystack;
-    const char *n = needle;
-    gboolean prev_was_boundary = TRUE;
-    while (*h && *n) {
-        gunichar hc = g_unichar_tolower(g_utf8_get_char(h));
-        gunichar nc = g_unichar_tolower(g_utf8_get_char(n));
-        if (hc == nc) {
-            score += 1 + run * 2 + (prev_was_boundary ? 3 : 0);
-            run++;
-            n = g_utf8_next_char(n);
-        } else {
-            run = 0;
-        }
-        prev_was_boundary = (hc == ' ' || hc == '-' || hc == '_' || hc == '/' || hc == '.');
-        h = g_utf8_next_char(h);
-    }
-    return (*n == '\0') ? score : -1;
-}
+/* fuzzy_score moved to src/markdown.zig (zig_fuzzy_score) — shared, testable. */
 
 static void switcher_open_path(SwitcherData *sd, const char *path) {
     gchar *dup = g_strdup(path);
@@ -97,7 +76,7 @@ static void switcher_refilter(SwitcherData *sd) {
     for (guint i = 0; i < sd->files->len; i++) {
         const char *path = g_ptr_array_index(sd->files, i);
         char *norm_p = zig_normalize_arabic(path);
-        int sc = fuzzy_score(norm_p ? norm_p : path, q);
+        int sc = zig_fuzzy_score(norm_p ? norm_p : path, q);
         if (norm_p) zig_free_normalized(norm_p);
         if (sc >= 0) {
             Scored e = { path, sc };

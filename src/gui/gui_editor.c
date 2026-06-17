@@ -55,7 +55,10 @@ void move_current_line(GtkTextBuffer *buf, gboolean up) {
     gtk_text_buffer_get_iter_at_mark(buf, &cursor_iter, gtk_text_buffer_get_insert(buf));
     int abs_line = gtk_text_iter_get_line(&cursor_iter);
     int col = gtk_text_iter_get_line_offset(&cursor_iter);
-    int total_lines = global_gui->document_total_lines;
+    /* Use the live GTK line count. document_total_lines was never maintained
+     * (always 0), so the old guard `abs_line >= total_lines - 1` was always
+     * true for the down case → Alt+Down silently did nothing. */
+    int total_lines = gtk_text_buffer_get_line_count(buf);
 
     if (up && abs_line == 0) return;
     if (!up && abs_line >= total_lines - 1) return;
@@ -106,30 +109,34 @@ void insert_horizontal_rule(GtkTextBuffer *buf) {
 
 void gui_manual_save(AppGui *gui) {
     if (!gui) return;
-    if (gui->active_tab_index != -1 && strcmp(gui->open_tabs[gui->active_tab_index], "Untitled") == 0) {
+    if (gui->tabs.active != -1 && strcmp(gui->tabs.paths[gui->tabs.active], "Untitled") == 0) {
         trigger_save_as(gui);
     } else {
         gui_trigger_autosave();
     }
 }
 
+/* F11: plain window fullscreen. Does NOT touch the editor chrome / focus mode —
+ * just makes the window fill the screen. */
 void toggle_fullscreen(AppGui *gui) {
     static gboolean is_fullscreen = FALSE;
-    extern void zig_set_focus_mode(int enabled);
-    extern void apply_focus_mode(AppGui *gui);
     if (is_fullscreen) {
         gtk_window_unfullscreen(GTK_WINDOW(gui->window));
         is_fullscreen = FALSE;
-        gui->enable_focus_mode = FALSE;
-        zig_set_focus_mode(0);
-        apply_focus_mode(gui);
     } else {
         gtk_window_fullscreen(GTK_WINDOW(gui->window));
         is_fullscreen = TRUE;
-        gui->enable_focus_mode = TRUE;
-        zig_set_focus_mode(1);
-        apply_focus_mode(gui);
     }
+}
+
+/* Ctrl+Shift+F: focus mode — hides sidebar/chrome and centers the text. Leaves
+ * the window's fullscreen state alone (use F11 for that). */
+void toggle_focus_mode(AppGui *gui) {
+    extern void zig_set_focus_mode(int enabled);
+    extern void apply_focus_mode(AppGui *gui);
+    gui->enable_focus_mode = !gui->enable_focus_mode;
+    zig_set_focus_mode(gui->enable_focus_mode ? 1 : 0);
+    apply_focus_mode(gui);
 }
 
 static void on_paste_plain_text_received(GObject *source_object, GAsyncResult *res, gpointer user_data) {
@@ -158,6 +165,22 @@ static void on_paste_plain_text_received(GObject *source_object, GAsyncResult *r
         gui_set_cursor_position(cursor_pos.line + 1, cursor_pos.col);
         g_free(text);
     }
+}
+
+/* All paste goes through here: read the clipboard as PLAIN TEXT only and insert
+ * via gui_buffer_replace. Qirtas is a markdown source editor — the buffer's tags
+ * (conceal scale, heading scale, rtl/ltr, wiki-link) and HR child anchors are
+ * presentation, never content. GTK4's default paste-clipboard deserializes its
+ * internal rich-text format when the clipboard came from a GtkTextView (i.e. a
+ * copy from within Qirtas), which re-creates orphan child anchors ("Trying to
+ * snapshot GtkGizmo without a current allocation") and re-applies tags mid
+ * buffer-mutation ("Invalid text buffer iterator" + apply_tag assertion), and
+ * the re-applied scale tags shift line heights so the viewport jumps. Reading
+ * text only sidesteps the whole rich-text round-trip. */
+void gui_paste_plain_text(AppGui *gui) {
+    if (!gui || !gui->source_view) return;
+    GdkClipboard *clipboard = gtk_widget_get_clipboard(GTK_WIDGET(gui->source_view));
+    gdk_clipboard_read_text_async(clipboard, NULL, on_paste_plain_text_received, gui);
 }
 
 gboolean on_editor_key_pressed(GtkEventControllerKey *ctrl,
@@ -222,8 +245,7 @@ gboolean on_editor_key_pressed(GtkEventControllerKey *ctrl,
     }
     /* ── Paste Plain Text ── */
     if (match_app_shortcut("paste_plain", keyval, keycode, state)) {
-        GdkClipboard *clipboard = gtk_widget_get_clipboard(GTK_WIDGET(gui->source_view));
-        gdk_clipboard_read_text_async(clipboard, NULL, on_paste_plain_text_received, gui);
+        gui_paste_plain_text(gui);
         return TRUE;
     }
     /* ── Duplicate Line ── */
@@ -307,6 +329,27 @@ gboolean on_editor_key_pressed(GtkEventControllerKey *ctrl,
         gui_manual_save(gui);
         return TRUE;
     }
+    /* ── Quick file switcher (Ctrl+P) — was defined but never wired ── */
+    if (match_app_shortcut("quick_switch", keyval, keycode, state)) {
+        show_quick_switcher(gui);
+        return TRUE;
+    }
+    /* ── Zoom (font size) — handled here because the editor controller reliably
+     * receives these; the window-level handler was pre-empted. ── */
+    if (match_app_shortcut("zoom_in", keyval, keycode, state) ||
+        (ctrl_held && (keyval == GDK_KEY_plus || keyval == GDK_KEY_KP_Add))) {
+        gui_zoom_in(gui);
+        return TRUE;
+    }
+    if (match_app_shortcut("zoom_out", keyval, keycode, state) ||
+        (ctrl_held && keyval == GDK_KEY_KP_Subtract)) {
+        gui_zoom_out(gui);
+        return TRUE;
+    }
+    if (match_app_shortcut("reset_zoom", keyval, keycode, state)) {
+        gui_zoom_reset(gui);
+        return TRUE;
+    }
     /* ── Undo & Redo ── */
     if (match_app_shortcut("undo", keyval, keycode, state)) {
         zig_undo();
@@ -322,14 +365,17 @@ gboolean on_editor_key_pressed(GtkEventControllerKey *ctrl,
     /* ── Copy, Cut, Paste ── */
     if (match_app_shortcut("copy", keyval, keycode, state)) {
         g_signal_emit_by_name(gui->source_view, "copy-clipboard");
+        gui_show_toast(qirtas_tr("Copied"));
         return TRUE;
     }
     if (match_app_shortcut("cut", keyval, keycode, state)) {
         g_signal_emit_by_name(gui->source_view, "cut-clipboard");
+        gui_show_toast(qirtas_tr("Cut"));
         return TRUE;
     }
     if (match_app_shortcut("paste", keyval, keycode, state)) {
-        g_signal_emit_by_name(gui->source_view, "paste-clipboard");
+        /* Plain text only — never GTK's rich-text paste (see gui_paste_plain_text). */
+        gui_paste_plain_text(gui);
         return TRUE;
     }
     /* ── Select All ── */
@@ -346,13 +392,19 @@ gboolean on_editor_key_pressed(GtkEventControllerKey *ctrl,
         start = end;
         gtk_text_iter_backward_word_start(&start);
 
-        int start_line = gtk_text_iter_get_line(&start);
-        int start_col = gtk_text_iter_get_line_offset(&start);
-        int end_line = gtk_text_iter_get_line(&end);
-        int end_col = gtk_text_iter_get_line_offset(&end);
-
         gint soff = gtk_text_iter_get_offset(&start);
         gint eoff = gtk_text_iter_get_offset(&end);
+        /* Punctuation runs (e.g. the "<!--" of an HTML comment) are word
+         * boundaries, so backward_word_start can land on the cursor itself →
+         * empty range → nothing deleted. Guarantee at least one char back. */
+        if (soff >= eoff && eoff > 0) {
+            start = end;
+            gtk_text_iter_backward_char(&start);
+            soff = gtk_text_iter_get_offset(&start);
+        }
+
+        int start_line = gtk_text_iter_get_line(&start);
+        int start_col = gtk_text_iter_get_line_offset(&start);
         gui_buffer_replace(buf, soff, eoff, "");   /* no reload — was the Ctrl+Backspace jump */
         gui_set_cursor_position(start_line + 1, start_col);
         return TRUE;
@@ -363,13 +415,19 @@ gboolean on_editor_key_pressed(GtkEventControllerKey *ctrl,
         end = start;
         gtk_text_iter_forward_word_end(&end);
 
-        int start_line = gtk_text_iter_get_line(&start);
-        int start_col = gtk_text_iter_get_line_offset(&start);
-        int end_line = gtk_text_iter_get_line(&end);
-        int end_col = gtk_text_iter_get_line_offset(&end);
-
         gint soff = gtk_text_iter_get_offset(&start);
         gint eoff = gtk_text_iter_get_offset(&end);
+        /* As with delete_prev_word: a punctuation run (e.g. "-->" closing an
+         * HTML comment) is a word boundary, so forward_word_end can sit on the
+         * cursor → empty range → nothing deleted. Guarantee one char forward. */
+        if (eoff <= soff && !gtk_text_iter_is_end(&end)) {
+            end = start;
+            gtk_text_iter_forward_char(&end);
+            eoff = gtk_text_iter_get_offset(&end);
+        }
+
+        int start_line = gtk_text_iter_get_line(&start);
+        int start_col = gtk_text_iter_get_line_offset(&start);
         gui_buffer_replace(buf, soff, eoff, "");   /* no reload — was the Ctrl+Delete jump */
         gui_set_cursor_position(start_line + 1, start_col);
         return TRUE;
