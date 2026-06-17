@@ -200,6 +200,7 @@ void qirtas_export_to_pdf(AppGui *gui);
 void update_editor_font(AppGui *gui);
 void check_and_insert_hr(GtkTextBuffer *buf, AppGui *gui);
 void parse_and_render_hrs(GtkTextBuffer *buf, AppGui *gui);
+void parse_and_render_code_pills(GtkTextBuffer *buf, AppGui *gui);
 static char *replace_anchors_with_hrs(const char *src);
 void apply_paragraph_alignment(GtkTextBuffer *buf, GtkJustification justification);
 void move_current_line(GtkTextBuffer *buf, gboolean up);
@@ -3280,6 +3281,7 @@ void gui_set_text(const char *text, int len) {
     reset_cursor_trail(global_gui);
 
     parse_and_render_hrs(buf, global_gui);
+    parse_and_render_code_pills(buf, global_gui);
     /* A freshly loaded file is not a user edit — don't mark it dirty (was
      * lighting the unsaved dot on every tab the moment it opened). */
     gtk_text_buffer_set_modified(buf, FALSE);

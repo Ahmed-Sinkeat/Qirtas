@@ -197,6 +197,12 @@ typedef struct {
     int conceal_dirty_start;
     int conceal_dirty_end;
 
+    /* TRUE when an edit since the last debounce inserted a backtick — a code
+     * fence may have just been typed or pasted (e.g. a block copied from a
+     * chat UI). The stats debounce then re-runs the code-pill pass; staying
+     * FALSE keeps the O(document) pill scan off the hot path for normal edits. */
+    gboolean code_pill_dirty;
+
     /* TRUE when an edit since the last debounce may have changed the heading
      * outline (line added/removed, or a heading line touched). The stats
      * debounce rebuilds gui_outline_refresh only when set — a plain keystroke
@@ -421,6 +427,7 @@ void on_ar_font_changed(GObject *gobject, GParamSpec *pspec, gpointer user_data)
 void on_theme_dropdown_changed(GObject *gobject, GParamSpec *pspec, gpointer user_data);
 void check_and_insert_hr(GtkTextBuffer *buf, AppGui *gui);
 void parse_and_render_hrs(GtkTextBuffer *buf, AppGui *gui);
+void parse_and_render_code_pills(GtkTextBuffer *buf, AppGui *gui);
 void apply_theme(AppGui *gui, const char *theme_name);
 gboolean qirtas_theme_is_dark(const char *theme_name);
 void gui_update_brand_logo(AppGui *gui);
