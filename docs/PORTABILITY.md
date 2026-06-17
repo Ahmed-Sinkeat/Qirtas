@@ -68,8 +68,29 @@ those feed the widget builder directly and aren't worth a risky boundary yet.
 - [x] `gui_codeblock.c` → fence/language parse (`fenceOnly`, `codeFenceLang`)
 - [ ] `gui_wiki.c` → `[[link]]` parse (~180)
 - [ ] `gui_export.c` → `parse_blocks` / `parse_inline` (~155)
-- [ ] `gui_buffer.c` → word count, UTF-8 boundaries, heading detect (~320)
+- [~] `gui_buffer.c` — heading detect now reuses `headingLevel` (one parser). **Word count stays C** — it depends on Unicode `g_unichar_isspace`/`ispunct` classification (see Constraints); porting ASCII-only would break Arabic word counts.
 - [ ] `gui_conceal.c` → marker parsing (~520) — biggest; extract regex/offset layer first
+
+## Constraints — why the remaining parsers aren't drop-ins
+
+The easy structure parsers (table, code-fence, heading) are done. The rest each
+need a deliberate design step, not a swap:
+
+1. **Unicode classification** — Zig std has no `isspace`/`ispunct`/`tolower` over
+   full Unicode (only encoding). Word count and any tokenizer that splits on
+   Unicode punctuation need either a small Arabic+ASCII+space classification
+   table in Zig, or to keep classification platform-side (GLib here,
+   `java.lang.Character` on Android) and pass results in. Same family as the
+   NFKC decision in `gui_search.c`.
+2. **Array-FFI** — parsers that return a *list* (cells: `split_row`; inline
+   tokens: `gui_export.c parse_inline`) need a C-ABI for returning many
+   spans/structs (e.g. fill a caller array of `{offset,len,kind}`). Worth doing
+   once, then reused by every list-returning parser.
+3. **Iterator-scan rework** — `gui_wiki.c` and `gui_conceal.c` scan the live
+   GtkTextBuffer via `gtk_text_iter_forward_search`/regex, not a string. Moving
+   them means pulling the line/range text into a slice, scanning in Zig, and
+   returning offset ranges the C maps back to iters + tags. A render-vs-parse
+   re-split, not a drop-in.
 
 ### Keep 100% C (don't bother — pure GTK plumbing)
 `gui.c` (3512), `gui_theme.c`, `gui_layout.c`, `gui_tabs.c`, `gui_statusbar.c`, `gui_hr.c`.

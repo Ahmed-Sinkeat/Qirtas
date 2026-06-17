@@ -40,9 +40,7 @@ static gboolean line_is_heading(GtkTextBuffer *buf, int line) {
     le = ls;
     if (!gtk_text_iter_ends_line(&le)) gtk_text_iter_forward_to_line_end(&le);
     gchar *t = gtk_text_buffer_get_text(buf, &ls, &le, TRUE);
-    int level = 0;
-    while (t[level] == '#') level++;
-    gboolean h = (level >= 1 && level <= 6 && t[level] == ' ' && t[level + 1] != '\0');
+    gboolean h = zig_heading_level(t) > 0; /* one heading parser, src/markdown.zig */
     g_free(t);
     return h;
 }
