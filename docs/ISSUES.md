@@ -1,6 +1,7 @@
 # Qirtas — Known Issues
 
 **Last audited:** 2026-06-17 (branch `full-buffer-editor-v2`).
+**Last fix pass:** 2026-06-17 (commits `345e502`, `cc9b4db`).
 
 This file tracks correctness/robustness issues found by code audit. It also
 records where the prose docs had drifted from the actual source so the drift
@@ -11,6 +12,45 @@ to *refute* it against the current tree. Items under "Confirmed" survived that
 refutation pass. Items under "Unverified candidates" were located but the
 refutation pass did not complete (session limit) — treat as leads, not facts,
 until checked.
+
+---
+
+## STATUS SUMMARY (read this first)
+
+Every confirmed correctness bug found in the audit is **fixed and committed** on
+`full-buffer-editor-v2`. Build is clean; `zig build test-regression` is green
+(includes a new wrong-key regression test). Each item below keeps its full
+write-up with a `✅ FIXED` note pointing at the change.
+
+**Fixed this pass (commits `345e502`, `cc9b4db`):**
+
+| # | Sev | What | Where |
+|---|-----|------|-------|
+| 1 | 🔴 | decrypt-fail → autosave overwrites ciphertext (data loss) | `main.zig` magic header + `active_load_failed` read-only |
+| 2 | 🟠 | GitHub poll UAF (`cancelled` flag + dialog ptr) | `gui_sync.c` refcounted `GithubAuthState` |
+| 4 | 🔴 | autosave serialized the view, dropping HR/table/code anchors | `gui.c` → `zig_save_document()` (serializes `doc_buf`) |
+| 5 | 🟠 | GitHub button `verification_uri` UAF | `gui_sync.c` owned copy + destroy notify |
+| — | 🟡 | live-HR insert injected a view-only newline (edit-map skew) | `gui_hr.c` |
+| — | 🟢 | `zig_get_text_for_line_range` negative-line guard | `main.zig` |
+| — | 🟢 | `zig_get_document_text` NUL/free length mismatch | `main.zig` |
+
+**Still open (deliberately not fixed — see notes in each section):**
+
+- **#3** App writes into its own source tree when `src/` opened as a vault —
+  architectural; needs external-files/vault separation. **No code fix yet.**
+- **No behavioral C tests** — ~14.7k lines of C never exercised. Large harness
+  effort. Highest-value first: conceal pass, HR renderer, buffer-replace.
+- **Flatpak manifest placeholder / no release pipeline** — release infra, not a
+  code bug.
+- **Conceal residual risk** — underlying GTK char-to-layout limit; already
+  mitigated (heuristic skip + kill-switch). No clean code fix.
+- **History keyed by basename** — *documented intentional* trade-off; full-path
+  keying breaks history unless record + viewer paths canonicalize identically.
+- **Undo push O(N²)** — bounded by `UNDO_CAPACITY` (100), low practical cost;
+  rewrite risks the undo tests for negligible gain.
+- **Unverified candidates** (undo snapshot across viewport reloads; table/HR
+  offset math under malformed input) — need adversarial verification *before* any
+  edit. Leads, not confirmed bugs.
 
 ---
 
