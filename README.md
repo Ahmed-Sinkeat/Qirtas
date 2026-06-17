@@ -87,6 +87,7 @@ Config and the vault DB live in `$XDG_CONFIG_HOME/qirtas/`
 |---|---|
 | [docs/SYNC.md](docs/SYNC.md) | Sync setup per provider, troubleshooting matrix (every error → cause → fix), **per-backend conflict behavior** |
 | [docs/SECURITY.md](docs/SECURITY.md) | Honest crypto threat model and the roadmap to a real one |
+| [docs/PORTABILITY.md](docs/PORTABILITY.md) | Plan to grow the Zig core (parse in Zig, render per-platform) for Windows + Android/Kotlin |
 | [src/STRUCTURE.md](src/STRUCTURE.md) | Source layout, where to edit what, invariants |
 | [src/As-Built Specification Document.md](src/As-Built%20Specification%20Document.md) | Architecture decisions, crash post-mortems, FFI bridge, testing status |
 

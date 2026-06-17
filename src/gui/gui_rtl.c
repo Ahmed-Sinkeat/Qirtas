@@ -11,45 +11,9 @@
  * TEXT DIRECTION (RTL/LTR)
  * ============================================================ */
 
-static gboolean is_arabic_char(gunichar c) {
-    return ((c >= 0x0600 && c <= 0x06FF) ||
-            (c >= 0x0750 && c <= 0x077F) ||
-            (c >= 0x08A0 && c <= 0x08FF) ||
-            (c >= 0xFB50 && c <= 0xFDFF) ||
-            (c >= 0xFE70 && c <= 0xFEFF));
-}
-
-static gboolean detect_rtl(const char *text) {
-    if (!text) return FALSE;
-    const char *p = text;
-    while (*p) {
-        gunichar c = g_utf8_get_char(p);
-        
-        // Skip whitespaces, digits, common punctuation, and markdown formatting characters
-        if (g_unichar_isspace(c) ||
-            g_unichar_isdigit(c) ||
-            g_unichar_ispunct(c) ||
-            c == '#' || c == '*' || c == '-' || c == '_' || c == '+' ||
-            c == '>' || c == '`' || c == '[' || c == ']' || c == '(' ||
-            c == ')' || c == '{' || c == '}' || c == '|' || c == '~') {
-            p = g_utf8_next_char(p);
-            continue;
-        }
-        
-        // Check if the first strong character is Arabic
-        if (is_arabic_char(c)) {
-            return TRUE;
-        }
-        
-        // If it starts with Latin/English characters, fall back to LTR
-        if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')) {
-            return FALSE;
-        }
-        
-        p = g_utf8_next_char(p);
-    }
-    return FALSE;
-}
+/* Direction detection now lives in Zig (src/markdown.zig, zig_detect_rtl) so it
+ * is shared with future platforms and covered by `zig build test-regression`.
+ * This module keeps only the GTK tag application. */
 
 static void update_paragraph_direction(GtkTextBuffer *buf, GtkTextIter *iter) {
     GtkTextTagTable *table = gtk_text_buffer_get_tag_table(buf);
@@ -71,7 +35,7 @@ static void update_paragraph_direction(GtkTextBuffer *buf, GtkTextIter *iter) {
     }
     gchar *text = gtk_text_iter_get_text(&start, &end);
     if (text) {
-        if (detect_rtl(text)) {
+        if (zig_detect_rtl(text)) {
             gtk_text_buffer_remove_tag(buf, ltr_tag, &start, &end);
             gtk_text_buffer_apply_tag(buf, rtl_tag, &start, &end);
         } else {
