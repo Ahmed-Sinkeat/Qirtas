@@ -64,7 +64,7 @@ structure parse* (return bool / ints / a small fixed result); **leave functions
 that return GLib string arrays as C glue** until a deliberate array-FFI design —
 those feed the widget builder directly and aren't worth a risky boundary yet.
 
-- [ ] `gui_table.c` — `is_delimiter_row`, `is_table_row`, column alignment → Zig (in progress). `split_row` stays C glue (returns a GPtrArray of cell strings).
+- [x] `gui_table.c` — `is_delimiter_row`, `is_table_row`, column alignment → Zig (`isTableDelimiter`/`isTableRow`/`tableColumnAligns`). `split_row` stays C glue (returns a GPtrArray of cell strings).
 - [ ] `gui_codeblock.c` → fence/language parse (~65)
 - [ ] `gui_wiki.c` → `[[link]]` parse (~180)
 - [ ] `gui_export.c` → `parse_blocks` / `parse_inline` (~155)

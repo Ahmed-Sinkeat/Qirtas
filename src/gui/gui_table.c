@@ -52,47 +52,29 @@ static GPtrArray *split_row(const char *line) {
     return cells;
 }
 
-/* A delimiter row: every cell is optional-colon, 1+ dashes, optional-colon. */
+/* Table structure detection moved to src/markdown.zig (shared + unit-tested);
+ * these stay as thin C glue. split_row (cell TEXT extraction for the widget)
+ * remains C — it returns a GLib string array, see docs/PORTABILITY.md. */
 static gboolean is_delimiter_row(const char *line) {
-    if (!strchr(line, '-')) return FALSE;
-    GPtrArray *cells = split_row(line);
-    gboolean ok = cells->len > 0;
-    for (guint i = 0; i < cells->len && ok; i++) {
-        const char *c = g_ptr_array_index(cells, i);
-        if (!*c) { ok = FALSE; break; }
-        const char *q = c;
-        if (*q == ':') q++;
-        int dn = 0;
-        while (*q == '-') { q++; dn++; }
-        if (*q == ':') q++;
-        if (*q != '\0' || dn == 0) ok = FALSE;
-    }
-    g_ptr_array_free(cells, TRUE);
-    return ok;
+    return zig_table_is_delimiter(line);
 }
 
-/* A plausible table row: non-blank and contains a pipe. */
 static gboolean is_table_row(const char *line) {
-    if (!line || !strchr(line, '|')) return FALSE;
-    for (const char *p = line; *p; p++)
-        if (*p != ' ' && *p != '\t' && *p != '\n' && *p != '\r') return TRUE;
-    return FALSE;
+    return zig_table_is_row(line);
 }
 
-/* Per-column GtkAlign from the delimiter row's colons. */
+/* Per-column GtkAlign from the delimiter row's colons (codes via Zig). */
 static void parse_alignments(const char *delim, GtkAlign *aligns, int max_cols) {
-    GPtrArray *cells = split_row(delim);
     for (int i = 0; i < max_cols; i++) aligns[i] = GTK_ALIGN_START;
-    for (guint i = 0; i < cells->len && (int)i < max_cols; i++) {
-        const char *c = g_ptr_array_index(cells, i);
-        size_t n = strlen(c);
-        gboolean left = (n > 0 && c[0] == ':');
-        gboolean right = (n > 0 && c[n - 1] == ':');
-        if (left && right) aligns[i] = GTK_ALIGN_CENTER;
-        else if (right)    aligns[i] = GTK_ALIGN_END;
-        else               aligns[i] = GTK_ALIGN_START;
+    if (max_cols <= 0) return;
+    int *codes = g_new0(int, max_cols);
+    int n = zig_table_aligns(delim, codes, max_cols);
+    for (int i = 0; i < n && i < max_cols; i++) {
+        aligns[i] = (codes[i] == 1) ? GTK_ALIGN_CENTER
+                  : (codes[i] == 2) ? GTK_ALIGN_END
+                                    : GTK_ALIGN_START;
     }
-    g_ptr_array_free(cells, TRUE);
+    g_free(codes);
 }
 
 /* ---- line / buffer helpers ---------------------------------------------- */
