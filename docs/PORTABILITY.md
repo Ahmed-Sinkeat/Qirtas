@@ -58,12 +58,18 @@ Deprioritized after a closer read (movable, but low cross-platform reuse):
 - `gui_index.c` (SQLite FTS, ~210 lines) — high value but its own focused task, not a Tier-1 lump-in.
 
 ### Tier 2 — the markdown parsers (the real prize, ~1,420 lines)
-- [ ] `gui_conceal.c` → marker parsing (~520) — biggest; extract regex/offset layer first
-- [ ] `gui_buffer.c` → word count, UTF-8 boundaries, heading detect (~320)
-- [ ] `gui_wiki.c` → `[[link]]` parse (~180)
-- [ ] `gui_table.c` → `split_row` / `is_delimiter_row` / alignment (~180)
-- [ ] `gui_export.c` → `parse_blocks` / `parse_inline` (~155)
+
+**Approach: one parser per change, carefully.** Move the *pure predicates and
+structure parse* (return bool / ints / a small fixed result); **leave functions
+that return GLib string arrays as C glue** until a deliberate array-FFI design —
+those feed the widget builder directly and aren't worth a risky boundary yet.
+
+- [ ] `gui_table.c` — `is_delimiter_row`, `is_table_row`, column alignment → Zig (in progress). `split_row` stays C glue (returns a GPtrArray of cell strings).
 - [ ] `gui_codeblock.c` → fence/language parse (~65)
+- [ ] `gui_wiki.c` → `[[link]]` parse (~180)
+- [ ] `gui_export.c` → `parse_blocks` / `parse_inline` (~155)
+- [ ] `gui_buffer.c` → word count, UTF-8 boundaries, heading detect (~320)
+- [ ] `gui_conceal.c` → marker parsing (~520) — biggest; extract regex/offset layer first
 
 ### Keep 100% C (don't bother — pure GTK plumbing)
 `gui.c` (3512), `gui_theme.c`, `gui_layout.c`, `gui_tabs.c`, `gui_statusbar.c`, `gui_hr.c`.
