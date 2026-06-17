@@ -228,12 +228,20 @@ void parse_and_render_code_pills(GtkTextBuffer *buf, AppGui *gui) {
                 gtk_box_append(GTK_BOX(pill), copy);
                 gtk_text_view_add_child_at_anchor(GTK_TEXT_VIEW(gui->source_view), pill, anchor);
 
-                /* Monospace the body lines [line+1 .. close_line-1]. */
-                if (close_line > line + 1) {
-                    GtkTextIter bs, be;
-                    gtk_text_buffer_get_iter_at_line(buf, &bs, line + 1);
-                    gtk_text_buffer_get_iter_at_line(buf, &be, close_line);
-                    gtk_text_buffer_apply_tag(buf, body, &bs, &be);
+                /* Monospace the body lines [line+1 .. close_line-1] — but NOT
+                 * Arabic/RTL lines. Monospace fonts break Arabic cursive joining
+                 * and often lack Arabic glyphs (letters mis-shape or vanish), so
+                 * Arabic code keeps the shaping UI font; only Latin lines get the
+                 * code look. */
+                for (int br = line + 1; br < close_line; br++) {
+                    GtkTextIter bls, ble;
+                    gtk_text_buffer_get_iter_at_line(buf, &bls, br);
+                    ble = bls;
+                    if (!gtk_text_iter_ends_line(&ble)) gtk_text_iter_forward_to_line_end(&ble);
+                    gchar *bt = gtk_text_buffer_get_text(buf, &bls, &ble, TRUE);
+                    gboolean rtl = bt ? zig_detect_rtl(bt) : FALSE;
+                    g_free(bt);
+                    if (!rtl) gtk_text_buffer_apply_tag(buf, body, &bls, &ble);
                 }
 
                 /* Hide the closing fence. */

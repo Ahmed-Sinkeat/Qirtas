@@ -9,6 +9,7 @@ zig-out/
 *.before_*
 test_run.log
 crash_run.log
+log.txt
 test_*.md
 2026-*-this-session-*.txt
 
