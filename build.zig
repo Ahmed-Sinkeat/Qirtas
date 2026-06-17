@@ -182,4 +182,29 @@ pub fn build(b: *std.Build) void {
 
     const reg_step = b.step("test-regression", "Full regression gate (all tests) — run in CI");
     reg_step.dependOn(&test_run.step);
+
+    // ── Standalone C behavioral test binary ──────────────────────────────
+    // Compiles gui_buffer.c together with tests/test_c_behavior.c (which
+    // provides stubs for all Zig symbols). Tests pure C logic — arabize_digits,
+    // arabic_count_phrase, arabic_lines_phrase, advance_position — without
+    // needing a GTK display. No Zig involved at runtime.
+    const c_test_mod = b.createModule(.{
+        .target = target,
+        .optimize = optimize,
+    });
+    c_test_mod.addCSourceFile(.{ .file = b.path("tests/test_c_behavior.c"), .flags = &.{} });
+    c_test_mod.addCSourceFile(.{ .file = b.path("src/gui/gui_buffer.c"), .flags = &.{} });
+    c_test_mod.addIncludePath(b.path("src"));
+    c_test_mod.linkSystemLibrary("gtk4", .{});
+    c_test_mod.linkSystemLibrary("gtksourceview-5", .{});
+    c_test_mod.linkSystemLibrary("libadwaita-1", .{});
+    c_test_mod.link_libc = true;
+
+    const c_test_exe = b.addExecutable(.{
+        .name = "test-c-behavior",
+        .root_module = c_test_mod,
+    });
+    const c_test_run = b.addRunArtifact(c_test_exe);
+    const c_test_step = b.step("test-c", "Run standalone C behavioral tests (no display required)");
+    c_test_step.dependOn(&c_test_run.step);
 }

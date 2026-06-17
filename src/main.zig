@@ -2636,3 +2636,112 @@ test "integration: undo after a multi-edit session restores the loaded document"
     zig_undo();
     try std.testing.expectEqualStrings(original, testDocText());
 }
+
+// ── C behavioral tests: pure-logic, no GTK display required ──────────────
+// Functions live in gui_buffer.c, compiled into the test binary via
+// addCSourceFile. No gtk_init() or display needed — pure string logic.
+
+extern fn arabize_digits(in: [*:0]const u8, out: [*]u8, out_size: usize) void;
+extern fn arabic_count_phrase(n: c_long, feminine: c_int, out: [*]u8, out_size: usize) void;
+extern fn arabic_lines_phrase(n: c_long, out: [*]u8, out_size: usize) void;
+extern fn advance_position(pos: Position, text: [*:0]const u8) Position;
+
+test "C arabize_digits: full digit string → Eastern Arabic numerals" {
+    var buf: [64]u8 = undefined;
+    arabize_digits("0123456789", &buf, buf.len);
+    try std.testing.expectEqualStrings("٠١٢٣٤٥٦٧٨٩", std.mem.sliceTo(&buf, 0));
+}
+
+test "C arabize_digits: non-digit ASCII passes through unchanged" {
+    var buf: [64]u8 = undefined;
+    arabize_digits("abc", &buf, buf.len);
+    try std.testing.expectEqualStrings("abc", std.mem.sliceTo(&buf, 0));
+}
+
+test "C arabize_digits: mixed latin + digits" {
+    var buf: [64]u8 = undefined;
+    arabize_digits("page 42", &buf, buf.len);
+    try std.testing.expectEqualStrings("page ٤٢", std.mem.sliceTo(&buf, 0));
+}
+
+test "C arabic_count_phrase: singular feminine (1 word)" {
+    var buf: [64]u8 = undefined;
+    arabic_count_phrase(1, 1, &buf, buf.len);
+    try std.testing.expectEqualStrings("كلمة واحدة", std.mem.sliceTo(&buf, 0));
+}
+
+test "C arabic_count_phrase: dual feminine (2 words)" {
+    var buf: [64]u8 = undefined;
+    arabic_count_phrase(2, 1, &buf, buf.len);
+    try std.testing.expectEqualStrings("كلمتان", std.mem.sliceTo(&buf, 0));
+}
+
+test "C arabic_count_phrase: 3-10 gender-polarity feminine (6 words)" {
+    var buf: [64]u8 = undefined;
+    arabic_count_phrase(6, 1, &buf, buf.len);
+    // feminine noun → number takes feminine form (ست, no ة)
+    try std.testing.expectEqualStrings("ست كلمات", std.mem.sliceTo(&buf, 0));
+}
+
+test "C arabic_count_phrase: 3-10 gender-polarity masculine (6 chars)" {
+    var buf: [64]u8 = undefined;
+    arabic_count_phrase(6, 0, &buf, buf.len);
+    // masculine noun → number takes masculine form (ستة, with ة)
+    try std.testing.expectEqualStrings("ستة حروف", std.mem.sliceTo(&buf, 0));
+}
+
+test "C arabic_count_phrase: 11+ uses Eastern Arabic numeral + singular" {
+    var buf: [64]u8 = undefined;
+    arabic_count_phrase(11, 1, &buf, buf.len);
+    try std.testing.expectEqualStrings("١١ كلمة", std.mem.sliceTo(&buf, 0));
+}
+
+test "C arabic_count_phrase: 0 uses Eastern Arabic numeral + singular" {
+    var buf: [64]u8 = undefined;
+    arabic_count_phrase(0, 1, &buf, buf.len);
+    try std.testing.expectEqualStrings("٠ كلمة", std.mem.sliceTo(&buf, 0));
+}
+
+test "C arabic_lines_phrase: singular masculine (1 line)" {
+    var buf: [64]u8 = undefined;
+    arabic_lines_phrase(1, &buf, buf.len);
+    try std.testing.expectEqualStrings("سطر واحد", std.mem.sliceTo(&buf, 0));
+}
+
+test "C arabic_lines_phrase: dual (2 lines)" {
+    var buf: [64]u8 = undefined;
+    arabic_lines_phrase(2, &buf, buf.len);
+    try std.testing.expectEqualStrings("سطران", std.mem.sliceTo(&buf, 0));
+}
+
+test "C arabic_lines_phrase: masculine polarity 3-10 (3 lines)" {
+    var buf: [64]u8 = undefined;
+    arabic_lines_phrase(3, &buf, buf.len);
+    // masculine noun (سطر) → number takes masculine form (ثلاثة, with ة)
+    try std.testing.expectEqualStrings("ثلاثة أسطر", std.mem.sliceTo(&buf, 0));
+}
+
+test "C advance_position: ASCII advances col" {
+    const result = advance_position(.{ .line = 0, .col = 0 }, "hello");
+    try std.testing.expectEqual(@as(c_int, 0), result.line);
+    try std.testing.expectEqual(@as(c_int, 5), result.col);
+}
+
+test "C advance_position: newline increments line and resets col" {
+    const result = advance_position(.{ .line = 0, .col = 0 }, "hi\nbye");
+    try std.testing.expectEqual(@as(c_int, 1), result.line);
+    try std.testing.expectEqual(@as(c_int, 3), result.col);
+}
+
+test "C advance_position: Arabic codepoints each count as 1 col" {
+    // "مرحبا" = 5 Arabic codepoints, 10 UTF-8 bytes
+    const result = advance_position(.{ .line = 0, .col = 0 }, "مرحبا");
+    try std.testing.expectEqual(@as(c_int, 0), result.line);
+    try std.testing.expectEqual(@as(c_int, 5), result.col);
+}
+
+test "C advance_position: accumulates from non-zero start" {
+    const result = advance_position(.{ .line = 2, .col = 3 }, "!!");
+    try std.testing.expectEqual(@as(c_int, 2), result.line);
+    try std.testing.expectEqual(@as(c_int, 5), result.col);
+}
