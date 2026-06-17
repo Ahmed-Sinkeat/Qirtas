@@ -33,6 +33,9 @@ extern char *zig_arabic_search_regex(const char *normalized_input);
 extern int zig_table_is_delimiter(const char *line);  /* 1 = delimiter row */
 extern int zig_table_is_row(const char *line);         /* 1 = plausible table row */
 extern int zig_table_aligns(const char *delim, int *out_codes, int max); /* per-col 0/1/2; returns count */
+/* Fenced code blocks (src/markdown.zig). */
+extern int zig_fence_only(const char *line);                          /* 1 = closing/bare fence */
+extern int zig_code_fence_lang(const char *line, char *out, int max); /* 1 = opening fence; out = language */
 
 /* Zig -> C FFI */
 void gui_set_text(const char *text, int len);

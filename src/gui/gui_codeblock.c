@@ -24,34 +24,17 @@ extern void on_buffer_changed(GtkTextBuffer *buf, gpointer user_data);
  * half-mutated buffer with stale iterators. */
 extern void on_mark_set(GtkTextBuffer *buf, GtkTextIter *location, GtkTextMark *mark, gpointer user_data);
 
-/* A line that is only a code fence: optional leading whitespace, 3+ backticks,
- * then optional trailing whitespace. Used for the CLOSING fence. */
+/* Fence detection moved to src/markdown.zig (shared + unit-tested). These stay
+ * as thin C glue; lang_out keeps the g_strdup ownership the callers expect. */
 static gboolean fence_only(const char *s) {
-    if (!s) return FALSE;
-    while (*s == ' ' || *s == '\t') s++;
-    int ticks = 0;
-    while (*s == '`') { ticks++; s++; }
-    if (ticks < 3) return FALSE;
-    while (*s == ' ' || *s == '\t') s++;
-    return *s == '\0';
+    return s ? zig_fence_only(s) : FALSE;
 }
 
-/* An OPENING fence: optional leading whitespace, 3+ backticks, then an optional
- * language token. Returns the language (newly allocated, may be "") via lang_out
- * when it returns TRUE. A bare ``` is a valid opening fence with empty language. */
 static gboolean opening_fence(const char *s, char **lang_out) {
     if (!s) return FALSE;
-    while (*s == ' ' || *s == '\t') s++;
-    int ticks = 0;
-    while (*s == '`') { ticks++; s++; }
-    if (ticks < 3) return FALSE;
-    /* An info string can't itself contain a backtick (that would be ambiguous
-     * with inline code), so reject those. */
-    if (strchr(s, '`')) return FALSE;
-    while (*s == ' ' || *s == '\t') s++;
-    const char *start = s;
-    while (*s && *s != ' ' && *s != '\t') s++; /* first token = language */
-    *lang_out = g_strndup(start, (gsize)(s - start));
+    char lang[128];
+    if (!zig_code_fence_lang(s, lang, (int)sizeof lang)) return FALSE;
+    *lang_out = g_strdup(lang);
     return TRUE;
 }
 
