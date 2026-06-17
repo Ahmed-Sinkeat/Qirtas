@@ -45,14 +45,17 @@ Do it **incrementally, one parser per feature** — never big-bang. No Linux-vis
 portability + testability investment. Each move also becomes a `zig build test-regression` unit (closes the
 C-untested gap).
 
-### Tier 1 — pure logic, low risk (batch now)
-- [x] `gui_rtl.c` → `detect_rtl` / `is_arabic_char` (~75 lines) — Arabic core, high Android value *(template move — see src/markdown.zig)*
-- [ ] `gui_i18n.c` → translation table + `qirtas_tr` (~145 lines, pure data)
-- [ ] `gui_index.c` → SQLite FTS + file indexing (~210 lines, already FFI'd from Zig sync)
-- [ ] `gui_search.c` → Arabic search normalization (~45 lines)
-- [ ] `gui_outline.c` → heading extraction (~35 lines)
-- [ ] `gui_switcher.c` → fuzzy match + dir walk (~68 lines)
-- [ ] `gui_shortcuts.c` → shortcut-string parse (~67 lines)
+### Tier 1 — pure logic, low risk (done)
+Criterion that matters: **pure AND genuinely reused cross-platform** (not just "movable").
+- [x] `gui_rtl.c` → `detectRtl` / `isArabicChar` — Arabic core *(markdown.zig)*
+- [x] `gui_outline.c` → `headingLevel` (heading parse) *(markdown.zig)*
+- [x] `gui_switcher.c` → `fuzzyScore` (quick-open ranking) *(markdown.zig; dir-walk left in C)*
+- [x] `gui_search.c` → `arabicSearchRegex` *(markdown.zig; NFKC stays in C — platform-provided)*
+
+Deprioritized after a closer read (movable, but low cross-platform reuse):
+- ~~`gui_i18n.c`~~ — pure data, but Android localizes via `res/values/strings.xml`, not a Zig table.
+- ~~`gui_shortcuts.c`~~ — GDK-bound (`gdk_keyval_from_name`); Android input handling is unrelated.
+- `gui_index.c` (SQLite FTS, ~210 lines) — high value but its own focused task, not a Tier-1 lump-in.
 
 ### Tier 2 — the markdown parsers (the real prize, ~1,420 lines)
 - [ ] `gui_conceal.c` → marker parsing (~520) — biggest; extract regex/offset layer first
