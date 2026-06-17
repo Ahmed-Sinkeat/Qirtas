@@ -45,6 +45,8 @@ pub fn build(b: *std.Build) void {
         "src/gui/gui_hr.c",
         "src/gui/gui_codeblock.c",
         "src/gui/gui_table.c",
+        "src/gui/gui_todo.c",
+        "src/gui/gui_links.c",
         "src/gui/gui_search.c",
         "src/gui/gui_conceal.c",
         "src/gui/gui_wiki.c",

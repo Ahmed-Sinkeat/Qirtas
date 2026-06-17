@@ -696,6 +696,8 @@ void on_mark_set(GtkTextBuffer *buf, GtkTextIter *location, GtkTextMark *mark, g
         /* Reveal a markdown table to raw text when the cursor enters it, and
          * re-grid it when the cursor leaves (deferred to idle internally). */
         gui_table_on_cursor_moved(buf, gui);
+        gui_todo_on_cursor_moved(buf, gui);
+        gui_links_on_cursor_moved(buf, gui);
 
         if (!gtk_widget_get_realized(gui->source_view)) return;
         if (gui->primary_button_down && !gui->mouse_dragging) return;

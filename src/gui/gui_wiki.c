@@ -206,10 +206,19 @@ void on_editor_left_click(GtkGestureClick *gesture, gint n_press, gdouble x, gdo
 
     GdkModifierType state =
         gtk_event_controller_get_current_event_state(GTK_EVENT_CONTROLLER(gesture));
+
+    /* Markdown link [text](url): single-click in read mode, double/Ctrl in edit. */
+    GtkTextIter iter;
+    if (editor_get_iter_at_widget_point(gui, x, y, &iter)) {
+        if (gui_link_handle_click(gui, &iter, n_press, state)) {
+            gtk_gesture_set_state(GTK_GESTURE(gesture), GTK_EVENT_SEQUENCE_CLAIMED);
+            return;
+        }
+    }
+
     gboolean should_open_link = (n_press >= 2) || ((state & GDK_CONTROL_MASK) != 0);
     if (!should_open_link) return;
 
-    GtkTextIter iter;
     if (editor_get_iter_at_widget_point(gui, x, y, &iter)) {
         GtkTextTagTable *table = gtk_text_buffer_get_tag_table(gtk_text_view_get_buffer(GTK_TEXT_VIEW(gui->source_view)));
         GtkTextTag *wiki_tag = gtk_text_tag_table_lookup(table, "wiki-link");

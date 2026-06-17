@@ -34,15 +34,32 @@ void        zig_undo_commit(void)                                    {}
 int         zig_heading_level(const char *l)                         { (void)l; return 0; }
 
 /* ── stubs: other gui_*.c symbols ────────────────────────────────────────*/
-void        gui_get_cursor_position(int *l, int *c)                  { *l = 0; *c = 0; }
-void        gui_set_cursor_position(int l, int c)                    { (void)l;(void)c; }
-void        gui_set_cursor_position_quiet(int l, int c)              { (void)l;(void)c; }
-void        gui_outline_refresh(AppGui *g)                           { (void)g; }
-gboolean    gui_autosave_enabled(void)                               { return FALSE; }
-void        gui_trigger_autosave(void)                               {}
-void        gui_set_sync_state(QirtasSyncState s)                    { (void)s; }
-void        gui_show_toast(const char *m)                            { (void)m; }
-void        gui_reload_full_buffer(void)                             {}
+void           gui_get_cursor_position(int *l, int *c)               { *l = 0; *c = 0; }
+void           gui_set_cursor_position(int l, int c)                 { (void)l;(void)c; }
+void           gui_set_cursor_position_quiet(int l, int c)           { (void)l;(void)c; }
+void           gui_outline_refresh(AppGui *g)                        { (void)g; }
+gboolean       gui_autosave_enabled(void)                            { return FALSE; }
+void           gui_trigger_autosave(void)                            {}
+void           gui_set_sync_state(QirtasSyncState s)                 { (void)s; }
+void           gui_show_toast(const char *m)                         { (void)m; }
+void           gui_reload_full_buffer(void)                          {}
+
+/* Global variables referenced by gui_buffer.c */
+GtkWidget     *global_source_view                                    = NULL;
+int            qirtas_perf_enabled                                   = 0;
+int            qirtas_app_language                                   = 0;
+
+/* i18n passthrough (gui_i18n.c) */
+const char    *qirtas_tr(const char *en)                             { return en; }
+
+/* Conceal / rendering stubs (gui_conceal.c, gui_codeblock.c, etc.) */
+void           update_conceal_markdown_all(GtkTextBuffer *b)                               { (void)b; }
+void           update_conceal_markdown_range(GtkTextBuffer *b, int f, int l)               { (void)b;(void)f;(void)l; }
+void           parse_and_render_code_pills(GtkTextBuffer *b, AppGui *g)                    { (void)b;(void)g; }
+void           parse_and_render_tables(GtkTextBuffer *b, AppGui *g)                        { (void)b;(void)g; }
+void           check_and_insert_hr(GtkTextBuffer *b, AppGui *g)                            { (void)b;(void)g; }
+void           apply_wiki_link_tags_local(GtkTextBuffer *b)                                { (void)b; }
+void           update_paragraph_direction_lines(GtkTextBuffer *b, gint f, gint l)         { (void)b;(void)f;(void)l; }
 
 /* ── test helpers ─────────────────────────────────────────────────────────*/
 static int g_passed = 0, g_failed = 0;

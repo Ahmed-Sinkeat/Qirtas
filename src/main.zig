@@ -1224,6 +1224,7 @@ pub export fn zig_create_new_file(name_ptr: [*:0]const u8) callconv(.c) void {
         std.debug.print("Failed to create file {s}: {}\n", .{final_name_z, err});
         return;
     };
+    file.writeStreamingAll(global_io, "\n\n\n\n\n\n\n\n\n\n") catch {};
     file.close(global_io);
 
     gui_refresh_explorer();

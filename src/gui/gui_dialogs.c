@@ -217,6 +217,14 @@ void trigger_save_as(AppGui *gui) {
     gtk_file_dialog_set_title(dialog, "Save As...");
     gtk_file_dialog_set_initial_name(dialog, "untitled.md");
 
+    /* Default to the vault (current working directory) so the user doesn't
+     * have to navigate away from their notes. */
+    char *cwd = g_get_current_dir();
+    GFile *vault_dir = g_file_new_for_path(cwd);
+    gtk_file_dialog_set_initial_folder(dialog, vault_dir);
+    g_object_unref(vault_dir);
+    g_free(cwd);
+
     GtkFileFilter *filter = gtk_file_filter_new();
     gtk_file_filter_set_name(filter, "Markdown Files");
     gtk_file_filter_add_pattern(filter, "*.md");

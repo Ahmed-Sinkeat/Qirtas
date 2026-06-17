@@ -3185,6 +3185,112 @@ static void on_tree_new_folder_clicked(GtkButton *btn, gpointer user_data) {
     g_free(parent);
 }
 
+/* Rename dialog ── AdwAlertDialog with a single text entry. */
+typedef struct { char *old_path; } RenameData;
+
+static void on_rename_response(AdwAlertDialog *dlg, const char *response, gpointer user_data) {
+    GtkEntry *entry = GTK_ENTRY(user_data);
+    RenameData *rd = g_object_get_data(G_OBJECT(dlg), "rename_data");
+    if (strcmp(response, "rename") == 0 && rd) {
+        const char *new_name = gtk_editable_get_text(GTK_EDITABLE(entry));
+        if (new_name && new_name[0]) {
+            char *dir = g_path_get_dirname(rd->old_path);
+            char *new_path = g_strdup_printf("%s/%s", strcmp(dir, ".") == 0 ? "." : dir, new_name);
+            if (rename(rd->old_path, new_path) == 0) {
+                /* Update tab if the renamed file is open. */
+                if (global_gui) {
+                    for (int i = 0; i < global_gui->tabs.count; i++) {
+                        if (strcmp(global_gui->tabs.paths[i], rd->old_path) == 0) {
+                            g_free(global_gui->tabs.paths[i]);
+                            global_gui->tabs.paths[i] = g_strdup(new_path);
+                            gui_tabs_refresh(global_gui);
+                            break;
+                        }
+                    }
+                }
+                gui_refresh_explorer();
+            } else {
+                gui_show_toast(qirtas_tr("Rename failed"));
+            }
+            g_free(new_path);
+            g_free(dir);
+        }
+    }
+    if (rd) { g_free(rd->old_path); g_free(rd); }
+}
+
+static void on_tree_rename_clicked(GtkButton *btn, gpointer user_data) {
+    popdown_ancestor_popover(GTK_WIDGET(btn));
+    const char *path = (const char *)user_data;
+    if (!global_gui) return;
+
+    AdwAlertDialog *dlg = ADW_ALERT_DIALOG(
+        adw_alert_dialog_new(qirtas_tr("Rename File"), NULL));
+
+    char *basename = g_path_get_basename(path);
+    GtkWidget *entry = gtk_entry_new();
+    gtk_editable_set_text(GTK_EDITABLE(entry), basename);
+    g_free(basename);
+
+    adw_alert_dialog_set_extra_child(dlg, entry);
+    adw_alert_dialog_add_responses(dlg,
+        "cancel", qirtas_tr("Cancel"),
+        "rename", qirtas_tr("Rename"), NULL);
+    adw_alert_dialog_set_response_appearance(dlg, "rename", ADW_RESPONSE_SUGGESTED);
+    adw_alert_dialog_set_default_response(dlg, "rename");
+    adw_alert_dialog_set_close_response(dlg, "cancel");
+
+    RenameData *rd = g_new0(RenameData, 1);
+    rd->old_path = g_strdup(path);
+    g_object_set_data(G_OBJECT(dlg), "rename_data", rd);
+
+    g_signal_connect(dlg, "response", G_CALLBACK(on_rename_response), entry);
+    adw_dialog_present(ADW_DIALOG(dlg), global_gui->window);
+}
+
+/* Delete confirmation dialog. */
+static void on_delete_confirm_response(AdwAlertDialog *dlg, const char *response, gpointer user_data) {
+    (void)dlg;
+    char *path = (char *)user_data;
+    if (strcmp(response, "delete") == 0) {
+        /* Close the tab if this file is currently open. */
+        if (global_gui) {
+            for (int i = 0; i < global_gui->tabs.count; i++) {
+                if (strcmp(global_gui->tabs.paths[i], path) == 0) {
+                    gui_tabs_close(global_gui, i);
+                    break;
+                }
+            }
+        }
+        if (remove(path) != 0)
+            gui_show_toast(qirtas_tr("Delete failed"));
+        gui_refresh_explorer();
+    }
+    g_free(path);
+}
+
+static void on_tree_delete_clicked(GtkButton *btn, gpointer user_data) {
+    popdown_ancestor_popover(GTK_WIDGET(btn));
+    const char *path = (const char *)user_data;
+    if (!global_gui) return;
+
+    char *basename = g_path_get_basename(path);
+    char *msg = g_strdup_printf(qirtas_tr("Delete \"%s\"? This cannot be undone."), basename);
+    g_free(basename);
+
+    AdwAlertDialog *dlg = ADW_ALERT_DIALOG(adw_alert_dialog_new(qirtas_tr("Delete File"), msg));
+    g_free(msg);
+    adw_alert_dialog_add_responses(dlg,
+        "cancel", qirtas_tr("Cancel"),
+        "delete", qirtas_tr("Delete"), NULL);
+    adw_alert_dialog_set_response_appearance(dlg, "delete", ADW_RESPONSE_DESTRUCTIVE);
+    adw_alert_dialog_set_default_response(dlg, "cancel");
+    adw_alert_dialog_set_close_response(dlg, "cancel");
+
+    g_signal_connect(dlg, "response", G_CALLBACK(on_delete_confirm_response), g_strdup(path));
+    adw_dialog_present(ADW_DIALOG(dlg), global_gui->window);
+}
+
 /* Secondary-click handler attached to each explorer file row (gui_explorer.c).
  * user_data is the row's file path (lifetime tied to the gesture controller). */
 void on_tree_file_right_click(GtkGestureClick *gesture, gint n_press,
@@ -3217,6 +3323,15 @@ void on_tree_file_right_click(GtkGestureClick *gesture, gint n_press,
     gtk_box_append(GTK_BOX(box),
         status_menu_item(qirtas_icon("history"), qirtas_tr("File History"), NULL,
                          G_CALLBACK(on_tree_history_clicked), (gpointer)path));
+
+    gtk_box_append(GTK_BOX(box), gtk_separator_new(GTK_ORIENTATION_HORIZONTAL));
+
+    gtk_box_append(GTK_BOX(box),
+        status_menu_item("document-edit-symbolic", qirtas_tr("Rename"), NULL,
+                         G_CALLBACK(on_tree_rename_clicked), (gpointer)path));
+    gtk_box_append(GTK_BOX(box),
+        status_menu_item("edit-delete-symbolic", qirtas_tr("Delete"), NULL,
+                         G_CALLBACK(on_tree_delete_clicked), (gpointer)path));
 
     gtk_popover_set_child(GTK_POPOVER(popover), box);
     gtk_popover_popup(GTK_POPOVER(popover));

@@ -208,6 +208,14 @@ typedef struct {
      * See gui_table.c (reveal-on-cursor grid rendering). */
     gboolean table_dirty;
 
+    /* TRUE when an edit may have introduced or changed a markdown checkbox list
+     * item. The stats debounce re-runs parse_and_render_todos. */
+    gboolean todo_dirty;
+
+    /* TRUE when an edit may have introduced or changed a markdown inline link
+     * [text](url). The stats debounce re-runs parse_and_apply_link_tags. */
+    gboolean link_dirty;
+
     /* TRUE when an edit since the last debounce may have changed the heading
      * outline (line added/removed, or a heading line touched). The stats
      * debounce rebuilds gui_outline_refresh only when set — a plain keystroke
@@ -422,6 +430,7 @@ void draw_cursor_trail(GtkDrawingArea *area, cairo_t *cr, int width, int height,
 gboolean on_cursor_tick(GtkWidget *widget, GdkFrameClock *frame_clock, gpointer user_data);
 void gui_tabs_refresh(AppGui *gui);
 void gui_tabs_add_or_select(AppGui *gui, const char *filepath);
+void gui_tabs_close(AppGui *gui, int index);
 void gui_tabs_close_all(AppGui *gui);
 void gui_tabs_setup_viewport(AppGui *gui);
 void qirtas_export_to_pdf(AppGui *gui);          /* themed chooser (gui_export.c) */
@@ -437,6 +446,14 @@ void parse_and_render_tables(GtkTextBuffer *buf, AppGui *gui);
 gboolean gui_table_reveal_at_cursor(GtkTextBuffer *buf, AppGui *gui);
 void gui_table_on_cursor_moved(GtkTextBuffer *buf, AppGui *gui);
 void gui_table_reset_reveal(GtkTextBuffer *buf);
+void parse_and_render_todos(GtkTextBuffer *buf, AppGui *gui);
+void gui_todo_on_cursor_moved(GtkTextBuffer *buf, AppGui *gui);
+void gui_todo_restore_all(GtkTextBuffer *buf, AppGui *gui);
+void parse_and_apply_link_tags(GtkTextBuffer *buf, AppGui *gui);
+void gui_links_on_cursor_moved(GtkTextBuffer *buf, AppGui *gui);
+void gui_links_on_read_mode_changed(AppGui *gui);
+void gui_links_reset(GtkTextBuffer *buf);
+gboolean gui_link_handle_click(AppGui *gui, GtkTextIter *iter, int n_press, GdkModifierType state);
 void apply_theme(AppGui *gui, const char *theme_name);
 gboolean qirtas_theme_is_dark(const char *theme_name);
 void gui_update_brand_logo(AppGui *gui);

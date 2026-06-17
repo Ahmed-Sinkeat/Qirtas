@@ -719,6 +719,122 @@ static void on_table_row_clicked(GtkButton *btn, gpointer user_data) {
     open_submenu(pd, GTK_WIDGET(btn), build_table_picker_box(pd));
 }
 
+/* ── "Add Link" dialog ──────────────────────────────────────────────── */
+typedef struct {
+    GtkTextBuffer *buf;
+    gint           saved_start;
+    gint           saved_end;
+} LinkDialogData;
+
+static void on_add_link_response(AdwAlertDialog *dlg, const char *response, gpointer user_data) {
+    (void)user_data;
+    if (strcmp(response, "add") != 0) return;
+    LinkDialogData *ld = g_object_get_data(G_OBJECT(dlg), "link_data");
+    if (!ld) return;
+    GtkWidget *text_row = g_object_get_data(G_OBJECT(dlg), "text_row");
+    GtkWidget *url_row  = g_object_get_data(G_OBJECT(dlg), "url_row");
+    if (!text_row || !url_row) return;
+    const char *link_text = gtk_editable_get_text(GTK_EDITABLE(text_row));
+    const char *url       = gtk_editable_get_text(GTK_EDITABLE(url_row));
+    if (!url || !url[0]) return;
+    if (!link_text || !link_text[0]) link_text = url;
+    char *md = g_strdup_printf("[%s](%s)", link_text, url);
+    gui_buffer_replace(ld->buf, ld->saved_start, ld->saved_end, md);
+    g_free(md);
+    if (global_gui && global_gui->source_view)
+        gtk_widget_grab_focus(global_gui->source_view);
+    if (global_gui) global_gui->link_dirty = TRUE;
+}
+
+static void on_add_link_clicked(GtkButton *btn, gpointer user_data) {
+    (void)btn;
+    PopoverData *pd = (PopoverData *)user_data;
+    GtkTextBuffer *buf = pd->buf;
+    gint saved_start = pd->saved_start;
+    gint saved_end   = pd->saved_end;
+    close_open_submenu(pd);
+    gtk_popover_popdown(GTK_POPOVER(pd->popover));
+    if (!global_gui) return;
+
+    gchar *selected_text = NULL;
+    if (saved_start != saved_end) {
+        GtkTextIter s, e;
+        gtk_text_buffer_get_iter_at_offset(buf, &s, saved_start);
+        gtk_text_buffer_get_iter_at_offset(buf, &e, saved_end);
+        selected_text = gtk_text_buffer_get_text(buf, &s, &e, FALSE);
+    }
+
+    AdwAlertDialog *dlg = ADW_ALERT_DIALOG(
+        adw_alert_dialog_new(qirtas_tr("Add Link"), NULL));
+
+    /* AdwPreferencesGroup + AdwEntryRow give native Adwaita form styling. */
+    GtkWidget *group = adw_preferences_group_new();
+    gtk_widget_set_size_request(group, 320, -1);
+
+    GtkWidget *text_row = adw_entry_row_new();
+    adw_preferences_row_set_title(ADW_PREFERENCES_ROW(text_row), qirtas_tr("Text"));
+    if (selected_text && selected_text[0])
+        gtk_editable_set_text(GTK_EDITABLE(text_row), selected_text);
+
+    GtkWidget *url_row = adw_entry_row_new();
+    adw_preferences_row_set_title(ADW_PREFERENCES_ROW(url_row), qirtas_tr("URL"));
+    adw_entry_row_set_input_purpose(ADW_ENTRY_ROW(url_row), GTK_INPUT_PURPOSE_URL);
+    adw_entry_row_set_input_hints(ADW_ENTRY_ROW(url_row),
+                                   GTK_INPUT_HINT_NO_SPELLCHECK | GTK_INPUT_HINT_LOWERCASE);
+
+    adw_preferences_group_add(ADW_PREFERENCES_GROUP(group), text_row);
+    adw_preferences_group_add(ADW_PREFERENCES_GROUP(group), url_row);
+
+    adw_alert_dialog_set_extra_child(dlg, group);
+    adw_alert_dialog_add_responses(dlg,
+        "cancel", qirtas_tr("Cancel"),
+        "add", qirtas_tr("Add"), NULL);
+    adw_alert_dialog_set_response_appearance(dlg, "add", ADW_RESPONSE_SUGGESTED);
+    adw_alert_dialog_set_default_response(dlg, "add");
+    adw_alert_dialog_set_close_response(dlg, "cancel");
+
+    /* Enter in either row confirms the dialog. */
+    adw_entry_row_set_activates_default(ADW_ENTRY_ROW(text_row), TRUE);
+    adw_entry_row_set_activates_default(ADW_ENTRY_ROW(url_row),  TRUE);
+
+    LinkDialogData *ld = g_new0(LinkDialogData, 1);
+    ld->buf = buf; ld->saved_start = saved_start; ld->saved_end = saved_end;
+    g_object_set_data_full(G_OBJECT(dlg), "link_data", ld, g_free);
+    g_object_set_data(G_OBJECT(dlg), "text_row", text_row);
+    g_object_set_data(G_OBJECT(dlg), "url_row",  url_row);
+    g_signal_connect(dlg, "response", G_CALLBACK(on_add_link_response), NULL);
+
+    /* Focus URL entry if text was pre-filled from selection. */
+    if (selected_text && selected_text[0])
+        gtk_widget_grab_focus(url_row);
+
+    adw_dialog_present(ADW_DIALOG(dlg), global_gui->window);
+    g_free(selected_text);
+}
+
+static void on_insert_todo_clicked(GtkButton *btn, gpointer user_data) {
+    (void)btn;
+    PopoverData *pd = (PopoverData *)user_data;
+    GtkTextBuffer *buf = pd->buf;
+    close_open_submenu(pd);
+    gtk_popover_popdown(GTK_POPOVER(pd->popover));
+    if (global_source_view) gtk_widget_grab_focus(global_source_view);
+
+    GtkTextIter at;
+    gtk_text_buffer_get_iter_at_offset(buf, &at, pd->saved_start);
+    const char *prefix = gtk_text_iter_starts_line(&at) ? "" : "\n";
+    const char *todo_md =
+        "- [ ] \n"
+        "- [ ] \n"
+        "- [ ] \n";
+    char *full = g_strconcat(prefix, todo_md, NULL);
+    Position sp = gui_buffer_replace(buf, pd->saved_start, pd->saved_end, full);
+    Position tstart = advance_position(sp, prefix);
+    /* Land cursor after "- [ ] " on the first item, ready to type. */
+    gui_set_cursor_position(tstart.line + 1, 6);
+    g_free(full);
+}
+
 static void on_ctx_cut_clicked(GtkButton *btn, gpointer user_data) {
     (void)btn;
     PopoverData *pd = (PopoverData *)user_data;
@@ -794,6 +910,7 @@ void on_editor_right_click(GtkGestureClick *gesture, gint n_press, gdouble x, gd
     }
     GtkTextBuffer *buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(gui->source_view));
     GtkWidget *popover = gtk_popover_new();
+    gtk_widget_add_css_class(popover, "qirtas-menu");
     gtk_widget_set_parent(popover, gui->source_view);
     gui->active_popover = popover;
     g_signal_connect(popover, "destroy", G_CALLBACK(on_popover_destroy), gui);
@@ -848,6 +965,14 @@ void on_editor_right_click(GtkGestureClick *gesture, gint n_press, gdouble x, gd
     GtkWidget *table_row = ctx_submenu_row("view-grid-symbolic", qirtas_tr("Table"));
     g_signal_connect(table_row, "clicked", G_CALLBACK(on_table_row_clicked), pd);
     gtk_box_append(GTK_BOX(main_box), table_row);
+
+    GtkWidget *todo_btn = ctx_menu_item("checkbox-checked-symbolic", qirtas_tr("To-do List"),
+                                        G_CALLBACK(on_insert_todo_clicked), pd);
+    gtk_box_append(GTK_BOX(main_box), todo_btn);
+
+    GtkWidget *link_btn = ctx_menu_item("insert-link-symbolic", qirtas_tr("Add Link"),
+                                        G_CALLBACK(on_add_link_clicked), pd);
+    gtk_box_append(GTK_BOX(main_box), link_btn);
 
     gtk_box_append(GTK_BOX(main_box), gtk_separator_new(GTK_ORIENTATION_HORIZONTAL));
     gtk_box_append(GTK_BOX(main_box),

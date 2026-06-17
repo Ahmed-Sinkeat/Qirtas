@@ -198,6 +198,17 @@ void toggle_read_mode(AppGui *gui) {
     if (gui->editor_card) paper_column_tick(gui->editor_card, NULL, gui);
     update_conceal_markdown_all_sync(buf);
 
+    if (gui->read_mode) {
+        /* Entering read mode: render all todo checkbox items. */
+        gui->todo_dirty = TRUE;
+        parse_and_render_todos(buf, gui);
+    } else {
+        /* Leaving read mode: restore anchors to raw markdown. */
+        gui_todo_restore_all(buf, gui);
+    }
+    /* Cancel cursor-reveal for any open link, or re-conceal it on read-mode entry. */
+    gui_links_on_read_mode_changed(gui);
+
     ReadModeScrollData *d = g_new(ReadModeScrollData, 1);
     d->gui = gui;
     d->mark = scroll_anchor;

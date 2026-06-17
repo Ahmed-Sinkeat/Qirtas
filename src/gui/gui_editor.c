@@ -150,6 +150,34 @@ static void on_paste_plain_text_received(GObject *source_object, GAsyncResult *r
     }
     if (text) {
         AppGui *gui = (AppGui *)user_data;
+
+        /* Collapse runs of 3+ consecutive newlines to 2 — browser/chat apps
+         * (ChatGPT, etc.) emit \n\n\n+ between block elements which pastes as
+         * a wall of empty lines in a plain-text editor. Two newlines (one blank
+         * line) is the standard paragraph separator in markdown; we never need
+         * more than that in prose. */
+        GString *clean = g_string_sized_new(strlen(text));
+        int nl_run = 0;
+        for (const char *p = text; *p; p++) {
+            if (*p == '\n') {
+                nl_run++;
+                if (nl_run <= 2) g_string_append_c(clean, '\n');
+            } else {
+                nl_run = 0;
+                g_string_append_c(clean, *p);
+            }
+        }
+        g_free(text);
+        text = g_string_free(clean, FALSE);
+
+        /* gui_buffer_replace blocks signal handlers, so code_pill_dirty and
+         * table_dirty never get set from on_insert_text_after. Set them here
+         * based on what the pasted text contains so the renderers fire. */
+        if (memchr(text, '`', strlen(text))) gui->code_pill_dirty = TRUE;
+        if (memchr(text, '|', strlen(text))) gui->table_dirty = TRUE;
+        if (memchr(text, '-', strlen(text)) || memchr(text, '[', strlen(text)))
+            gui->todo_dirty = TRUE;
+
         GtkTextBuffer *buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(gui->source_view));
         GtkTextIter start, end;
         if (!gtk_text_buffer_get_selection_bounds(buf, &start, &end)) {

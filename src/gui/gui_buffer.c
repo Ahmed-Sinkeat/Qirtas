@@ -504,6 +504,15 @@ static gboolean buffer_stats_timeout_cb(gpointer user_data) {
         gui->table_dirty = FALSE;
         parse_and_render_tables(buf, gui);
     }
+    if (gui->todo_dirty) {
+        gui->todo_dirty = FALSE;
+        parse_and_render_todos(buf, gui);
+    }
+    if (gui->link_dirty) {
+        gui->link_dirty = FALSE;
+        parse_and_apply_link_tags(buf, gui);
+        gui_links_on_cursor_moved(buf, gui);
+    }
 
     QIRTAS_PERF_END("buffer_stats_timeout_cb");
     return G_SOURCE_REMOVE;
@@ -520,6 +529,7 @@ void gui_refresh_buffer_stats(void) {
     global_gui->conceal_dirty_start = -1;
     global_gui->conceal_dirty_end = -1;
     global_gui->outline_dirty = TRUE;
+    global_gui->link_dirty = TRUE;
     gui_word_count_invalidate();
     if (buffer_stats_timeout_id) g_source_remove(buffer_stats_timeout_id);
     buffer_stats_timeout_id = g_timeout_add(50, buffer_stats_timeout_cb, global_gui);
@@ -823,6 +833,13 @@ void on_insert_text_after(GtkTextBuffer *buf, GtkTextIter *location, gchar *text
     if (memchr(text, '`', len)) gui->code_pill_dirty = TRUE;
     /* A pipe may have completed/extended a markdown table row. */
     if (memchr(text, '|', len)) gui->table_dirty = TRUE;
+    /* A hyphen or bracket may have started/completed a checkbox list item. */
+    if (memchr(text, '-', len) || memchr(text, '[', len) || memchr(text, ']', len))
+        gui->todo_dirty = TRUE;
+    /* Brackets or parens may have started/completed an inline link [text](url). */
+    if (memchr(text, '[', len) || memchr(text, ']', len) ||
+        memchr(text, '(', len) || memchr(text, ')', len))
+        gui->link_dirty = TRUE;
     mark_outline_dirty(gui, buf, start_line, end_line, start_col);
 
     /* Incremental word count: the inserted text turned the old single line

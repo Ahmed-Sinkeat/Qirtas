@@ -1080,3 +1080,92 @@ separator {
   min-width: 24px;
   min-height: 24px;
 }
+
+/* ── Markdown Todo List Items ── */
+.todo-check {
+  padding: 2px 6px 2px 2px;
+  border-radius: 4px;
+  color: var(--text-muted, #4a4537);
+}
+.todo-check check {
+  border-radius: 3px;
+  border: 1.5px solid var(--accent, #213a63);
+  background-color: transparent;
+  min-width: 14px;
+  min-height: 14px;
+}
+.todo-check:checked check {
+  background-color: var(--accent, #213a63);
+  border-color: var(--accent, #213a63);
+}
+.todo-check:checked label {
+  text-decoration: line-through;
+  opacity: 0.65;
+}
+
+/* ── AdwAlertDialog / AdwPreferencesGroup form styling ── */
+/* Keep dialog content area on-theme. Adwaita draws dialog-body as a
+ * separate widget; we override its background and text colours here. */
+.dialog-body {
+  background-color: var(--bg-card);
+  color: var(--text-primary);
+}
+.dialog-body > box {
+  padding: 4px 0;
+}
+
+/* Response button row — give Cancel enough contrast in dark themes.  */
+.dialog-body > box.response-area > button {
+  background-color: var(--bg-hover);
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 20px;
+  font-weight: 500;
+  margin: 0 4px;
+}
+.dialog-body > box.response-area > button:hover {
+  background-color: var(--bg-active);
+  border-color: var(--accent);
+}
+.dialog-body > box.response-area > button.suggested-action {
+  background-color: var(--accent);
+  color: #ffffff;
+  border-color: var(--accent);
+}
+.dialog-body > box.response-area > button.suggested-action:hover {
+  background-color: var(--accent-light);
+  border-color: var(--accent-light);
+}
+.dialog-body > box.response-area > button.destructive-action {
+  background-color: transparent;
+  color: var(--destructive-text);
+  border-color: var(--destructive-text);
+}
+
+/* AdwPreferencesGroup inside dialogs — match card background. */
+preferencesgroup > box > box {
+  background-color: var(--bg-card);
+  color: var(--text-primary);
+}
+
+/* AdwEntryRow — cleaner look inside dialogs. */
+row.entry {
+  background-color: var(--bg-card);
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+row.entry:focus-within {
+  border-color: var(--accent);
+}
+
+/* ── Context menu right-click popover (qirtas-menu) ── */
+/* Stronger shadow + min-width so it doesn't feel cramped. */
+popover.qirtas-menu > contents {
+  min-width: 200px;
+  box-shadow: 0 12px 32px rgba(15, 23, 42, 0.22);
+}
+
+/* ── Markdown inline link colour ── */
+/* link_text_tag uses a hardcoded colour; override per-theme here if needed. */
