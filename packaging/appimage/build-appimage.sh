@@ -41,7 +41,15 @@ cp "$root/src/ui/qirtas_markdown.lang" "$root/src/ui"/*.style-scheme.xml \
 install -Dm644 "$here/../qirtas.desktop" \
   "$appdir/usr/share/applications/org.qirtas.notebook.desktop"
 # linuxdeploy wants a desktop file + icon at the AppDir root too; it copies them.
-install -Dm644 "$root/src/ui/icons/qirtas-logo.png" \
+# linuxdeploy requires exactly 512x512 (the source logo is 486x319).
+# Generate a square padded version once, cached alongside the script.
+icon_512="$here/qirtas-512.png"
+if [ ! -f "$icon_512" ]; then
+    magick "$root/src/ui/icons/qirtas-logo.png" \
+        -background transparent -gravity center -extent 512x512 \
+        "$icon_512"
+fi
+install -Dm644 "$icon_512" \
   "$appdir/usr/share/icons/hicolor/512x512/apps/org.qirtas.notebook.png"
 
 # The binary resolves assets via $QIRTAS_DATA_DIR first; point it at the bundled
@@ -60,6 +68,38 @@ dl linuxdeploy-x86_64.AppImage \
 dl linuxdeploy-plugin-gtk.sh \
    https://raw.githubusercontent.com/linuxdeploy/linuxdeploy-plugin-gtk/master/linuxdeploy-plugin-gtk.sh
 
+# GTK4 on Arch: gdk-pixbuf external loaders directory no longer exists.
+# realpath returns empty, making copy_lib_tree receive "", causing a fatal cp
+# error. Guard the call so the plugin doesn't abort.
+python3 - linuxdeploy-plugin-gtk.sh <<'PATCH'
+import sys
+f = sys.argv[1]
+src = open(f).read()
+# Guard copy of pixbuf loaders dir (doesn't exist on modern Arch GTK4).
+src = src.replace(
+    'copy_lib_tree "$gdk_pixbuf_binarydir"',
+    '[ -n "$gdk_pixbuf_binarydir" ] && [ -d "$gdk_pixbuf_binarydir" ] && copy_lib_tree "$gdk_pixbuf_binarydir"'
+)
+# Guard cache-file write: create parent dir first.
+src = src.replace(
+    '"$gdk_pixbuf_query" > "$APPDIR/${gdk_pixbuf_cache_file/$LD_GTK_LIBRARY_PATH//usr/lib}"',
+    'mkdir -p "$(dirname "$APPDIR/${gdk_pixbuf_cache_file/$LD_GTK_LIBRARY_PATH//usr/lib}")" && '
+    '"$gdk_pixbuf_query" > "$APPDIR/${gdk_pixbuf_cache_file/$LD_GTK_LIBRARY_PATH//usr/lib}"'
+)
+# Guard sed on cache file.
+src = src.replace(
+    'sed -i "s|$gdk_pixbuf_moduledir/||g" "$APPDIR/${gdk_pixbuf_cache_file/$LD_GTK_LIBRARY_PATH//usr/lib}"',
+    '[ -f "$APPDIR/${gdk_pixbuf_cache_file/$LD_GTK_LIBRARY_PATH//usr/lib}" ] && '
+    'sed -i "s|$gdk_pixbuf_moduledir/||g" "$APPDIR/${gdk_pixbuf_cache_file/$LD_GTK_LIBRARY_PATH//usr/lib}"'
+)
+# Guard find on non-existent gdk_pixbuf_moduledir (GTK4 Arch: loaders are built-in).
+src = src.replace(
+    "    done < <(find \"$directory\" -name '*.so' -print0)",
+    "    done < <([ -d \"$directory\" ] && find \"$directory\" -name '*.so' -print0)"
+)
+open(f, 'w').write(src)
+PATCH
+
 # ── 4. Bundle + produce the AppImage ────────────────────────────────────────
 echo "==> Running linuxdeploy (GTK plugin)"
 export DEPLOY_GTK_VERSION=4
@@ -71,7 +111,7 @@ export NO_STRIP=true
   --appdir "$appdir" \
   --plugin gtk \
   --desktop-file "$appdir/usr/share/applications/org.qirtas.notebook.desktop" \
-  --icon-file "$appdir/usr/share/icons/hicolor/512x512/apps/org.qirtas.notebook.png" \
+  --icon-file "$icon_512" \
   --output appimage
 
 mv -f Qirtas*.AppImage "$here/" 2>/dev/null || mv -f ./*.AppImage "$here/"
