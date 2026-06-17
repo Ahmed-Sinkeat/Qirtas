@@ -275,6 +275,62 @@ pub export fn zig_table_aligns(delim: ?[*:0]const u8, out_ptr: ?[*]c_int, max: c
     return @intCast(n);
 }
 
+// ---- fenced code blocks -------------------------------------------------
+
+/// A line that is ONLY a code fence: optional whitespace, 3+ backticks,
+/// optional trailing whitespace. (The closing fence.)
+pub fn fenceOnly(line: []const u8) bool {
+    var i: usize = 0;
+    while (i < line.len and (line[i] == ' ' or line[i] == '\t')) i += 1;
+    var ticks: usize = 0;
+    while (i < line.len and line[i] == '`') {
+        ticks += 1;
+        i += 1;
+    }
+    if (ticks < 3) return false;
+    while (i < line.len and (line[i] == ' ' or line[i] == '\t')) i += 1;
+    return i == line.len;
+}
+
+/// If `line` is an OPENING fence (3+ backticks, info string with no backtick),
+/// returns its language token (the first whitespace-delimited word, possibly
+/// empty). Returns null if it is not an opening fence.
+pub fn codeFenceLang(line: []const u8) ?[]const u8 {
+    var i: usize = 0;
+    while (i < line.len and (line[i] == ' ' or line[i] == '\t')) i += 1;
+    var ticks: usize = 0;
+    while (i < line.len and line[i] == '`') {
+        ticks += 1;
+        i += 1;
+    }
+    if (ticks < 3) return null;
+    // info string must not contain a backtick (ambiguous with inline code)
+    if (std.mem.indexOfScalar(u8, line[i..], '`') != null) return null;
+    while (i < line.len and (line[i] == ' ' or line[i] == '\t')) i += 1;
+    const start = i;
+    while (i < line.len and line[i] != ' ' and line[i] != '\t') i += 1;
+    return line[start..i];
+}
+
+pub export fn zig_fence_only(line: ?[*:0]const u8) callconv(.c) c_int {
+    const t = line orelse return 0;
+    return if (fenceOnly(std.mem.span(t))) 1 else 0;
+}
+
+/// 1 if `line` is an opening fence; writes the language token (null-terminated,
+/// possibly empty) into out[0..max]. 0 otherwise.
+pub export fn zig_code_fence_lang(line: ?[*:0]const u8, out: ?[*]u8, max: c_int) callconv(.c) c_int {
+    const t = line orelse return 0;
+    const o = out orelse return 0;
+    if (max <= 0) return 0;
+    const lang = codeFenceLang(std.mem.span(t)) orelse return 0;
+    const cap: usize = @intCast(max);
+    const n = @min(lang.len, cap - 1);
+    @memcpy(o[0..n], lang[0..n]);
+    o[n] = 0;
+    return 1;
+}
+
 test "isArabicChar covers Arabic blocks, rejects Latin/digits" {
     try std.testing.expect(isArabicChar('م'));
     try std.testing.expect(isArabicChar('ع'));
@@ -356,4 +412,17 @@ test "table structure: delimiter, row, alignment" {
     try std.testing.expectEqual(@as(u8, 0), codes[0]); // left
     try std.testing.expectEqual(@as(u8, 1), codes[1]); // center
     try std.testing.expectEqual(@as(u8, 2), codes[2]); // right
+}
+
+test "code fence: fenceOnly + language extraction" {
+    try std.testing.expect(fenceOnly("```"));
+    try std.testing.expect(fenceOnly("   ````  "));
+    try std.testing.expect(!fenceOnly("```bash"));
+    try std.testing.expect(!fenceOnly("``"));
+
+    try std.testing.expectEqualStrings("bash", codeFenceLang("```bash").?);
+    try std.testing.expectEqualStrings("", codeFenceLang("```").?); // bare fence
+    try std.testing.expectEqualStrings("rust", codeFenceLang("```rust extra").?); // first token
+    try std.testing.expect(codeFenceLang("``") == null); // too few ticks
+    try std.testing.expect(codeFenceLang("```ja`va") == null); // backtick in info string
 }
