@@ -118,6 +118,7 @@ Known issues are documented openly in [docs/ISSUES.md](docs/ISSUES.md).
 
 ## What iam planning to add
 
+* windows version
 * Better Arabic support
 * Improvements to the writing experience
 * Split view
