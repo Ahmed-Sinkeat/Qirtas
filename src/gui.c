@@ -3114,6 +3114,14 @@ static void activate(GtkApplication *app, gpointer user_data) {
         g_free(tabs);
     }
 
+    /* A file passed on the command line (`qirtas /path/note.md`) opens last,
+     * so it lands as the focused tab above any restored session tabs. */
+    {
+        extern const char *zig_cli_open_file(void);
+        const char *cli = zig_cli_open_file();
+        if (cli && cli[0]) zig_open_file(cli);
+    }
+
     apply_compact_mode(gui);
 
     load_sync_credentials(gui);

@@ -158,6 +158,21 @@ extern fn gui_run_on_main_thread(callback: GuiIdleCallback, user_data: ?*anyopaq
 var active_file_path: [1024]u8 = undefined;
 var active_file_path_len: usize = 0;
 
+// A file path given on the command line (`qirtas /path/to/note.md`). main()
+// opens its parent directory as the vault and stashes the absolute, null-
+// terminated path here; the GUI opens it — focused, on top of any restored
+// session tabs — once the window exists (see zig_cli_open_file + gui.c).
+// A zero length means no openable file argument was given.
+var cli_open_file_buf: [4096]u8 = undefined;
+var cli_open_file_len: usize = 0;
+
+/// The command-line file to open after the window is built, or null. The
+/// returned pointer is owned by a static buffer — the caller must not free it.
+pub export fn zig_cli_open_file() callconv(.c) ?[*:0]const u8 {
+    if (cli_open_file_len == 0) return null;
+    return @ptrCast(&cli_open_file_buf);
+}
+
 /// Bounds-checked setter for the active file path. Returns false and leaves
 /// the current file active when the path doesn't fit — callers must refuse
 /// the open rather than truncate to a wrong path.
@@ -655,8 +670,38 @@ pub fn main(init: std.process.Init) !void {
 
     var workspace_path: []const u8 = ".";
     var saved_vault: ?[]const u8 = null;
+    // Backs workspace_path when an argument resolves; must outlive the dupeZ
+    // below, so it lives at function scope rather than inside the branch.
+    var abs_buf: [4096]u8 = undefined;
     if (init.minimal.args.vector.len > 1) {
-        workspace_path = std.mem.span(init.minimal.args.vector[1]);
+        const arg = std.mem.span(init.minimal.args.vector[1]);
+        // A path argument is either a directory (open it as the vault) or a
+        // file (open that file, with its parent directory as the vault). The
+        // old code chdir'd into the argument unconditionally, so a file path
+        // failed chdir and was silently ignored.
+        if (c.realpath(arg.ptr, &abs_buf)) |resolved| {
+            const abs = std.mem.span(@as([*:0]const u8, @ptrCast(resolved)));
+            // opendir succeeds only for directories — the same probe used by
+            // find_first_indexable_file_posix below.
+            const dirp = c.opendir(resolved);
+            if (dirp != null) {
+                _ = c.closedir(dirp);
+                workspace_path = abs;
+            } else if (std.fs.path.dirname(abs)) |parent| {
+                if (abs.len < cli_open_file_buf.len) {
+                    @memcpy(cli_open_file_buf[0..abs.len], abs);
+                    cli_open_file_buf[abs.len] = 0;
+                    cli_open_file_len = abs.len;
+                }
+                workspace_path = parent; // slice into abs_buf
+            } else {
+                workspace_path = abs;
+            }
+        } else {
+            // Doesn't resolve on disk — keep the old behavior and let chdir
+            // below fall back to "." if it isn't a usable directory.
+            workspace_path = arg;
+        }
     } else {
         var db: ?*c.sqlite3 = null;
         if (c.sqlite3_open(dbPathZ(), &db) == c.SQLITE_OK) {
