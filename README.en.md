@@ -89,7 +89,7 @@ Because your notes are ordinary `.md` files, the worst-case scenario is still ju
 
 Known issues are documented openly in [docs/ISSUES.md](docs/ISSUES.md).
 
-## What I'm Working On
+## What iam planning to add
 
 * Better Arabic support
 * Improvements to the writing experience
