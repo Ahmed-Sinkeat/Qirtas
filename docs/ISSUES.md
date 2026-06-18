@@ -1,7 +1,7 @@
 # Qirtas — Known Issues
 
 **Last audited:** 2026-06-17 (branch `full-buffer-editor-v2`).
-**Last fix pass:** 2026-06-17 (commits `345e502`, `cc9b4db`).
+**Last fix pass:** 2026-06-18 (read-mode read-only + undo viewport jump + AppImage packaging); prior pass 2026-06-17 (commits `345e502`, `cc9b4db`).
 
 This file tracks correctness/robustness issues found by code audit. It also
 records where the prose docs had drifted from the actual source so the drift
@@ -33,6 +33,14 @@ write-up with a `✅ FIXED` note pointing at the change.
 | — | 🟡 | live-HR insert injected a view-only newline (edit-map skew) | `gui_hr.c` |
 | — | 🟢 | `zig_get_text_for_line_range` negative-line guard | `main.zig` |
 | — | 🟢 | `zig_get_document_text` NUL/free length mismatch | `main.zig` |
+
+**Fixed 2026-06-18 (read-mode + undo + packaging pass):**
+
+| # | Sev | What | Where |
+|---|-----|------|-------|
+| — | 🟠 | read mode was not read-only — every editing shortcut (smart lists, formatting, cut/paste, delete/move line) mutated the buffer through programmatic insert/delete that bypasses `gtk_text_view_set_editable(FALSE)`; only the caret was hidden | `gui_editor.c` read-mode gate in `on_editor_key_pressed`; `gui_tabs.c` tab refresh no longer re-enables editing while in read mode |
+| — | 🟠 | undo snapped the viewport to the top — the reload armed a deferred scroll that reads the *live* insert mark, which the post-reload quiet caret move relocated to the baseline (0,0) | `gui_tabs.c` `gui_reload_full_buffer` restores the caret quietly; viewport restored by line in `reload_finalize_idle` |
+| — | 🟢 | AppImage failed AppImageLauncher registration (`Entry doesn't exists: .DirIcon`) and forced `GDK_BACKEND=x11`, breaking GTK4 popover menus on Wayland | `appimage/build-appimage.sh` creates `.DirIcon`; overrides backend to `wayland,x11` |
 
 **Still open (deliberately not fixed — see notes in each section):**
 

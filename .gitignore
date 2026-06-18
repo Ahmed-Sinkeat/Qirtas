@@ -4,6 +4,9 @@ zig-out/
 *.png
 *.jpg
 !src/ui/icons/**/*.png
+# Calligraphy package icon: a non-regenerable source asset that packaging/PKGBUILD
+# and the AppImage build both consume. Must live in the repo.
+!packaging/appimage/qirtas-package-icon.png
 *.bak
 *.step*
 *.before_*
@@ -44,3 +47,10 @@ packaging/appimage/*.AppImage
 # Flatpak build artifacts
 packaging/build-dir/
 packaging/.flatpak-builder/
+
+# Dev logs / scratch (regenerable; some were committed by accident — now untracked)
+*.log
+gdb_commands.txt
+
+# Release outputs (source tarball, built package, AppImage)
+dist/
