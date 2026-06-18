@@ -108,7 +108,7 @@ Your notes and settings live in:
 
 ## Current State
 
-Qirtas is still pre-1.0. It is written and maintained by a single developer and used daily for real-world note taking.
+Qirtas just reached its first release, v1.0.0. It is written and maintained by a single developer and used daily for real-world note taking.
 
 It works, but expect a few rough edges.
 
