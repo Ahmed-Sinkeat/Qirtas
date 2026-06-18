@@ -772,7 +772,6 @@ static void on_conceal_toggled(GObject *gobject, GParamSpec *pspec, gpointer use
 
 static char current_en_font[64] = "JetBrains Mono";
 static char current_ar_font[64] = "Amiri";
-static double current_font_size = 16.0;
 
 
 /* ============================================================
@@ -864,9 +863,31 @@ typedef struct { char name[NAME_MAX+1]; gboolean is_dir; } DirEntry;
 /* Zoom helpers — exported so the editor key handler (which reliably receives
  * editor shortcuts) can drive font size too; the window-level handler was being
  * pre-empted before Ctrl+=/-/0 reached it. */
-void gui_zoom_in(AppGui *gui)    { current_font_size += 1.0; update_editor_font(gui); }
-void gui_zoom_out(AppGui *gui)   { if (current_font_size > 6.0) { current_font_size -= 1.0; update_editor_font(gui); } }
-void gui_zoom_reset(AppGui *gui) { current_font_size = 16.0; update_editor_font(gui); }
+/* Single source of truth for font size: gui->current_font_size, the field
+ * update_editor_font() actually renders from and that the settings +/- buttons
+ * and the saved "font_size" pref use. (An old file-static `current_font_size`
+ * existed in parallel; the zoom shortcuts mutated *that* while the renderer read
+ * the field, so Ctrl+-/+ silently did nothing. Removed — everything funnels
+ * through here now and persists, so keyboard zoom and the settings control
+ * stay in sync and survive restart.) */
+static void apply_font_size(AppGui *gui, double new_size) {
+    /* Clamp to the same 10–26 range the startup loader and the settings stepper
+     * use, so keyboard zoom can't push the value past what survives a restart. */
+    if (new_size < 10.0) new_size = 10.0;
+    if (new_size > 26.0) new_size = 26.0;
+    gui->current_font_size = new_size;
+    qirtas_pref_set_int("font_size", (int)new_size);
+    update_editor_font(gui);
+    if (gui->font_size_value_lbl) {
+        char buf[16];
+        snprintf(buf, sizeof(buf), "%d", (int)new_size);
+        gtk_label_set_text(GTK_LABEL(gui->font_size_value_lbl), buf);
+    }
+}
+
+void gui_zoom_in(AppGui *gui)    { apply_font_size(gui, gui->current_font_size + 1.0); }
+void gui_zoom_out(AppGui *gui)   { apply_font_size(gui, gui->current_font_size - 1.0); }
+void gui_zoom_reset(AppGui *gui) { apply_font_size(gui, 16.0); }
 
 static gboolean on_window_key_pressed(GtkEventControllerKey *ctrl,
                                       guint keyval, guint keycode,
@@ -968,24 +989,19 @@ static gboolean on_window_key_pressed(GtkEventControllerKey *ctrl,
 
     /* Zoom In */
     if (match_app_shortcut("zoom_in", keyval, keycode, state)) {
-        current_font_size += 1.0;
-        update_editor_font(gui);
+        gui_zoom_in(gui);
         return TRUE;
     }
 
     /* Zoom Out */
     if (match_app_shortcut("zoom_out", keyval, keycode, state)) {
-        if (current_font_size > 6.0) {
-            current_font_size -= 1.0;
-            update_editor_font(gui);
-        }
+        gui_zoom_out(gui);
         return TRUE;
     }
 
     /* Reset Zoom */
     if (match_app_shortcut("reset_zoom", keyval, keycode, state)) {
-        current_font_size = 16.0;
-        update_editor_font(gui);
+        gui_zoom_reset(gui);
         return TRUE;
     }
 
