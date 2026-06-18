@@ -11,8 +11,18 @@ static GtkTextTag *link_bracket_tag(GtkTextBuffer *buf) {
     GtkTextTagTable *t = gtk_text_buffer_get_tag_table(buf);
     GtkTextTag *tag = gtk_text_tag_table_lookup(t, "md-link-bracket");
     if (tag) return tag;
+    /* Conceal the brackets with scale+transparent ink, NOT the "invisible"
+     * property. GTK4's visible-line-index bookkeeping aborts with
+     * "Byte index N is off the end of the line" on any line that mixes an
+     * invisible segment with multi-byte UTF-8 (Arabic, emoji) the moment a
+     * click or cursor move triggers a pixel->iter conversion. The markdown
+     * conceal engine hit this and moved to scale 0.01 + transparent
+     * foreground (see gui_conceal.c); the link bracket tag must match, or a
+     * line carrying both a link and an emoji crashes the app on click. */
     return gtk_text_buffer_create_tag(buf, "md-link-bracket",
-                                      "invisible", TRUE, NULL);
+                                      "scale", 0.01,
+                                      "foreground", "rgba(0,0,0,0)",
+                                      NULL);
 }
 
 static GtkTextTag *link_text_tag(GtkTextBuffer *buf) {

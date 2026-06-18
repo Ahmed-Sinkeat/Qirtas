@@ -24,16 +24,19 @@ write-up with a `✅ FIXED` note pointing at the change.
 
 ### MVP readiness verdict (2026-06-18)
 
-**No remaining issue is a hard MVP blocker.** One known crash class is still
-open but is now narrow and intermittent:
+**No remaining issue is a hard MVP blocker, and the last open crash class is now
+closed.**
 
-- 🔴 **GTK abort on click in read mode** (the GTK-*internal* click handler, not
-  our code) — still open, but it is the only remaining crash path, it is
-  intermittent, and a candidate fix is scoped (capture-phase gesture). The
-  far more common variants of the same GTK limit — abort on **theme change**
-  and on **navigating between notes** — were our own `get_iter_at_location`
-  scroll-anchor calls and are **fixed this pass** (see table below). Recommend
-  shipping MVP and treating the read-mode-click abort as a fast-follow.
+- 🔴 → ✅ **GTK abort on click / navigation over a concealed line** — root-caused
+  to the last remaining real `invisible` tag in the codebase: `gui_links.c`
+  hid markdown link brackets (`[`, `](url)`) with the GTK `"invisible"`
+  property. A line carrying both a link and multi-byte UTF-8 (Arabic, emoji)
+  made GTK's internal pixel→iter conversion walk `set_visible_line_index` and
+  abort. Switched the link-bracket tag to the same `scale 0.01` + transparent
+  ink the conceal engine uses, so **no line carries an invisible segment** and
+  GTK's internal click handler never takes the broken path. This fixes the
+  read-mode-click abort at the source — no capture-phase gesture workaround
+  needed. (Reproduced reliably with link+emoji READMEs; fixed and verified.)
 
 Everything else open is architectural (`#3` vault-in-source), test debt, perf,
 or release infra — none block a usable MVP. The two MVP-relevant non-crashes
@@ -67,22 +70,19 @@ or release infra — none block a usable MVP. The two MVP-relevant non-crashes
 
 **Still open (deliberately not fixed — see notes in each section):**
 
-- 🔴 **Intermittent GTK abort on click in read mode** — `Gtk-ERROR: Byte index
-  N is off the end of the line` → SIGABRT (exit 6). GTK's built-in text-view
-  click handler calls `gtk_text_view_get_iter_at_position`, which miscomputes a
-  visible byte index on a line carrying both a conceal (invisible) tag and
-  multibyte (Arabic) text. The app's own code already avoids that API (uses the
-  safe `editor_get_iter_at_widget_point`); GTK's internal handler does not.
-  Reproduced by clicking a todo checkbox in read mode; did not reproduce under
-  gdb (timing). Same GTK limit as "Conceal residual risk" below. Candidate fix:
-  move the editor left-click gesture to capture phase and place the cursor with
-  the safe iter ourselves, claiming the event so GTK's internal handler never
-  runs (watch for selection-drag regressions). **Still open — GTK-internal click
-  path only.** NOTE 2026-06-18: the *same* abort fired on theme change and on
-  navigating between notes — those were the app's own `get_iter_at_location`
-  scroll-anchor calls (`gui_buffer.c` / `gui_tabs.c` / `gui_layout.c`), now
-  fixed by switching to `get_line_at_y` (see STATUS SUMMARY). Only the
-  GTK-internal click handler remains; no app call site triggers this anymore.
+- ✅ **FIXED 2026-06-18 — Intermittent GTK abort on click in read mode**
+  (`Gtk-ERROR: Byte index N is off the end of the line` → SIGABRT, exit 6).
+  Previously thought to be a GTK-internal-only problem with no app-side fix.
+  Real root cause: `gui_links.c` still concealed link brackets with the GTK
+  `"invisible"` property — the *last* `invisible` tag in the tree. GTK's
+  internal click handler (`get_iter_at_position`) only walks the broken
+  `set_visible_line_index` path when a line actually carries an invisible
+  segment, so removing that tag closes the crash for the internal handler too.
+  Switched the link-bracket tag to `scale 0.01` + transparent foreground (the
+  conceal engine's approach). Reproduced reliably on link+emoji READMEs (e.g.
+  GitHub project READMEs full of `[text](url)` + emoji); fixed and verified by
+  navigating/clicking through the offending lines. No capture-phase gesture
+  workaround required. | `gui_links.c` `link_bracket_tag` |
 - **#3** App writes into its own source tree when `src/` opened as a vault —
   architectural; needs external-files/vault separation. **No code fix yet.**
 - **No behavioral C tests** — ~14.7k lines of C never exercised. Large harness
