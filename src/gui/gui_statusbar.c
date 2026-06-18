@@ -82,11 +82,18 @@ void on_status_menu_history(GtkButton *btn, gpointer user_data) {
 
 void on_restart_clicked(GtkButton *btn, gpointer user_data) {
     (void)btn; (void)user_data;
+    const char *appimage = g_getenv("APPIMAGE");
     char exe[1024] = {0};
-    ssize_t n = readlink("/proc/self/exe", exe, sizeof(exe) - 1);
-    if (n > 0) {
-        exe[n] = '\0';
+    if (appimage) {
+        strncpy(exe, appimage, sizeof(exe) - 1);
+    } else {
+        ssize_t n = readlink("/proc/self/exe", exe, sizeof(exe) - 1);
+        if (n > 0) exe[n] = '\0';
+    }
+    if (exe[0]) {
         gchar *argv[] = { exe, NULL };
+        /* envp=NULL → child inherits the parent environment, so QIRTAS_DATA_DIR
+         * and every other env var survive the restart unchanged. */
         g_spawn_async(NULL, argv, NULL, G_SPAWN_DEFAULT, NULL, NULL, NULL, NULL);
     }
     gui_save_window_geometry(global_gui);
