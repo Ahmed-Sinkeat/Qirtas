@@ -500,7 +500,11 @@ void gui_reload_full_buffer(void) {
         GdkRectangle vr;
         gtk_text_view_get_visible_rect(tv, &vr);
         GtkTextIter top_it;
-        gtk_text_view_get_iter_at_location(tv, &top_it, vr.x, vr.y);
+        /* get_line_at_y (byte 0 of the line, crash-safe) instead of
+         * get_iter_at_location, which aborts on conceal-tagged multi-byte lines
+         * ("Byte index N is off the end of the line"). We only need the line. */
+        int top_y = 0;
+        gtk_text_view_get_line_at_y(tv, &top_it, vr.y, &top_y);
         top_line = gtk_text_iter_get_line(&top_it);
     }
 

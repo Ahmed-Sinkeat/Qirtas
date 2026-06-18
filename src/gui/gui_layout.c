@@ -177,7 +177,13 @@ void toggle_read_mode(AppGui *gui) {
     GdkRectangle visible;
     gtk_text_view_get_visible_rect(tv, &visible);
     GtkTextIter top_iter;
-    gtk_text_view_get_iter_at_location(tv, &top_iter, visible.x, visible.y);
+    /* Anchor by the line at the top of the viewport. Use get_line_at_y (returns
+     * byte 0 of the line, never crashes) instead of get_iter_at_location, which
+     * walks gtk_text_iter_set_visible_line_index and aborts with "Byte index N
+     * is off the end of the line" on lines carrying a conceal (invisible) tag
+     * plus multi-byte UTF-8. */
+    int top_y = 0;
+    gtk_text_view_get_line_at_y(tv, &top_iter, visible.y, &top_y);
     GtkTextMark *scroll_anchor = gtk_text_buffer_create_mark(buf, NULL, &top_iter, TRUE);
 
     gui->read_mode = !gui->read_mode;

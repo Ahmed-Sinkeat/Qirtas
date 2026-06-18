@@ -1,7 +1,7 @@
 # Qirtas — Known Issues
 
 **Last audited:** 2026-06-17 (branch `full-buffer-editor-v2`).
-**Last fix pass:** 2026-06-18 (read-mode read-only + undo viewport jump + AppImage packaging); prior pass 2026-06-17 (commits `345e502`, `cc9b4db`).
+**Last fix pass:** 2026-06-18 (GTK abort on theme-change/navigate — scroll-anchor `get_iter_at_location`); earlier 2026-06-18 (read-mode read-only + undo viewport jump + AppImage packaging); prior pass 2026-06-17 (commits `345e502`, `cc9b4db`).
 
 This file tracks correctness/robustness issues found by code audit. It also
 records where the prose docs had drifted from the actual source so the drift
@@ -21,6 +21,29 @@ Every confirmed correctness bug found in the audit is **fixed and committed** on
 `full-buffer-editor-v2`. Build is clean; `zig build test-regression` is green
 (includes a new wrong-key regression test). Each item below keeps its full
 write-up with a `✅ FIXED` note pointing at the change.
+
+### MVP readiness verdict (2026-06-18)
+
+**No remaining issue is a hard MVP blocker.** One known crash class is still
+open but is now narrow and intermittent:
+
+- 🔴 **GTK abort on click in read mode** (the GTK-*internal* click handler, not
+  our code) — still open, but it is the only remaining crash path, it is
+  intermittent, and a candidate fix is scoped (capture-phase gesture). The
+  far more common variants of the same GTK limit — abort on **theme change**
+  and on **navigating between notes** — were our own `get_iter_at_location`
+  scroll-anchor calls and are **fixed this pass** (see table below). Recommend
+  shipping MVP and treating the read-mode-click abort as a fast-follow.
+
+Everything else open is architectural (`#3` vault-in-source), test debt, perf,
+or release infra — none block a usable MVP. The two MVP-relevant non-crashes
+(decrypt-fail data loss `#1`, autosave dropping anchors `#4`) are both fixed.
+
+**Fixed 2026-06-18 (GTK abort on theme-change / navigate):**
+
+| # | Sev | What | Where |
+|---|-----|------|-------|
+| — | 🔴 | `Byte index N is off the end of the line` SIGABRT on **theme switch** and **note navigation** — three scroll-anchor sites converted a viewport pixel to an iter via `gtk_text_view_get_iter_at_location`, which walks `gtk_text_iter_set_visible_line_index` and aborts on lines carrying a conceal (invisible) tag + multi-byte Arabic. Switched all three to `gtk_text_view_get_line_at_y` (returns byte 0 of the line, never walks the visible-index path); the top-of-viewport *line* is all these anchors need. | `gui_buffer.c` conceal viewport anchor (fires every edit); `gui_tabs.c` `gui_reload_full_buffer` top-line capture (navigate); `gui_layout.c` `toggle_read_mode` scroll anchor |
 
 **Fixed this pass (commits `345e502`, `cc9b4db`):**
 
@@ -54,7 +77,12 @@ write-up with a `✅ FIXED` note pointing at the change.
   gdb (timing). Same GTK limit as "Conceal residual risk" below. Candidate fix:
   move the editor left-click gesture to capture phase and place the cursor with
   the safe iter ourselves, claiming the event so GTK's internal handler never
-  runs (watch for selection-drag regressions). **Deferred, no code fix yet.**
+  runs (watch for selection-drag regressions). **Still open — GTK-internal click
+  path only.** NOTE 2026-06-18: the *same* abort fired on theme change and on
+  navigating between notes — those were the app's own `get_iter_at_location`
+  scroll-anchor calls (`gui_buffer.c` / `gui_tabs.c` / `gui_layout.c`), now
+  fixed by switching to `get_line_at_y` (see STATUS SUMMARY). Only the
+  GTK-internal click handler remains; no app call site triggers this anymore.
 - **#3** App writes into its own source tree when `src/` opened as a vault —
   architectural; needs external-files/vault separation. **No code fix yet.**
 - **No behavioral C tests** — ~14.7k lines of C never exercised. Large harness

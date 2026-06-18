@@ -447,7 +447,12 @@ static gboolean buffer_stats_timeout_cb(gpointer user_data) {
     GdkRectangle vrect;
     gtk_text_view_get_visible_rect(tv, &vrect);
     GtkTextIter top_iter;
-    gtk_text_view_get_iter_at_location(tv, &top_iter, vrect.x, vrect.y);
+    /* get_line_at_y (byte 0, crash-safe) instead of get_iter_at_location: the
+     * latter walks gtk_text_iter_set_visible_line_index and aborts with "Byte
+     * index N is off the end of the line" on conceal-tagged multi-byte (Arabic)
+     * lines. Anchoring by top line is enough to keep the viewport put. */
+    int top_y = 0;
+    gtk_text_view_get_line_at_y(tv, &top_iter, vrect.y, &top_y);
     GtkTextMark *view_anchor = gtk_text_buffer_create_mark(buf, NULL, &top_iter, TRUE);
 
     /* Reconceal only the lines edited since the last pass. The full-buffer
