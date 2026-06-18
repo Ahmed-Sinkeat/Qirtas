@@ -69,13 +69,38 @@ chmod +x Qirtas-x86_64.AppImage
 
 ### آرتش لينكس
 
+ابنِ الحزمة من المستودع مباشرة (لا يحتاج حساب AUR):
+
 ```sh
-yay -S qirtas-git
+git clone https://github.com/Ahmed-Sinkeat/Qirtas.git
+cd Qirtas/packaging
+makepkg -si
 ```
+
+أو ثبّت الحزمة الجاهزة من صفحة [الإصدارات](https://github.com/Ahmed-Sinkeat/Qirtas/releases):
+
+```sh
+sudo pacman -U qirtas-1.0.0-1-x86_64.pkg.tar.zst
+```
+
+> `yay -S qirtas-git` و`paru -S qirtas-git` سيعملان بعد نشر الحزمة على AUR.
 
 ### من المصدر
 
-تحتاج إلى Zig وGTK4 وLibadwaita وGtkSourceView 5 وSQLite.
+تحتاج إلى Zig 0.16، وGTK4، وLibadwaita، وGtkSourceView 5، وSQLite. ثبّت المتطلبات حسب توزيعتك:
+
+```sh
+# آرتش
+sudo pacman -S --needed zig gtk4 gtksourceview5 libadwaita sqlite
+
+# فيدورا
+sudo dnf install zig gtk4-devel gtksourceview5-devel libadwaita-devel sqlite-devel
+
+# دبيان / أوبنتو (إن كانت Zig في المستودعات أقدم من 0.16، نزّلها من ziglang.org)
+sudo apt install libgtk-4-dev libgtksourceview-5-dev libadwaita-1-dev libsqlite3-dev
+```
+
+ثم ابنِ وشغّل:
 
 ```sh
 git clone https://github.com/Ahmed-Sinkeat/Qirtas.git

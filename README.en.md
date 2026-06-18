@@ -61,13 +61,38 @@ No root privileges required, and nothing is copied into your system. (Requires F
 
 ### Arch Linux
 
+Build the package straight from the repo (no AUR account needed):
+
 ```sh
-yay -S qirtas-git
+git clone https://github.com/Ahmed-Sinkeat/Qirtas.git
+cd Qirtas/packaging
+makepkg -si
 ```
+
+Or install the prebuilt package from the [Releases](https://github.com/Ahmed-Sinkeat/Qirtas/releases) page:
+
+```sh
+sudo pacman -U qirtas-1.0.0-1-x86_64.pkg.tar.zst
+```
+
+> `yay -S qirtas-git` / `paru -S qirtas-git` will work once the package is published to the AUR.
 
 ### From Source
 
-You'll need Zig, GTK4, Libadwaita, GtkSourceView 5, and SQLite.
+You'll need Zig 0.16, GTK4, Libadwaita, GtkSourceView 5, and SQLite. Install the dependencies for your distro:
+
+```sh
+# Arch
+sudo pacman -S --needed zig gtk4 gtksourceview5 libadwaita sqlite
+
+# Fedora
+sudo dnf install zig gtk4-devel gtksourceview5-devel libadwaita-devel sqlite-devel
+
+# Debian / Ubuntu (if the repo's Zig is older than 0.16, grab it from ziglang.org)
+sudo apt install libgtk-4-dev libgtksourceview-5-dev libadwaita-1-dev libsqlite3-dev
+```
+
+Then build and run:
 
 ```sh
 git clone https://github.com/Ahmed-Sinkeat/Qirtas.git
