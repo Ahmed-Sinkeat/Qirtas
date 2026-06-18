@@ -44,6 +44,17 @@ write-up with a `✅ FIXED` note pointing at the change.
 
 **Still open (deliberately not fixed — see notes in each section):**
 
+- 🔴 **Intermittent GTK abort on click in read mode** — `Gtk-ERROR: Byte index
+  N is off the end of the line` → SIGABRT (exit 6). GTK's built-in text-view
+  click handler calls `gtk_text_view_get_iter_at_position`, which miscomputes a
+  visible byte index on a line carrying both a conceal (invisible) tag and
+  multibyte (Arabic) text. The app's own code already avoids that API (uses the
+  safe `editor_get_iter_at_widget_point`); GTK's internal handler does not.
+  Reproduced by clicking a todo checkbox in read mode; did not reproduce under
+  gdb (timing). Same GTK limit as "Conceal residual risk" below. Candidate fix:
+  move the editor left-click gesture to capture phase and place the cursor with
+  the safe iter ourselves, claiming the event so GTK's internal handler never
+  runs (watch for selection-drag regressions). **Deferred, no code fix yet.**
 - **#3** App writes into its own source tree when `src/` opened as a vault —
   architectural; needs external-files/vault separation. **No code fix yet.**
 - **No behavioral C tests** — ~14.7k lines of C never exercised. Large harness
