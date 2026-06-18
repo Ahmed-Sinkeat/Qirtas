@@ -1,0 +1,22 @@
+pkgbase = qirtas-git
+	pkgdesc = Focused markdown notebook — Zig backend, GTK4/Libadwaita frontend
+	pkgver = 0.r0.0000000
+	pkgrel = 1
+	url = https://github.com/Ahmed-Sinkeat/Qirtas
+	arch = x86_64
+	license = GPL3
+	makedepends = git
+	makedepends = zig
+	makedepends = imagemagick
+	depends = gtk4
+	depends = gtksourceview5
+	depends = libadwaita
+	depends = sqlite
+	depends = curl
+	depends = adwaita-icon-theme
+	provides = qirtas
+	conflicts = qirtas
+	source = qirtas-git::git+https://github.com/Ahmed-Sinkeat/Qirtas.git
+	sha256sums = SKIP
+
+pkgname = qirtas-git

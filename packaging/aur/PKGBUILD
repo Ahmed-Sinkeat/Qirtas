@@ -11,7 +11,7 @@ arch=('x86_64')
 url="https://github.com/Ahmed-Sinkeat/Qirtas"
 license=('GPL3')
 depends=('gtk4' 'gtksourceview5' 'libadwaita' 'sqlite' 'curl' 'adwaita-icon-theme')
-makedepends=('git' 'zig')
+makedepends=('git' 'zig' 'imagemagick')
 provides=('qirtas')
 conflicts=('qirtas')
 source=("$pkgname::git+https://github.com/Ahmed-Sinkeat/Qirtas.git")
@@ -38,9 +38,20 @@ package() {
   install -d "$pkgdir/usr/share/qirtas/src/ui"
   cp -r src/ui/themes "$pkgdir/usr/share/qirtas/src/ui/"
   cp -r src/ui/icons  "$pkgdir/usr/share/qirtas/src/ui/"
+  # GtkSourceView language def + style schemes live at src/ui top level, not in
+  # themes/. Without these the editor loses syntax highlighting after install.
+  install -Dm644 -t "$pkgdir/usr/share/qirtas/src/ui" \
+    src/ui/qirtas_markdown.lang \
+    src/ui/*.style-scheme.xml
 
   install -Dm644 packaging/qirtas.desktop \
     "$pkgdir/usr/share/applications/org.qirtas.notebook.desktop"
-  install -Dm644 src/ui/icons/qirtas-logo.png \
+
+  # Desktop/launcher icon: the Arabic-calligraphy package icon (1254×1254),
+  # resized to the standard hicolor 512×512 slot. The in-app logo
+  # (src/ui/icons/qirtas-logo.png) is intentionally different and left untouched.
+  magick packaging/appimage/qirtas-package-icon.png \
+    -resize 512x512^ -gravity center -extent 512x512 "$srcdir/org.qirtas.notebook.png"
+  install -Dm644 "$srcdir/org.qirtas.notebook.png" \
     "$pkgdir/usr/share/icons/hicolor/512x512/apps/org.qirtas.notebook.png"
 }
