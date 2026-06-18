@@ -13,7 +13,7 @@ arch=('x86_64')
 url="https://github.com/Ahmed-Sinkeat/qirtas"
 license=('GPL3')
 depends=('gtk4' 'gtksourceview5' 'libadwaita' 'sqlite' 'curl' 'adwaita-icon-theme')
-makedepends=('zig')
+makedepends=('zig' 'imagemagick')
 source=()
 sha256sums=()
 
@@ -47,8 +47,13 @@ package() {
   install -Dm644 "$startdir/qirtas.desktop" \
     "$pkgdir/usr/share/applications/org.qirtas.notebook.desktop"
 
-  # App icon (matches the GTK application id org.qirtas.notebook, so it is used
-  # for the window/taskbar too). qirtas-logo.png is not square; GTK scales it.
-  install -Dm644 "$root/src/ui/icons/qirtas-logo.png" \
+  # Package / desktop icon: the Arabic-calligraphy logo supplied for packaging.
+  # (The in-app logo at src/ui/icons/qirtas-logo.png is intentionally different
+  # and is left untouched — the binary loads it via QIRTAS_DATA_DIR at runtime.)
+  # Resize from source (1254×1254) to the standard hicolor 512×512 slot.
+  local pkg_icon="$startdir/appimage/qirtas-package-icon.png"
+  local icon_out="$srcdir/org.qirtas.notebook.png"
+  magick "$pkg_icon" -resize 512x512^ -gravity center -extent 512x512 "$icon_out"
+  install -Dm644 "$icon_out" \
     "$pkgdir/usr/share/icons/hicolor/512x512/apps/org.qirtas.notebook.png"
 }

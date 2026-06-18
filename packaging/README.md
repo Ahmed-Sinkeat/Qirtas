@@ -1,15 +1,14 @@
 # Packaging Qirtas
 
-Four ways to ship Qirtas:
+Three supported ways to ship Qirtas (Flatpak is experimental — see below):
 
 | Channel | Who it's for | Files |
 |---------|--------------|-------|
 | **Arch (local PKGBUILD)** | build + install from a checkout | `PKGBUILD`, `qirtas.desktop` |
 | **AUR** | Arch users: `yay -S qirtas-git` | `aur/PKGBUILD`, `aur/README.md` |
-| **Flatpak** | any distro, via Flathub / software center | `org.qirtas.notebook.yml` |
 | **AppImage** | one portable file, no install | `appimage/build-appimage.sh` |
 
-All four install the binary plus the runtime assets under a data dir the binary
+All three install the binary plus the runtime assets under a data dir the binary
 resolves via (in order) `$QIRTAS_DATA_DIR`, the build tree, then a system path —
 so the same code works in every layout.
 
@@ -63,11 +62,12 @@ QIRTAS_DATA_DIR=/usr/share/qirtas ./zig-out/bin/qirtas
 The easiest path for Arch users — they install with `yay -S qirtas-git`. See
 `aur/README.md` for the one-time AUR account setup and the publish flow.
 
-## Flatpak
+## Flatpak (experimental)
 
-Cross-distro, publishable to Flathub. See `org.qirtas.notebook.yml` (build
-instructions are in its header comment). You must pin the Zig tarball sha256
-before building.
+Moved to `experimental/flatpak/org.qirtas.notebook.yml` — not part of the
+supported release set yet. Cross-distro, publishable to Flathub; you must pin
+the Zig tarball sha256 before building. Build instructions are in the file's
+header comment.
 
 ## AppImage
 
