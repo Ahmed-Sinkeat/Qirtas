@@ -22,7 +22,12 @@ build() {
   # This build.zig sets preferred_optimize_mode, so release mode is selected
   # with --release=<mode> (not -Doptimize=...). 'safe' keeps bounds/overflow
   # checks — sensible for code touching user files, crypto, and sync.
-  zig build --release=safe
+  #
+  # -Dcpu=baseline targets the generic x86-64 baseline instead of the build
+  # host's native CPU. This package is distributed as a prebuilt binary (attached
+  # to GitHub releases), so it must run on any x86-64 CPU; a native build embeds
+  # AVX/etc. from the build machine and dies with SIGILL on older CPUs.
+  zig build --release=safe -Dcpu=baseline
 }
 
 package() {

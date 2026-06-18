@@ -26,8 +26,13 @@ rm -rf "$work"
 mkdir -p "$work" "$appdir"
 
 # ── 1. Build ────────────────────────────────────────────────────────────────
-echo "==> Building qirtas (zig --release=safe)"
-( cd "$root" && zig build --release=safe )
+# -Dcpu=baseline targets the generic x86-64 baseline (SSE2 only), NOT the build
+# host's native CPU. Zig defaults to native, which bakes in whatever extensions
+# the build machine has (AVX2/AVX-512/…); running that binary on an older or
+# different CPU dies with SIGILL (illegal instruction). A distributed binary
+# must assume nothing about the target CPU.
+echo "==> Building qirtas (zig --release=safe -Dcpu=baseline, portable)"
+( cd "$root" && zig build --release=safe -Dcpu=baseline )
 
 # ── 2. AppDir layout ────────────────────────────────────────────────────────
 echo "==> Laying out AppDir"
