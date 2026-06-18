@@ -372,7 +372,7 @@ void show_keybindings_window(AppGui *gui) {
         gtk_box_append(GTK_BOX(_row), _d); \
         if (_idx >= 0) { \
             shortcut_value_labels[_idx] = _k; \
-            GtkWidget *_edit_btn = gtk_button_new_with_label("Edit"); \
+            GtkWidget *_edit_btn = gtk_button_new_with_label(qirtas_tr("Edit")); \
             gtk_widget_add_css_class(_edit_btn, "pop-btn"); \
             g_signal_connect(_edit_btn, "clicked", G_CALLBACK(on_edit_shortcut_clicked), GINT_TO_POINTER(_idx)); \
             shortcut_edit_buttons[_idx] = _edit_btn; \
