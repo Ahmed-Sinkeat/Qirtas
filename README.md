@@ -11,6 +11,8 @@
 
 [English](README.en.md) · **العربية**
 
+[![أحدث إصدار](https://img.shields.io/github/v/release/Ahmed-Sinkeat/Qirtas?display_name=tag&label=%D8%A7%D9%84%D8%A5%D8%B5%D8%AF%D8%A7%D8%B1)](https://github.com/Ahmed-Sinkeat/Qirtas/releases/latest)
+
 <sub>نواة Zig · واجهة GTK4 / Libadwaita · بلا Electron · بلا حسابات · بلا ذكاء اصطناعي داخل المحرّر</sub>
 
 </div>

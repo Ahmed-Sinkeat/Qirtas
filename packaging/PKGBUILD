@@ -6,7 +6,7 @@
 # root would make that collide with the project's own src/ (a `makepkg -C`
 # would then delete the real source). From here, the repo root is "$startdir/..".
 pkgname=qirtas
-pkgver=0.1.0
+pkgver=1.0.0
 pkgrel=1
 pkgdesc="Focused markdown notebook — Zig backend, GTK4/Libadwaita frontend"
 arch=('x86_64')

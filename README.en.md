@@ -11,6 +11,8 @@ A lightweight note editor for Linux that tries to remain just a note editor.
 
 **English** · [العربية](README.md)
 
+[![Latest release](https://img.shields.io/github/v/release/Ahmed-Sinkeat/Qirtas?display_name=tag)](https://github.com/Ahmed-Sinkeat/Qirtas/releases/latest)
+
 <sub>Zig core · GTK4 / Libadwaita · no Electron · no accounts · no AI inside the editor</sub>
 
 </div>
