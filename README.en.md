@@ -7,7 +7,7 @@
 
 # Qirtas · قِرطاس
 
-A markdown notebook for Linux that tries to stay a notebook.
+A note-taking application for Linux that tries to stay a note-taking application.
 
 **English** · [العربية](README.md)
 
@@ -19,31 +19,34 @@ A markdown notebook for Linux that tries to stay a notebook.
 
 ## What it is
 
-*Qirtas* is the Arabic word for a sheet of paper. That's the whole idea.
+*Qirtas* is the Arabic word for a sheet of paper.
 
-You write in plain Markdown. Instead of a wall of `#`, `**` and bracket noise,
-Qirtas shows you a clean page — the syntax steps out of the way while you type
-and comes back the moment your cursor lands on it. A `# heading` looks like a
-heading. A `- [ ] task` becomes a checkbox you can tick. A code block turns into
-a card you can copy from. None of that touches your file: what's on disk is still
-ordinary `.md` you can open in anything, sync with anything, grep, and back up.
-Nothing is trapped inside Qirtas.
+idea: notes should remain notes.
 
-Arabic is built in from the start, not bolted on: proper right-to-left layout,
-per-paragraph direction that markdown can't confuse, search that ignores alef
-forms and tashkeel, Eastern numerals, and an Arabic *matn* style for PDF export.
+Write your notes, organize them, read them, export them, and keep them as ordinary Markdown files that belong to you.
 
-No subscription. No login. No assistant watching you write. It opens fast and
-gets out of the way.
+No subscriptions.
+
+No accounts.
+
+No proprietary file format.
+
+No vendor lock-in.
+
+If you want sync, use the service you trust. If you want backups, your files are already on your machine. If you decide to stop using Qirtas tomorrow, your notes remain ordinary Markdown files that can be opened anywhere.
+
+Arabic support is a first-class goal of the project and continues to improve with every release.
+
+Qirtas opens quickly, stays out of your way, and focuses on writing.
 
 ## Screenshots
 
 <div align="center">
 
-| Editor | Read mode |
-|:---:|:---:|
-| ![Editor](assets/screenshots/editor.png) | ![Read mode](assets/screenshots/read-mode.png) |
-| **Paper & Ink themes** | **Arabic, right-to-left** |
+|                  Editor                  |                     Read mode                    |
+| :--------------------------------------: | :----------------------------------------------: |
+| ![Editor](assets/screenshots/editor.png) |  ![Read mode](assets/screenshots/read-mode.png)  |
+|          **Paper & Ink themes**          |             **Arabic, right-to-left**            |
 | ![Themes](assets/screenshots/themes.png) | ![Arabic RTL](assets/screenshots/arabic-rtl.png) |
 
 </div>
@@ -53,17 +56,20 @@ gets out of the way.
 ### AppImage — easiest, any Linux, nothing to install
 
 1. Download `Qirtas-x86_64.AppImage` from the [Releases](https://github.com/Ahmed-Sinkeat/Qirtas/releases) page.
-2. Make it runnable:
-   ```sh
-   chmod +x Qirtas-x86_64.AppImage
-   ```
-3. Run it:
-   ```sh
-   ./Qirtas-x86_64.AppImage
-   ```
 
-No root, nothing copied into your system. (Needs FUSE, which almost every distro
-already has.)
+2. Make it executable:
+
+```sh
+chmod +x Qirtas-x86_64.AppImage
+```
+
+3. Run it:
+
+```sh
+./Qirtas-x86_64.AppImage
+```
+
+No root privileges required and nothing is copied into your system.
 
 ### Arch Linux
 
@@ -73,7 +79,7 @@ yay -S qirtas-git
 
 ### From source
 
-You'll need Zig, GTK4, Libadwaita, GtkSourceView 5 and SQLite.
+You'll need Zig, GTK4, Libadwaita, GtkSourceView 5, and SQLite.
 
 ```sh
 git clone https://github.com/Ahmed-Sinkeat/Qirtas.git
@@ -81,40 +87,53 @@ cd Qirtas
 zig build run
 ```
 
-Your notes and settings live in `~/.config/qirtas/`.
+Your notes and settings live in:
+
+```text
+~/.config/qirtas/
+```
 
 ## Current state
 
-Pre-1.0, written and maintained by one person, and used every day to take real
-notes. It works — but expect the occasional rough edge. Because your notes are
-plain `.md` files, the worst case is still just Markdown sitting on your disk.
+version 1.0, maintained by a single developer and used daily for real notes.
+
+It works, but expect occasional rough edges.
+
+Because your notes are plain Markdown files, the worst case is still just Markdown sitting on your disk.
+
 Known issues are tracked openly in [docs/ISSUES.md](docs/ISSUES.md).
 
 ## What I plan to add
 
-- A better Arabic writing experience
-- Spell check
-- Better export and templates
-- Stronger table support
-- A phone version
-- DOCX import / export
-- A plugin system
+* Better Arabic writing support
+* Spell checking
+* Better export templates
+* Improved table support
+* Split view
+* Mobile version
+* DOCX import and export
+* Plugin system
+
+## What will not be added to the core
+
+* AI features
+* Features that do not directly improve writing, reading, or note organization
 
 ## Contributing
 
-Start with [docs/STRUCTURE.md](docs/STRUCTURE.md) — it explains how the project
-is laid out and where things live (Zig owns the document text; the C/GTK side
-draws it).
+Start with [docs/STRUCTURE.md](docs/STRUCTURE.md).
 
-Then there's one question every feature has to answer first:
+Before proposing a feature, there is one question:
 
-> **Does this feature make Qirtas a better notebook?**
+> **Does this feature make Qirtas a better note-taking application?**
 >
-> If yes — it might belong in the project.
-> If no — it's a separate add-on, or it doesn't get added at all.
+> If the answer is yes, it may belong in the project.
+>
+> If the answer is no, it should probably be a plugin—or stay outside Qirtas entirely.
 
-That line keeps a notes app a notes app. Open an issue before a big change so we
-can check it against that question together.
+That question is what keeps a note-taking application focused on note-taking.
+
+Open an issue before large changes so they can be evaluated against that principle.
 
 ---
 
