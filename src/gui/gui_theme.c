@@ -266,8 +266,11 @@ void apply_theme(AppGui *gui, const char *theme_name) {
         theme_name = "qirtas";
     }
     g_strlcpy(gui->current_theme, theme_name, sizeof(gui->current_theme));
-    /* Persist the choice so it is the default on next launch. */
-    qirtas_pref_set_string("theme", theme_name);
+    /* NOTE: do NOT persist here. apply_theme runs several times at startup
+     * (init_css, focus-mode/pointer-color re-applies) BEFORE the saved theme is
+     * loaded, so persisting here clobbered the user's saved choice with the
+     * default. Persistence is the caller's job — only the explicit user pick in
+     * on_theme_dropdown_changed / on_custom_theme_dialog_response writes the pref. */
 
     AdwStyleManager *style_manager = adw_style_manager_get_default();
     if (strcmp(theme_name, "sepia") == 0 || strcmp(theme_name, "typewriter-light") == 0 || strcmp(theme_name, "qirtas") == 0 || strcmp(theme_name, "navy") == 0) {
@@ -531,6 +534,7 @@ static void on_custom_theme_dialog_response(GObject *source_object, GAsyncResult
             strncpy(custom_theme_path, path, sizeof(custom_theme_path) - 1);
             custom_theme_path[sizeof(custom_theme_path) - 1] = '\0';
             apply_theme(gui, "custom");
+            qirtas_pref_set_string("theme", "custom");
             g_free(path);
         }
         g_object_unref(file);
@@ -572,6 +576,12 @@ void on_theme_dropdown_changed(GObject *gobject, GParamSpec *pspec, gpointer use
         
         g_object_set_data(G_OBJECT(dialog), "theme-dropdown", dropdown);
         gtk_file_dialog_open(dialog, GTK_WINDOW(gui->window), NULL, on_custom_theme_dialog_response, gui);
+    }
+
+    /* Persist the explicit user pick. (Custom persists in its dialog callback,
+     * after the file is actually chosen.) */
+    if (selected != 3) {
+        qirtas_pref_set_string("theme", gui->current_theme);
     }
 }
 
