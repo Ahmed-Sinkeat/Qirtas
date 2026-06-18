@@ -293,7 +293,10 @@ void gui_tabs_refresh(AppGui *gui) {
     }
 
     if (gui->source_view) {
-        gtk_text_view_set_editable(GTK_TEXT_VIEW(gui->source_view), (gui->tabs.active != -1));
+        /* Read mode is view-only — never re-enable editing here, or switching/
+         * refreshing tabs would silently make a read-mode buffer editable. */
+        gtk_text_view_set_editable(GTK_TEXT_VIEW(gui->source_view),
+                                   (gui->tabs.active != -1) && !gui->read_mode);
     }
 
     for (int i = 0; i < gui->tabs.count; i++) {
@@ -518,7 +521,17 @@ void gui_reload_full_buffer(void) {
         gui_word_count_invalidate();
     }
 
-    gui_set_cursor_position(line, col);
+    /* Restore the caret WITHOUT scrolling to it. The non-quiet variant arms a
+     * deferred scroll that reads the *live* insert mark when it fires (see
+     * on_mark_set / idle_scroll_to_cursor, offset == -1). On undo/redo,
+     * restoreSnapshot moves the caret again right after this returns (to the
+     * snapshot's stored cursor — 0,0 for the baseline), so that armed scroll
+     * would later read 0,0 and snap the view to the top, defeating the
+     * line-anchored viewport restore below (the "undo jumps up" bug). The
+     * viewport is restored by line in reload_finalize_idle; callers that want
+     * the caret on-screen (e.g. insert_horizontal_rule) set it again after. */
+    extern void gui_set_cursor_position_quiet(int line, int col);
+    gui_set_cursor_position_quiet(line, col);
 
     int *tl = g_new(int, 1);
     *tl = top_line;

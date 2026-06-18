@@ -226,6 +226,51 @@ gboolean on_editor_key_pressed(GtkEventControllerKey *ctrl,
         toggle_read_mode(gui);
         return TRUE;
     }
+
+    /* ── Read mode is view-only ──
+     * Most shortcuts below mutate the buffer through programmatic insert/delete
+     * (smart lists, formatting, cut/paste, undo, delete-line, …) that bypasses
+     * gtk_text_view_set_editable(FALSE). In read mode, handle only the read-safe
+     * shortcuts and return FALSE for everything else: GTK's default handling
+     * blocks every insertion/deletion on a non-editable view, while navigation
+     * and scrolling still work. */
+    if (gui->read_mode) {
+        if (match_app_shortcut("copy", keyval, keycode, state)) {
+            g_signal_emit_by_name(gui->source_view, "copy-clipboard");
+            gui_show_toast(qirtas_tr("Copied"));
+            return TRUE;
+        }
+        if (match_app_shortcut("select_all", keyval, keycode, state)) {
+            GtkTextIter s, e;
+            gtk_text_buffer_get_bounds(buf, &s, &e);
+            gtk_text_buffer_select_range(buf, &s, &e);
+            return TRUE;
+        }
+        if (match_app_shortcut("zoom_in", keyval, keycode, state) ||
+            (ctrl_held && (keyval == GDK_KEY_plus || keyval == GDK_KEY_KP_Add))) {
+            gui_zoom_in(gui);
+            return TRUE;
+        }
+        if (match_app_shortcut("zoom_out", keyval, keycode, state) ||
+            (ctrl_held && keyval == GDK_KEY_KP_Subtract)) {
+            gui_zoom_out(gui);
+            return TRUE;
+        }
+        if (match_app_shortcut("reset_zoom", keyval, keycode, state)) {
+            gui_zoom_reset(gui);
+            return TRUE;
+        }
+        if (match_app_shortcut("quick_switch", keyval, keycode, state)) {
+            show_quick_switcher(gui);
+            return TRUE;
+        }
+        if (match_app_shortcut("save_file", keyval, keycode, state)) {
+            gui_manual_save(gui);
+            return TRUE;
+        }
+        return FALSE;
+    }
+
     /* ── Bold ── */
     if (match_app_shortcut("bold", keyval, keycode, state)) {
         apply_format(buf, "**", "**");
