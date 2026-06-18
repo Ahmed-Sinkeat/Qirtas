@@ -39,8 +39,8 @@
 
 | المحرّر | وضع التركيز |
 |:---:|:---:|
-| ![المحرّر](assets/screenshots/editor.png) | ![وضع القراءة](assets/screenshots/read-mode.png) |
-| **سمات الورق والحبر** | **العربية من اليمين إلى اليسار** |
+| ![المحرّر](assets/screenshots/editor.png) | ![وضع التركيز](assets/screenshots/read-mode.png) |
+| **سمات الورق والحبر** | **وضع القراءة** |
 | ![السمات](assets/screenshots/themes.png) | ![عربية](assets/screenshots/arabic-rtl.png) |
 
 </div>
@@ -69,7 +69,7 @@ chmod +x Qirtas-x86_64.AppImage
 
 ### آرتش لينكس
 
-ابنِ الحزمة من المستودع مباشرة (لا يحتاج حساب AUR):
+ابنِ الحزمة من المستودع مباشرة:
 
 ```sh
 git clone https://github.com/Ahmed-Sinkeat/Qirtas.git
