@@ -24,6 +24,8 @@ Qirtas/
 │   ├── STRUCTURE.md                     ← This file
 │   ├── As-Built Specification Document.md  ← Engineering spec with profiling results
 │   └── gui/
+│       ├── gui_platform.c              ← Cross-platform OS shims: executable-path lookup
+│       │                                   (Linux /proc/self/exe, Windows GetModuleFileNameW)
 │       ├── gui_theme.c                  ← CSS loading, theme switching, font selection, brand logo
 │       ├── gui_buffer.c                 ← Buffer/undo core: insert/delete/replace signal wiring,
 │       │                                   word-grain undo, stats+conceal debounce, autosave, Arabic counts
@@ -157,7 +159,9 @@ system_keys schema, active-file-path bounds check). Run it before pushing anythi
 
 | What you want to change | File to edit |
 |---|---|
-| App behaviour, file I/O, autosave, inotify | `src/main.zig` |
+| App behaviour, file I/O, autosave, inotify (watcher is Linux-only, gated by `builtin.os.tag`) | `src/main.zig` |
+| Cross-platform OS shims (executable-path lookup) | `src/gui/gui_platform.c` |
+| Windows build / packaging | `docs/BUILDING-WINDOWS.md`, `packaging/windows/bundle.sh`, `.github/workflows/windows.yml` |
 | Debounced save-on-pause (2.5 s after typing stops) | `autosave_debounce_cb` in `src/gui.c` |
 | Crash-recovery snapshot history (`file_history` table, pruning tiers) | `src/gui/gui_history.c` |
 | Sync status dot states | `QirtasSyncState` enum in `src/gui_shared.h`, `gui_set_sync_state` in `src/gui/gui_sync_status.c` |
@@ -194,7 +198,8 @@ system_keys schema, active-file-path bounds check). Run it before pushing anythi
 | Quick Switcher (Ctrl+P) | `src/gui/gui_switcher.c` |
 | Outline panel (heading TOC) | `src/gui/gui_outline.c` |
 | UI layout map (what is where on screen) | `docs/LAYOUT.md` |
-| CI workflow | `.github/workflows/ci.yml` |
+| CI workflow (Linux build + tests) | `.github/workflows/ci.yml` |
+| CI workflow (Windows build + bundle) | `.github/workflows/windows.yml` |
 | Flatpak manifest (untested draft) | `packaging/org.qirtas.Qirtas.yml` |
 
 ## GUI Layout and Modules
@@ -203,6 +208,7 @@ system_keys schema, active-file-path bounds check). Run it before pushing anythi
 
 | Module | Responsibility | File Path |
 |---|---|---|
+| `gui_platform` | Cross-platform OS shims — executable-path lookup (`qirtas_exe_path`: Linux `/proc/self/exe`, Windows `GetModuleFileNameW`, macOS `_NSGetExecutablePath`), forward-slash normalized | `src/gui/gui_platform.c` |
 | `gui_theme` | CSS loading, theme switching, typography, and font selection (custom GtkFontDialog) | `src/gui/gui_theme.c` |
 | `gui_cursor` | Cursor pointer trail animations | `src/gui/gui_cursor.c` |
 | `gui_editor` | Editing, buffer event handling, gesture completion, shortcuts, paragraph alignment | `src/gui/gui_editor.c` |

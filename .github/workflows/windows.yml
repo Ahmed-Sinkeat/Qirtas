@@ -1,0 +1,51 @@
+name: Windows
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+
+      # MINGW64 gives us the gnu-ABI GTK stack that the gnu Zig target links
+      # against. pkgconf is what `zig build` shells out to for the -I/-l flags.
+      - name: Set up MSYS2 (MINGW64)
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          path-type: inherit
+          install: >-
+            mingw-w64-x86_64-gtk4
+            mingw-w64-x86_64-gtksourceview5
+            mingw-w64-x86_64-libadwaita
+            mingw-w64-x86_64-sqlite3
+            mingw-w64-x86_64-pkgconf
+
+      - name: Install Zig
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+
+      # Force the gnu ABI so the toolchain matches MSYS2's mingw libraries
+      # (the msvc ABI would expect a different, incompatible GTK build).
+      - name: Build
+        run: zig build -Dtarget=x86_64-windows-gnu -Doptimize=ReleaseSmall
+
+      - name: Bundle portable build
+        run: bash packaging/windows/bundle.sh
+
+      - name: Upload portable build
+        uses: actions/upload-artifact@v4
+        with:
+          name: qirtas-windows-x86_64
+          path: dist/windows/qirtas
+          if-no-files-found: error

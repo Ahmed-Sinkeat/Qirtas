@@ -82,13 +82,16 @@ void on_status_menu_history(GtkButton *btn, gpointer user_data) {
 
 void on_restart_clicked(GtkButton *btn, gpointer user_data) {
     (void)btn; (void)user_data;
+    /* On Linux under an AppImage, $APPIMAGE points at the outer .AppImage
+     * wrapper — relaunch that so the bundled theme/CSS survive the restart.
+     * Elsewhere (and on Windows, where APPIMAGE is never set) relaunch the
+     * binary itself. */
     const char *appimage = g_getenv("APPIMAGE");
     char exe[1024] = {0};
-    if (appimage) {
-        strncpy(exe, appimage, sizeof(exe) - 1);
+    if (appimage && appimage[0]) {
+        g_strlcpy(exe, appimage, sizeof(exe));
     } else {
-        ssize_t n = readlink("/proc/self/exe", exe, sizeof(exe) - 1);
-        if (n > 0) exe[n] = '\0';
+        qirtas_exe_path(exe, sizeof(exe));
     }
     if (exe[0]) {
         gchar *argv[] = { exe, NULL };

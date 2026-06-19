@@ -106,6 +106,15 @@ Your notes and settings live in:
 ~/.config/qirtas/
 ```
 
+### Windows (experimental)
+
+There is a Windows build, made with the MSYS2 MINGW64 toolchain. The easiest way
+to get one without a local setup: every push runs the Windows CI workflow, which
+builds and uploads a portable `qirtas-windows-x86_64` artifact. To build it
+yourself, see **[docs/BUILDING-WINDOWS.md](docs/BUILDING-WINDOWS.md)**.
+
+On Windows your notes and settings live under `%APPDATA%\qirtas` instead.
+
 ## Current State
 
 Qirtas just reached its first release, v1.0.0. It is written and maintained by a single developer and used daily for real-world note taking.
@@ -118,7 +127,7 @@ Known issues are documented openly in [docs/ISSUES.md](docs/ISSUES.md).
 
 ## What iam planning to add
 
-* windows version
+* Windows version — *builds now; see [docs/BUILDING-WINDOWS.md](docs/BUILDING-WINDOWS.md)*
 * Better Arabic support
 * Improvements to the writing experience
 * Split view

@@ -1,6 +1,19 @@
 #pragma once
 
 #include "gui_shared.h"
+#include <stddef.h> /* size_t */
+
+/* Windows/MinGW doesn't define PATH_MAX in <limits.h>; pick a generous
+ * default so the fixed path buffers used across the UI stay valid there. */
+#ifndef PATH_MAX
+#define PATH_MAX 4096
+#endif
+
+/* Portable executable-path lookup (src/gui/gui_platform.c). Fills `out` with
+ * the running binary's absolute path using forward slashes on every platform;
+ * returns the bytes written, or 0 on failure (out set to ""). The portable
+ * replacement for readlink("/proc/self/exe"). */
+size_t qirtas_exe_path(char *out, size_t out_sz);
 
 /* Vault DB lives at $XDG_CONFIG_HOME/qirtas/vault.db — resolved once on
  * the Zig side (single source of truth, includes legacy migration). */

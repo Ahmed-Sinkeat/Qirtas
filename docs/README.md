@@ -20,6 +20,7 @@ Developer and design docs. New here? Start with **STRUCTURE.md**, then the
 | [SYNC.md](SYNC.md) | Sync setup per provider, architecture, and a troubleshooting matrix (every error → cause → fix); per-backend conflict behavior |
 | [SECURITY.md](SECURITY.md) | Honest crypto threat model and the roadmap to a real one |
 | [PORTABILITY.md](PORTABILITY.md) | Plan to grow the Zig core (parse in Zig, render per-platform) for Windows + Android/Kotlin |
+| [BUILDING-WINDOWS.md](BUILDING-WINDOWS.md) | Build and package the Windows version (MSYS2 / MINGW64) — toolchain, bundling, CI |
 
 ## Quality
 

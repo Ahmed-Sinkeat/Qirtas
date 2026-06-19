@@ -34,9 +34,7 @@ static char *resolve_resource_path(const char *rel_path) {
     }
 
     char exe_path[1024] = {0};
-    ssize_t exe_len = readlink("/proc/self/exe", exe_path, sizeof(exe_path) - 1);
-    if (exe_len > 0) {
-        exe_path[exe_len] = '\0';
+    if (qirtas_exe_path(exe_path, sizeof(exe_path)) > 0) {
         char *last_slash = strrchr(exe_path, '/');
         if (last_slash) *last_slash = '\0';
 

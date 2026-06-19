@@ -1,16 +1,91 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const Io = std.Io;
 
+// sys/mman.h dropped: read_file_content now read()s the whole file (the old
+// mmap path copied the bytes out and unmapped immediately anyway). Every header
+// left here exists on MinGW too, so the set is the same on all targets.
 const c = @cImport({
     @cInclude("sqlite3.h");
     @cInclude("sys/stat.h");
-    @cInclude("sys/mman.h");
     @cInclude("unistd.h");
     @cInclude("fcntl.h");
     @cInclude("time.h");
     @cInclude("dirent.h");
     @cInclude("stdlib.h");
 });
+
+// Force binary mode on Windows so CR/LF translation can't corrupt encrypted
+// blobs; no-op (0) on POSIX where O_BINARY doesn't exist.
+const O_BINARY: c_int = if (builtin.os.tag == .windows) c.O_BINARY else 0;
+
+// Windows machine identifier — the analogue of /etc/machine-id, used only to
+// derive the at-rest key that wraps the master key and sync tokens (deriveKey).
+// MachineGuid is a stable per-install GUID under HKLM\...\Cryptography. The
+// advapi32 import for RegGetValueW is linked in build.zig for the Windows target.
+const win = if (builtin.os.tag == .windows) struct {
+    const HKEY = *opaque {};
+    const HKEY_LOCAL_MACHINE: HKEY = @ptrFromInt(0x80000002);
+    const RRF_RT_REG_SZ: u32 = 0x00000002;
+    extern "advapi32" fn RegGetValueW(
+        hkey: HKEY,
+        lpSubKey: ?[*:0]const u16,
+        lpValue: ?[*:0]const u16,
+        dwFlags: u32,
+        pdwType: ?*u32,
+        pvData: ?*anyopaque,
+        pcbData: ?*u32,
+    ) callconv(.winapi) i32;
+
+    fn machineId(out: []u8) ![]const u8 {
+        const subkey = std.unicode.utf8ToUtf16LeStringLiteral("SOFTWARE\\Microsoft\\Cryptography");
+        const value = std.unicode.utf8ToUtf16LeStringLiteral("MachineGuid");
+        var wbuf: [128]u16 = undefined;
+        var len_bytes: u32 = @intCast(wbuf.len * 2);
+        if (RegGetValueW(HKEY_LOCAL_MACHINE, subkey, value, RRF_RT_REG_SZ, null, &wbuf, &len_bytes) != 0)
+            return error.OpenMachineIdFailed;
+        var wlen: usize = len_bytes / 2;
+        // len_bytes counts the trailing UTF-16 NUL; drop it before decoding.
+        if (wlen > 0 and wbuf[wlen - 1] == 0) wlen -= 1;
+        const n = std.unicode.utf16LeToUtf8(out, wbuf[0..wlen]) catch return error.ReadMachineIdFailed;
+        return out[0..n];
+    }
+} else struct {};
+
+// Cryptographically-secure random bytes. Linux/POSIX reads /dev/urandom; on
+// Windows std.crypto.random pulls from the OS CSPRNG (BCryptGenRandom).
+fn fillSecureRandom(buf: []u8) !void {
+    if (builtin.os.tag == .windows) {
+        std.crypto.random.bytes(buf);
+    } else {
+        const fd = c.open("/dev/urandom", c.O_RDONLY);
+        if (fd < 0) return error.OpenUrandomFailed;
+        defer _ = c.close(fd);
+        const n = c.read(fd, buf.ptr, buf.len);
+        if (n < @as(isize, @intCast(buf.len))) return error.ReadUrandomFailed;
+    }
+}
+
+// Hand a URL to the user's default browser for the OAuth loopback consent step.
+fn openUrl(url: []const u8) void {
+    if (builtin.os.tag == .windows) {
+        // `cmd /c start "" <url>` opens the default browser; the empty "" is
+        // start's window-title argument so the URL isn't swallowed as the title.
+        var child = std.process.spawn(main.global_io, .{
+            .argv = &[_][]const u8{ "cmd", "/c", "start", "", url },
+        }) catch return;
+        _ = child.wait(main.global_io) catch {};
+    } else {
+        var child = std.process.spawn(main.global_io, .{
+            .argv = &[_][]const u8{ "xdg-open", url },
+        }) catch blk: {
+            break :blk std.process.spawn(main.global_io, .{
+                .argv = &[_][]const u8{ "gio", "open", url },
+            }) catch return;
+        };
+        _ = child.wait(main.global_io) catch {};
+    }
+}
 
 extern fn gui_update_sync_status(connected: c_int, status_text: [*:0]const u8) void;
 extern fn gui_update_dropbox_status(connected: c_int, status_text: [*:0]const u8) void;
@@ -202,14 +277,7 @@ pub export fn zig_sync_connect() callconv(.c) void {
      ) catch return;
     defer allocator.free(url);
 
-    var child = std.process.spawn(main.global_io, .{
-        .argv = &[_][]const u8{ "xdg-open", url },
-    }) catch blk: {
-        break :blk std.process.spawn(main.global_io, .{
-            .argv = &[_][]const u8{ "gio", "open", url },
-        }) catch return;
-    };
-    _ = child.wait(main.global_io) catch {};
+    openUrl(url);
 
     gui_update_sync_status(2, "Enter code below...");
 }
@@ -228,13 +296,18 @@ const PKCE_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz01234567
 
 fn pkce_fill_random(buf: []u8) void {
     var i: usize = 0;
-    while (i < buf.len) {
-        const rc = std.os.linux.getrandom(buf[i..].ptr, buf.len - i, 0);
-        switch (std.posix.errno(rc)) {
-            .SUCCESS => i += @intCast(rc),
-            .INTR => continue,
-            else => break,
+    if (builtin.os.tag == .linux) {
+        while (i < buf.len) {
+            const rc = std.os.linux.getrandom(buf[i..].ptr, buf.len - i, 0);
+            switch (std.posix.errno(rc)) {
+                .SUCCESS => i += @intCast(rc),
+                .INTR => continue,
+                else => break,
+            }
         }
+    } else {
+        std.crypto.random.bytes(buf);
+        i = buf.len;
     }
     // Extremely rare: top up any shortfall so we never emit a zero verifier.
     if (i < buf.len) {
@@ -570,7 +643,7 @@ fn read_file_content(allocator: std.mem.Allocator, filename: []const u8) ![]cons
     const filename_z = try allocator.dupeZ(u8, filename);
     defer allocator.free(filename_z);
 
-    const fd = c.open(filename_z.ptr, c.O_RDONLY);
+    const fd = c.open(filename_z.ptr, c.O_RDONLY | O_BINARY);
     if (fd < 0) return error.OpenFileFailed;
     defer _ = c.close(fd);
 
@@ -582,12 +655,18 @@ fn read_file_content(allocator: std.mem.Allocator, filename: []const u8) ![]cons
         return try allocator.alloc(u8, 0);
     }
 
-    const ptr = c.mmap(null, file_size, c.PROT_READ, c.MAP_SHARED, fd, 0);
-    if (ptr == c.MAP_FAILED) return error.MmapFailed;
-    defer _ = c.munmap(ptr, file_size);
-
-    const slice: [*]const u8 = @ptrCast(ptr);
-    return try allocator.dupe(u8, slice[0..file_size]);
+    // Read the whole file (replaces a read-only mmap that was copied out
+    // immediately — same result, no sys/mman.h, builds on Windows).
+    const out = try allocator.alloc(u8, file_size);
+    errdefer allocator.free(out);
+    var got: usize = 0;
+    while (got < file_size) {
+        const n = c.read(fd, out.ptr + got, file_size - got);
+        if (n <= 0) break;
+        got += @intCast(n);
+    }
+    if (got != file_size) return error.OpenFileFailed;
+    return out;
 }
 
 fn write_file_mmap(filename: []const u8, content: []const u8) !void {
@@ -1129,6 +1208,12 @@ fn local_sync_dir_path(allocator: std.mem.Allocator, vault_id: []const u8) ![]u8
     if (c.getenv("QIRTAS_LOCAL_SYNC_DIR")) |env_path| {
         const path = std.mem.span(env_path);
         if (path.len > 0) return try std.fmt.allocPrint(allocator, "{s}/{s}", .{ path, vault_id });
+    }
+
+    if (builtin.os.tag == .windows) {
+        if (c.getenv("USERPROFILE")) |up| {
+            return try std.fmt.allocPrint(allocator, "{s}/QirtasSync/{s}", .{ std.mem.span(up), vault_id });
+        }
     }
 
     if (c.getenv("HOME")) |home| {
@@ -1826,16 +1911,22 @@ fn scoped_key(allocator: std.mem.Allocator, vault_id: []const u8, filename: []co
 }
 
 fn deriveKey(key: *[32]u8) !void {
-    const fd = c.open("/etc/machine-id", c.O_RDONLY);
-    if (fd < 0) return error.OpenMachineIdFailed;
-    defer _ = c.close(fd);
-    
-    var buf: [128]u8 = undefined;
-    const n = c.read(fd, &buf, buf.len);
-    if (n < 0) return error.ReadMachineIdFailed;
-    
-    const id = std.mem.trim(u8, buf[0..@intCast(n)], " \r\n");
-    std.crypto.hash.sha2.Sha256.hash(id, key, .{});
+    if (builtin.os.tag == .windows) {
+        var buf: [128]u8 = undefined;
+        const id = try win.machineId(&buf);
+        std.crypto.hash.sha2.Sha256.hash(id, key, .{});
+    } else {
+        const fd = c.open("/etc/machine-id", c.O_RDONLY);
+        if (fd < 0) return error.OpenMachineIdFailed;
+        defer _ = c.close(fd);
+
+        var buf: [128]u8 = undefined;
+        const n = c.read(fd, &buf, buf.len);
+        if (n < 0) return error.ReadMachineIdFailed;
+
+        const id = std.mem.trim(u8, buf[0..@intCast(n)], " \r\n");
+        std.crypto.hash.sha2.Sha256.hash(id, key, .{});
+    }
 }
 
 pub fn encryptToken(allocator: std.mem.Allocator, raw_token: []const u8) ![]u8 {
@@ -1843,11 +1934,7 @@ pub fn encryptToken(allocator: std.mem.Allocator, raw_token: []const u8) ![]u8 {
     try deriveKey(&key);
     
     var nonce: [12]u8 = undefined;
-    const fd = c.open("/dev/urandom", c.O_RDONLY);
-    if (fd < 0) return error.OpenUrandomFailed;
-    defer _ = c.close(fd);
-    const n = c.read(fd, &nonce, nonce.len);
-    if (n < @as(isize, @intCast(nonce.len))) return error.ReadUrandomFailed;
+    try fillSecureRandom(&nonce);
     
     const cipher = std.crypto.aead.chacha_poly.ChaCha20Poly1305;
     
@@ -2228,14 +2315,7 @@ pub export fn zig_dropbox_connect() callconv(.c) void {
      ) catch return;
     defer allocator.free(url);
 
-    var child = std.process.spawn(main.global_io, .{
-        .argv = &[_][]const u8{ "xdg-open", url },
-    }) catch blk: {
-        break :blk std.process.spawn(main.global_io, .{
-            .argv = &[_][]const u8{ "gio", "open", url },
-        }) catch return;
-    };
-    _ = child.wait(main.global_io) catch {};
+    openUrl(url);
 
     gui_update_dropbox_status(2, "Enter code below...");
 }

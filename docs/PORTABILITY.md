@@ -34,8 +34,13 @@ Moving the ~2,768 movable lines below grows the portable core to **~42%** and, m
 
 ## Platform notes
 
-- **Windows** — GTK4 + libadwaita + GtkSourceView run on Windows (gvsbuild/MSYS2). No decoupling needed;
-  effort is build/packaging only. The Zig core cross-compiles trivially.
+- **Windows** — GTK4 + libadwaita + GtkSourceView run on Windows via MSYS2 (MINGW64). Build and packaging
+  steps live in [`BUILDING-WINDOWS.md`](BUILDING-WINDOWS.md). The Zig core needed a small OS-abstraction
+  pass first — it had POSIX-only dependencies: `mmap`→`read`, `getrandom`/`/dev/urandom`→`std.crypto.random`,
+  `/etc/machine-id`→registry `MachineGuid`, exe path via `GetModuleFileNameW`, and the inotify file-watcher
+  is gated off (no live reload of externally-changed files on Windows yet — a `ReadDirectoryChangesW`
+  backend is the follow-up). Everything sits behind `builtin.os.tag` checks, so the Linux build is
+  unchanged.
 - **Android** — GTK does **not** run on Android. Reuse the Zig core via JNI; build a new Kotlin/Compose UI.
   This plan is what makes that UI cheap (it renders spans, doesn't re-parse markdown).
 

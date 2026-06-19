@@ -8,7 +8,6 @@
 #include <time.h>
 #include <sqlite3.h>
 #include <unistd.h>
-#include <libgen.h>
 #include <limits.h>
 #include "gui_internal.h"
 #include "gui_shared.h"
@@ -1475,10 +1474,10 @@ static void activate(GtkApplication *app, gpointer user_data) {
     {
         char exe_path[PATH_MAX];
         char exe_dir[PATH_MAX] = "";
-        ssize_t link_len = readlink("/proc/self/exe", exe_path, sizeof(exe_path)-1);
-        if (link_len != -1) {
-            exe_path[link_len] = '\0';
-            g_strlcpy(exe_dir, dirname(exe_path), sizeof(exe_dir));
+        if (qirtas_exe_path(exe_path, sizeof(exe_path)) > 0) {
+            char *last_slash = strrchr(exe_path, '/');
+            if (last_slash) *last_slash = '\0';
+            g_strlcpy(exe_dir, exe_path, sizeof(exe_dir));
         }
         char cand[3][PATH_MAX];
         const char *candidates[3];
@@ -2161,14 +2160,16 @@ static void activate(GtkApplication *app, gpointer user_data) {
     {
         char abs_ui_path[1024];
         char exe_path[512] = {0};
-        ssize_t exe_len = readlink("/proc/self/exe", exe_path, sizeof(exe_path) - 1);
-        if (exe_len > 0) {
-            exe_path[exe_len] = '\0';
+        if (qirtas_exe_path(exe_path, sizeof(exe_path)) > 0) {
             /* Strip binary name to get the directory */
             char *last_slash = strrchr(exe_path, '/');
             if (last_slash) *last_slash = '\0';
             /* Navigate up from zig-out/bin/ to project root, then into src/ui */
             snprintf(abs_ui_path, sizeof(abs_ui_path), "%s/../../src/ui", exe_path);
+            gtk_source_language_manager_append_search_path(lm, abs_ui_path);
+            /* Portable layout (Windows zip / assets beside the binary): src/ui
+             * sits directly next to the executable. */
+            snprintf(abs_ui_path, sizeof(abs_ui_path), "%s/src/ui", exe_path);
             gtk_source_language_manager_append_search_path(lm, abs_ui_path);
         }
     }
@@ -2195,12 +2196,13 @@ static void activate(GtkApplication *app, gpointer user_data) {
     {
         char abs_ui_path[1024];
         char exe_path[512] = {0};
-        ssize_t exe_len = readlink("/proc/self/exe", exe_path, sizeof(exe_path) - 1);
-        if (exe_len > 0) {
-            exe_path[exe_len] = '\0';
+        if (qirtas_exe_path(exe_path, sizeof(exe_path)) > 0) {
             char *last_slash = strrchr(exe_path, '/');
             if (last_slash) *last_slash = '\0';
             snprintf(abs_ui_path, sizeof(abs_ui_path), "%s/../../src/ui", exe_path);
+            gtk_source_style_scheme_manager_append_search_path(sm, abs_ui_path);
+            /* Portable layout (Windows zip / assets beside the binary). */
+            snprintf(abs_ui_path, sizeof(abs_ui_path), "%s/src/ui", exe_path);
             gtk_source_style_scheme_manager_append_search_path(sm, abs_ui_path);
         }
     }

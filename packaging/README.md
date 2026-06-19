@@ -1,12 +1,13 @@
 # Packaging Qirtas
 
-Three supported ways to ship Qirtas (Flatpak is experimental — see below):
+Ways to ship Qirtas (Windows and Flatpak are experimental — see below):
 
 | Channel | Who it's for | Files |
 |---------|--------------|-------|
 | **Arch (local PKGBUILD)** | build + install from a checkout | `PKGBUILD`, `qirtas.desktop` |
 | **AUR** | Arch users: `yay -S qirtas-git` | `aur/PKGBUILD`, `aur/README.md` |
 | **AppImage** | one portable file, no install | `appimage/build-appimage.sh` |
+| **Windows (portable zip)** | Windows users — experimental | `windows/bundle.sh`, `../.github/workflows/windows.yml` |
 
 All three install the binary plus the runtime assets under a data dir the binary
 resolves via (in order) `$QIRTAS_DATA_DIR`, the build tree, then a system path —
@@ -73,3 +74,16 @@ header comment.
 
 A single portable file. See `appimage/README.md` and run
 `appimage/build-appimage.sh` on a real machine.
+
+## Windows (experimental)
+
+The Windows build uses MSYS2's MINGW64 toolchain. `windows/bundle.sh` assembles
+a portable folder — the executable, every linked mingw DLL (discovered via
+`ldd`, so the list never drifts), the GTK runtime data (settings schemas,
+pixbuf loaders, icon themes) and the app's own `src/ui` resources — into
+`dist/windows/qirtas`, which runs on a machine with no MSYS2 installed.
+
+CI builds and bundles this on every push (`../.github/workflows/windows.yml`)
+and uploads it as the `qirtas-windows-x86_64` artifact — the easiest way to get
+a build without a local Windows setup. Full instructions:
+[`docs/BUILDING-WINDOWS.md`](../docs/BUILDING-WINDOWS.md).

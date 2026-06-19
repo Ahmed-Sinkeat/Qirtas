@@ -40,6 +40,7 @@ fn addQirtasTestExe(
 
 pub fn build(b: *std.Build) void {
     const modular_gui_files = [_][]const u8{
+        "src/gui/gui_platform.c",
         "src/gui/gui_theme.c",
         "src/gui/gui_cursor.c",
         "src/gui/gui_hr.c",
@@ -152,6 +153,15 @@ pub fn build(b: *std.Build) void {
         });
     }
     exe.root_module.link_libc = true;
+
+    // Windows: mark as a GUI app so launching it doesn't pop a console window,
+    // and link advapi32 for the RegGetValueW machine-id lookup (sync.zig). GTK,
+    // GtkSourceView, libadwaita and sqlite3 are still resolved via pkg-config —
+    // under MSYS2 that finds the mingw-w64 builds (see docs/BUILDING-WINDOWS.md).
+    if (target.result.os.tag == .windows) {
+        exe.subsystem = .Windows;
+        exe.root_module.linkSystemLibrary("advapi32", .{});
+    }
 
     // Install the executable to the output directory
     b.installArtifact(exe);

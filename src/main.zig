@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const Io = std.Io;
 const sync = @import("sync.zig");
 /// Portable markdown/text logic (see docs/PORTABILITY.md). Referenced here so
@@ -19,6 +20,19 @@ var config_dir_slice: []const u8 = "";
 
 pub fn configDir() []const u8 {
     if (config_dir_slice.len != 0) return config_dir_slice;
+    if (builtin.os.tag == .windows) {
+        // Windows has no XDG; per-user app data lives under %APPDATA%\qirtas.
+        // Forward slashes are accepted by the CRT and by sqlite on Windows.
+        if (c.getenv("APPDATA")) |appdata| {
+            const a = std.mem.span(appdata);
+            if (a.len > 0) {
+                config_dir_slice = std.fmt.bufPrint(&config_dir_buf, "{s}/qirtas", .{a}) catch "qirtas";
+                return config_dir_slice;
+            }
+        }
+        config_dir_slice = "qirtas";
+        return config_dir_slice;
+    }
     if (c.getenv("XDG_CONFIG_HOME")) |xdg| {
         const x = std.mem.span(xdg);
         if (x.len > 0) {
@@ -59,11 +73,25 @@ comptime {
     std.testing.refAllDecls(sync);
 }
 
-// Import POSIX/libc headers
-const c = @cImport({
+// Import POSIX/libc + sqlite headers. The set is OS-split: Linux pulls inotify
+// for the live file-watcher; Windows omits the POSIX-only headers (no inotify /
+// mman there) and adds <io.h> for _commit (the fsync equivalent). mmap was
+// dropped on both sides — load_file_mmap / read_file_content now read() the
+// whole file, which is exactly what the old mmap path did anyway (it copied the
+// bytes out and unmapped immediately, never keeping the mapping live).
+const c = if (builtin.os.tag == .windows) @cImport({
+    @cInclude("unistd.h");
+    @cInclude("sys/stat.h");
+    @cInclude("fcntl.h");
+    @cInclude("io.h");
+    @cInclude("sqlite3.h");
+    @cInclude("dirent.h");
+    @cInclude("stdlib.h");
+    @cInclude("stdio.h");
+    @cInclude("time.h");
+}) else @cImport({
     @cInclude("sys/inotify.h");
     @cInclude("unistd.h");
-    @cInclude("sys/mman.h");
     @cInclude("sys/stat.h");
     @cInclude("fcntl.h");
     @cInclude("sqlite3.h");
@@ -72,6 +100,17 @@ const c = @cImport({
     @cInclude("stdio.h");
     @cInclude("time.h");
 });
+
+// Windows opens files in text mode by default, which would mangle CR/LF inside
+// our binary encrypted blobs; force binary mode everywhere. On POSIX O_BINARY
+// does not exist and is a no-op, so this resolves to 0.
+const O_BINARY: c_int = if (builtin.os.tag == .windows) c.O_BINARY else 0;
+
+// fsync(2) is absent from the MinGW headers; _commit() is the equivalent
+// flush-fd-to-disk call there. Same return convention (0 == success).
+fn fsyncFd(fd: c_int) c_int {
+    return if (builtin.os.tag == .windows) c._commit(fd) else c.fsync(fd);
+}
 
 /// Atomic file write: write to `<path>.qirtas-tmp` in the same directory,
 /// fsync, then rename() over the target. rename(2) is atomic on Linux, so a
@@ -84,7 +123,7 @@ pub fn atomicWriteFile(path: []const u8, content: []const u8) !void {
     const tmp_z = try std.fmt.bufPrintZ(&tmp_buf, "{s}.qirtas-tmp", .{path});
     const path_z = try std.fmt.bufPrintZ(&path_buf, "{s}", .{path});
 
-    const fd = c.open(tmp_z.ptr, c.O_WRONLY | c.O_CREAT | c.O_TRUNC, @as(c.mode_t, 0o644));
+    const fd = c.open(tmp_z.ptr, c.O_WRONLY | c.O_CREAT | c.O_TRUNC | O_BINARY, @as(c.mode_t, 0o644));
     if (fd < 0) return error.CreateTmpFailed;
 
     var ok = true;
@@ -97,7 +136,7 @@ pub fn atomicWriteFile(path: []const u8, content: []const u8) !void {
         }
         written += @intCast(w);
     }
-    if (ok and c.fsync(fd) != 0) ok = false;
+    if (ok and fsyncFd(fd) != 0) ok = false;
     if (c.close(fd) != 0) ok = false;
     if (!ok) {
         _ = c.unlink(tmp_z.ptr);
@@ -259,14 +298,20 @@ fn ensureSystemKeysSchema(db: *c.sqlite3) void {
 }
 
 fn fillRandomBytes(buf: []u8) !void {
-    var i: usize = 0;
-    while (i < buf.len) {
-        const rc = std.os.linux.getrandom(buf[i..].ptr, buf.len - i, 0);
-        switch (std.posix.errno(rc)) {
-            .SUCCESS => i += @intCast(rc),
-            .INTR => continue,
-            else => return error.RandomFailed,
+    if (builtin.os.tag == .linux) {
+        var i: usize = 0;
+        while (i < buf.len) {
+            const rc = std.os.linux.getrandom(buf[i..].ptr, buf.len - i, 0);
+            switch (std.posix.errno(rc)) {
+                .SUCCESS => i += @intCast(rc),
+                .INTR => continue,
+                else => return error.RandomFailed,
+            }
         }
+    } else {
+        // std.crypto.random is a CSPRNG seeded from the OS entropy source
+        // (BCryptGenRandom/RtlGenRandom on Windows) — suitable for key material.
+        std.crypto.random.bytes(buf);
     }
 }
 
@@ -820,12 +865,17 @@ pub export fn zig_on_gui_ready() callconv(.c) void {
 
     const gpa = std.heap.page_allocator;
 
-    // Register initial watch in inotify
-    global_inotify_fd = c.inotify_init();
-    if (global_inotify_fd >= 0) {
-        register_file_watch(active_file_path[0..active_file_path_len]);
-        // Watch current directory for explorer grid updates
-        directory_wd.store(c.inotify_add_watch(global_inotify_fd, ".", c.IN_CREATE | c.IN_DELETE | c.IN_MOVED_TO | c.IN_MOVED_FROM | c.IN_MODIFY), .monotonic);
+    // Register initial watch in inotify. Linux-only: elsewhere global_inotify_fd
+    // stays -1 and every watch call below is skipped (the editor still works,
+    // it just doesn't live-reload files changed by other programs — see
+    // docs/PORTABILITY.md for the planned ReadDirectoryChangesW backend).
+    if (builtin.os.tag == .linux) {
+        global_inotify_fd = c.inotify_init();
+        if (global_inotify_fd >= 0) {
+            register_file_watch(active_file_path[0..active_file_path_len]);
+            // Watch current directory for explorer grid updates
+            directory_wd.store(c.inotify_add_watch(global_inotify_fd, ".", c.IN_CREATE | c.IN_DELETE | c.IN_MOVED_TO | c.IN_MOVED_FROM | c.IN_MODIFY), .monotonic);
+        }
     }
 
     // Load initial notes (either restored from db or default or first file found)
@@ -1205,13 +1255,15 @@ pub export fn zig_open_vault(dir_path_ptr: [*:0]const u8) callconv(.c) void {
         }
     }
 
-    // 3. Update the directory watcher for inotify
-    if (global_inotify_fd >= 0) {
-        const old_dir_wd = directory_wd.load(.monotonic);
-        if (old_dir_wd >= 0) {
-            _ = c.inotify_rm_watch(global_inotify_fd, old_dir_wd);
+    // 3. Update the directory watcher for inotify (Linux-only)
+    if (builtin.os.tag == .linux) {
+        if (global_inotify_fd >= 0) {
+            const old_dir_wd = directory_wd.load(.monotonic);
+            if (old_dir_wd >= 0) {
+                _ = c.inotify_rm_watch(global_inotify_fd, old_dir_wd);
+            }
+            directory_wd.store(c.inotify_add_watch(global_inotify_fd, ".", c.IN_CREATE | c.IN_DELETE | c.IN_MOVED_TO | c.IN_MOVED_FROM | c.IN_MODIFY), .monotonic);
         }
-        directory_wd.store(c.inotify_add_watch(global_inotify_fd, ".", c.IN_CREATE | c.IN_DELETE | c.IN_MOVED_TO | c.IN_MOVED_FROM | c.IN_MODIFY), .monotonic);
     }
 
     // 4. Find the first indexable file in the new vault, or create a default one
@@ -1365,24 +1417,28 @@ pub export fn zig_force_save() callconv(.c) void {
 }
 
 fn register_file_watch(filename: []const u8) void {
-    if (global_inotify_fd < 0) return;
-    
-    // Remove old watch if it exists
-    const old_wd = global_wd.load(.monotonic);
-    if (old_wd >= 0) {
-        _ = c.inotify_rm_watch(global_inotify_fd, old_wd);
-        global_wd.store(-1, .monotonic);
+    // Whole body gated at comptime so the inotify symbols are never analyzed on
+    // non-Linux targets (their headers aren't in the cImport there).
+    if (builtin.os.tag == .linux) {
+        if (global_inotify_fd < 0) return;
+
+        // Remove old watch if it exists
+        const old_wd = global_wd.load(.monotonic);
+        if (old_wd >= 0) {
+            _ = c.inotify_rm_watch(global_inotify_fd, old_wd);
+            global_wd.store(-1, .monotonic);
+        }
+
+        const gpa = std.heap.page_allocator;
+        const sentinel_path = gpa.dupeZ(u8, filename) catch return;
+        defer gpa.free(sentinel_path);
+
+        global_wd.store(c.inotify_add_watch(global_inotify_fd, sentinel_path.ptr, c.IN_MODIFY), .monotonic);
     }
-
-    const gpa = std.heap.page_allocator;
-    const sentinel_path = gpa.dupeZ(u8, filename) catch return;
-    defer gpa.free(sentinel_path);
-
-    global_wd.store(c.inotify_add_watch(global_inotify_fd, sentinel_path.ptr, c.IN_MODIFY), .monotonic);
 }
 
 fn load_file_mmap(filename: [*:0]const u8, size: *usize) ![*]const u8 {
-    const fd = c.open(filename, c.O_RDONLY);
+    const fd = c.open(filename, c.O_RDONLY | O_BINARY);
     if (fd < 0) return error.OpenFileFailed;
     defer _ = c.close(fd);
 
@@ -1397,13 +1453,19 @@ fn load_file_mmap(filename: [*:0]const u8, size: *usize) ![*]const u8 {
         return "";
     }
 
-    const ptr = c.mmap(null, file_size, c.PROT_READ, c.MAP_SHARED, fd, 0);
-    if (ptr == c.MAP_FAILED) return error.MmapFailed;
-    defer _ = c.munmap(ptr, file_size);
-
-    const mmap_slice: [*]const u8 = @ptrCast(ptr);
-    const mmap_content = mmap_slice[0..file_size];
     const gpa = std.heap.page_allocator;
+    // Read the whole file into a scratch buffer. This replaces a read-only mmap
+    // that was copied out of and unmapped immediately — identical semantics,
+    // with no sys/mman.h dependency, so it builds on Windows too.
+    const raw = try gpa.alloc(u8, file_size);
+    defer gpa.free(raw);
+    var got: usize = 0;
+    while (got < file_size) {
+        const n = c.read(fd, raw.ptr + got, file_size - got);
+        if (n <= 0) break;
+        got += @intCast(n);
+    }
+    const mmap_content = raw[0..got];
 
     if (blobHasMagic(mmap_content)) {
         // Definitively a Qirtas-encrypted file. It MUST decrypt — never fall
@@ -1746,8 +1808,12 @@ pub export fn zig_save_active_page(start_line: c_int, end_line: c_int, text: [*:
     return 0;
 }
 
-// Background file watcher loop using standard inotify
+// Background file watcher loop using standard inotify (Linux). The whole body
+// sits behind a comptime branch, so on non-Linux targets it compiles to an
+// empty function — the inotify symbols are never analyzed — and the thread
+// exits immediately.
 fn file_watcher_thread_loop() void {
+  if (builtin.os.tag == .linux) {
     var buf: [1024]u8 align(@alignOf(c.struct_inotify_event)) = undefined;
 
     while (true) {
@@ -1794,6 +1860,7 @@ fn file_watcher_thread_loop() void {
             i += @sizeOf(c.struct_inotify_event) + event.len;
         }
     }
+  }
 }
 
 fn refresh_explorer_callback(user_data: ?*anyopaque) callconv(.c) void {
