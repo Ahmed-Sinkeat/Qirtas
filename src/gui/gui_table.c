@@ -93,8 +93,7 @@ static GtkTextTag *table_hide_tag(GtkTextBuffer *buf) {
     if (t) return t;
     GdkRGBA clear = { 0, 0, 0, 0 };
     return gtk_text_buffer_create_tag(buf, "md-table-hidden",
-                                      "invisible", TRUE,
-                                      "scale", 0.001, "foreground-rgba", &clear, NULL);
+                                      "scale", 0.01, "foreground-rgba", &clear, NULL);
 }
 
 /* Marks the whole rendered line range; used for cursor-in-table detection and

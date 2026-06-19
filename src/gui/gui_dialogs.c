@@ -184,10 +184,9 @@ void on_save_as_dialog_response(GObject *source_object, GAsyncResult *res, gpoin
     if (file) {
         char *path = g_file_get_path(file);
         if (path) {
-            GtkTextBuffer *buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(gui->source_view));
-            GtkTextIter start, end;
-            gtk_text_buffer_get_bounds(buf, &start, &end);
-            char *text = gtk_text_buffer_get_text(buf, &start, &end, FALSE);
+            extern const char *zig_get_document_text(void);
+            extern void zig_free_document_text(const char *ptr);
+            const char *text = zig_get_document_text();
             if (text) {
                 FILE *f = fopen(path, "w");
                 if (f) {
@@ -200,7 +199,7 @@ void on_save_as_dialog_response(GObject *source_object, GAsyncResult *res, gpoin
                     gui_set_sync_status("Save As Failed");
                     gui_show_toast(qirtas_tr("Save failed"));
                 }
-                g_free(text);
+                zig_free_document_text(text);
             }
             g_free(path);
         }

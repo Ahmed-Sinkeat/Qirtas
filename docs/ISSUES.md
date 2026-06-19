@@ -1,7 +1,7 @@
 # Qirtas — Known Issues
 
 **Last audited:** 2026-06-17 (branch `full-buffer-editor-v2`).
-**Last fix pass:** 2026-06-18 (GTK abort on theme-change/navigate — scroll-anchor `get_iter_at_location`); earlier 2026-06-18 (read-mode read-only + undo viewport jump + AppImage packaging); prior pass 2026-06-17 (commits `345e502`, `cc9b4db`).
+**Last fix pass:** 2026-06-19 (Save As + PDF export read view buffer; two residual invisible-tag crash sites); earlier 2026-06-18 (GTK abort on theme-change/navigate — scroll-anchor `get_iter_at_location`); earlier 2026-06-18 (read-mode read-only + undo viewport jump + AppImage packaging); prior pass 2026-06-17 (commits `345e502`, `cc9b4db`).
 
 This file tracks correctness/robustness issues found by code audit. It also
 records where the prose docs had drifted from the actual source so the drift
@@ -41,6 +41,14 @@ closed.**
 Everything else open is architectural (`#3` vault-in-source), test debt, perf,
 or release infra — none block a usable MVP. The two MVP-relevant non-crashes
 (decrypt-fail data loss `#1`, autosave dropping anchors `#4`) are both fixed.
+
+**Fixed 2026-06-19 (Save As / PDF export / residual invisible tags):**
+
+| # | Sev | What | Where |
+|---|-----|------|-------|
+| — | 🔴 | **Save As** read the GTK view buffer (`gtk_text_buffer_get_text`) instead of `doc_buf` — any HR/table/code-pill anchor became `U+FFFC` or was dropped, then `zig_open_file` reloaded the corrupt copy immediately, locking in the damage on next autosave | `gui_dialogs.c` `on_save_as_dialog_response` → now uses `zig_get_document_text()` |
+| — | 🟠 | **PDF export** read the GTK view buffer with `include_hidden_chars=TRUE` — exported PDF contained `\xEF\xBF\xBC` object-replacement chars where inline widgets (HR, table, code-pill) appeared | `gui_export.c` `export_with_theme` → now uses `zig_get_document_text()` |
+| — | 🔴 | **Two residual invisible-tag crash sites** — `gui_links.c` `link_bracket_tag` and `gui_table.c` `table_hide_tag` still set `"invisible", TRUE`, exposing the same GTK4 `visible-line-index` abort path that caused the SIGABRT chain (fix was already applied in `gui_conceal.c` but these two call sites were missed) | Replaced with `scale=0.01` + `foreground=rgba(0,0,0,0)`, matching the `gui_conceal.c` fix |
 
 **Fixed 2026-06-18 (GTK abort on theme-change / navigate):**
 
@@ -330,13 +338,14 @@ external-files / vault separation so the app can never write into its own repo.
   pipeline** — CI only builds + tests. README front door advertises only
   `zig build run`.
 - **Conceal residual risk.** The documented SIGABRT ("Byte index N off the end
-  of the line") is fixed (the `get_iter_at_position` paths were rewritten) and
-  `scale 0.01` replaced the crashing invisible-tag approach. A heuristic skip
-  (`conceal_line_hostile`: lines with `<`, `|`, or >2000 chars) and a kill-switch
-  (`QIRTAS_NO_CONCEAL=1` + "Conceal Markdown Markers" pref) remain as
-  defense-in-depth. The underlying GTK char-to-layout limitation is unfixed, so
-  pathological lines still carry some risk — but the known reproducible crash is
-  closed.
+  of the line") is fixed: `get_iter_at_position` rewritten, and all `"invisible"` tag
+  uses replaced with `scale=0.01` + transparent foreground across `gui_conceal.c`,
+  `gui_links.c`, and `gui_table.c` (the last two were missed in the original pass,
+  fixed 2026-06-19). A heuristic skip (`conceal_line_hostile`: lines with `<`, `|`,
+  or >2000 chars) and a kill-switch (`QIRTAS_NO_CONCEAL=1` + "Conceal Markdown
+  Markers" pref) remain as defense-in-depth. The underlying GTK char-to-layout
+  limitation is unfixed, so pathological lines still carry some risk — but the known
+  reproducible crash is closed and no invisible-tag usage remains.
 - **History keyed by basename.** Two same-named files in different folders share
   file-history; restore replaces current content and cannot be undone
   (`gui_history.c`).

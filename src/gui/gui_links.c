@@ -21,8 +21,7 @@ static GtkTextTag *link_bracket_tag(GtkTextBuffer *buf) {
      * line carrying both a link and an emoji crashes the app on click. */
     return gtk_text_buffer_create_tag(buf, "md-link-bracket",
                                       "scale", 0.01,
-                                      "foreground", "rgba(0,0,0,0)",
-                                      NULL);
+                                      "foreground", "rgba(0,0,0,0)", NULL);
 }
 
 static GtkTextTag *link_text_tag(GtkTextBuffer *buf) {

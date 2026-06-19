@@ -583,14 +583,13 @@ static void render_block(Render *r, const Block *b, GArray *outline_pages) {
 }
 
 static gboolean export_with_theme(AppGui *gui, const PrintTheme *t, const char *pdf_path) {
-    GtkTextBuffer *buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(gui->source_view));
-    GtkTextIter s, e;
-    gtk_text_buffer_get_bounds(buf, &s, &e);
-    gchar *doc = gtk_text_buffer_get_text(buf, &s, &e, TRUE);
+    extern const char *zig_get_document_text(void);
+    extern void zig_free_document_text(const char *ptr);
+    const gchar *doc = zig_get_document_text();
 
     cairo_surface_t *surface = cairo_pdf_surface_create(pdf_path, t->page_w, t->page_h);
     if (cairo_surface_status(surface) != CAIRO_STATUS_SUCCESS) {
-        g_free(doc);
+        zig_free_document_text(doc);
         cairo_surface_destroy(surface);
         return FALSE;
     }
@@ -628,7 +627,7 @@ static gboolean export_with_theme(AppGui *gui, const PrintTheme *t, const char *
     cairo_surface_finish(surface);
     gboolean ok = cairo_surface_status(surface) == CAIRO_STATUS_SUCCESS;
     cairo_surface_destroy(surface);
-    g_free(doc);
+    zig_free_document_text(doc);
     return ok;
 }
 
