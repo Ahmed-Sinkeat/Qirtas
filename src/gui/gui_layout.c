@@ -46,29 +46,40 @@ void apply_editor_border(AppGui *gui) {
     gtk_widget_set_halign(card, GTK_ALIGN_FILL);
     gtk_widget_set_size_request(card, -1, -1);
 
-    /* Borderless: card fills the whole desk, no gap, no offset. */
-    if (!gui->enable_focus_mode && !gui->enable_editor_border) {
-        gtk_widget_add_css_class(card, "focus-mode");
-        gtk_widget_set_margin_start(card, 0);
-        gtk_widget_set_margin_end(card, 0);
-        gtk_widget_set_margin_top(card, 0);
-        gtk_widget_set_margin_bottom(card, 0);
-        return;
+    /* Borderless = no paper border/shadow (the "focus-mode" CSS class strips it)
+     * and no vertical desk gap. It still gets the centred-column cap below, so
+     * the text stays a comfortable measure instead of stretching edge to edge. */
+    gboolean borderless = (!gui->enable_focus_mode && !gui->enable_editor_border);
+    if (borderless) gtk_widget_add_css_class(card, "focus-mode");
+    else            gtk_widget_remove_css_class(card, "focus-mode");
+
+    int top = 0, bot = 0;
+    if (!borderless) {
+        top = (!gui->enable_focus_mode && gui->compact_mode) ? 10 : 28;
+        bot = (!gui->enable_focus_mode && gui->compact_mode) ?  8 : 24;
     }
-    gtk_widget_remove_css_class(card, "focus-mode");
 
-    int top = (!gui->enable_focus_mode && gui->compact_mode) ? 10 : 28;
-    int bot = (!gui->enable_focus_mode && gui->compact_mode) ?  8 : 24;
-
-    /* Card Gap (symmetric desk margin). Clamp it to the slot the paned gave us
-     * — slot = current card width + its current margins — so a narrow window
-     * shrinks the gap instead of forcing the card (and the window) wider. */
-    int g = gui->desk_gap;
+    /* Centred fixed-width column. Base horizontal gap = Card Gap (0 when
+     * borderless); then, once the desk is wide enough to give the text its full
+     * measure, cap the card's content width and let the gap grow to centre it.
+     * A wider window then only enlarges the desk gutter, NOT the text column —
+     * which is what stops GtkTextView re-shaping the whole document on every
+     * resize (the tiling-WM "it stops" freeze). We grow the *card* margins,
+     * never the text-view margins (those re-validate the layout too). Opt out to
+     * classic edge-to-edge with Card Gap = 0 (or the Full Page Width pref).
+     * slot = the paned-given region and is invariant of the margins we set (a
+     * widget's margins are part of its allocation), so g converges in one tick. */
+    int g = borderless ? 0 : gui->desk_gap;
     if (g < 0) g = 0;
     int slot = gtk_widget_get_width(card)
              + gtk_widget_get_margin_start(card)
              + gtk_widget_get_margin_end(card);
     if (slot > 1) {
+        gboolean full_page = gui->text_width_full_page || gui->desk_gap == 0;
+        int max_card = QIRTAS_TEXT_COLUMN_MAX + 2 * QIRTAS_CARD_INNER_PAD;
+        if (!full_page && slot - 2 * g > max_card)
+            g = (slot - max_card) / 2;
+
         int max_g = (slot - QIRTAS_CARD_MIN_WIDTH) / 2;
         if (max_g < 0) max_g = 0;
         if (g > max_g) g = max_g;

@@ -1,7 +1,7 @@
 # Qirtas — Known Issues
 
-**Last audited:** 2026-06-17 (branch `full-buffer-editor-v2`).
-**Last fix pass:** 2026-06-19 (Save As + PDF export read view buffer; two residual invisible-tag crash sites); earlier 2026-06-18 (GTK abort on theme-change/navigate — scroll-anchor `get_iter_at_location`); earlier 2026-06-18 (read-mode read-only + undo viewport jump + AppImage packaging); prior pass 2026-06-17 (commits `345e502`, `cc9b4db`).
+**Last audited:** 2026-06-23 (Omarchy / Hyprland — GTK 4.22, GtkSourceView 5.20).
+**Last fix pass:** 2026-06-23 (build broken on GCC 16 `.sframe` → LLVM+LLD; window min-width 820px couldn't fit a half-tile → shrinkable panes; large-doc **resize** freeze → centred fixed-width column cap; large-doc *open* validation still architectural — see the dated section just below). Earlier: 2026-06-19 (Save As + PDF export read view buffer; two residual invisible-tag crash sites); 2026-06-18 (GTK abort on theme-change/navigate — scroll-anchor `get_iter_at_location`); 2026-06-18 (read-mode read-only + undo viewport jump + AppImage packaging); 2026-06-17 (commits `345e502`, `cc9b4db`).
 
 This file tracks correctness/robustness issues found by code audit. It also
 records where the prose docs had drifted from the actual source so the drift
@@ -12,6 +12,118 @@ to *refute* it against the current tree. Items under "Confirmed" survived that
 refutation pass. Items under "Unverified candidates" were located but the
 refutation pass did not complete (session limit) — treat as leads, not facts,
 until checked.
+
+---
+
+## 2026-06-23 — Omarchy / Hyprland (GTK 4.22, GtkSourceView 5.20) pass
+
+Reported symptom: "worked on Arch, on Omarchy it has a lot of bugs — when the
+tile screen becomes half it stops." Root-caused on live Hyprland (the bugs are
+environment-triggered: newer toolchain + newer GTK + tiling WM). All findings
+below were reproduced empirically, not just read from source.
+
+### A. 🔴 BUILD BROKEN — Zig 0.16 self-hosted linker can't relocate GCC 16's `.sframe` (`crt1.o`)
+
+> **✅ FIXED.** `build.zig` now forces `use_llvm = true` + `use_lld = true` on
+> all three artifacts (exe, test exe, c-test exe).
+
+**Symptom:** `zig build` fails: `fatal linker error: unhandled relocation type
+R_X86_64_PC64 at offset 0x1c … in …/crt1.o:.sframe`. The app could not be built
+from source on Omarchy at all (so any "it ran before" was an *older prebuilt*
+binary, not a fresh build).
+
+**Cause:** GCC 16.1.1 emits a `.sframe` stack-trace section (with `R_X86_64_PC64`
+relocations) in the libc startup objects. Zig 0.16's default **self-hosted ELF
+linker** doesn't understand `.sframe`. Forcing LLD alone then crashed (`SIGSEGV`)
+because Zig 0.16's default **self-hosted x86_64 codegen** + LLD is unstable here;
+forcing the LLVM backend too gives the battle-tested LLVM+LLD path, which handles
+`.sframe` cleanly. Both knobs are required.
+
+### B. 🔴 TILING — window minimum width is 820px, so it can't fit a half-screen tile
+
+> **✅ FIXED.** Made the editor side of both `GtkPaned`s (and the outline panel)
+> `shrink-*-child = TRUE` (`src/gui.c`: init ~1817, `on_sidebar_side_changed`
+> both branches, and `desk_paned` outline). Window min width dropped **820 → ~350px**;
+> verified it now resizes to 683/500/360px with zero GTK warnings.
+
+**This is the most likely literal cause of "when the tile screen becomes half it
+stops."** Measured min widths (via `gtk_widget_measure` on the live tree):
+`main_vertical_box = sidebar_editor_box = 820` = `sidebar(271) + editor stack(543)`.
+Both panes had `shrink_*_child = FALSE`, so the window minimum was the *sum* of the
+children's natural widths and the window physically refused to shrink below 820px
+(`hyprctl resizewindowpixel exact 300…640` all snapped back to 820). Half of a
+1366-wide laptop is 683px < 820 → on a tiling WM the window can't be placed in its
+half-tile, so it overflows / the compositor fights it. (The bottom status bar was
+*not* the cause — it measured min=16.)
+
+### C. 🟠 PERF — opening or resizing a large document pegs one CPU core (the "freeze")
+
+> **RESIZE part ✅ FIXED** (centred fixed-width column — see the fix box below).
+> **OPEN part still architectural** (one-time whole-document validation on load).
+> Small files are unaffected either way.
+
+**Reproduced (live CPU sampling + `gdb` stack samples):**
+
+| Document | On open | On window resize |
+|---|---|---|
+| empty buffer | 0% (idle) | — |
+| README (157 lines) | <1s blip, settles | 2–9% blip (fine) |
+| 621-line Arabic md | ~6s at 100%, then settles | re-spikes |
+| 4838-line mixed Arabic md | **~115s at 100%**, then settles | re-spikes to 40%+ each resize |
+
+**Cause:** the full-buffer model loads the entire document into one
+`GtkSourceView` with `GTK_WRAP_WORD_CHAR`. GTK must validate (Pango-**shape** +
+measure) *every* line to know the total height for the scrollbar, and word-wrap
+**re-shapes the whole buffer whenever the wrap width changes** — i.e. on open and
+on **every** window resize. `gdb` samples while pegged show the main loop in
+`g_main_context_dispatch → gtk_widget_allocate → … → pango_shape_item` (Arabic
+shaping via HarfBuzz dominates). Confirmed **not** caused by: the cursor-trail
+tick (settles, `G_SOURCE_REMOVE`), `paper_column_tick`/margins, syntax
+highlighting, current-line highlight, the (hidden) `GtkSourceMap`, the conceal
+pass, or any buffer re-edit (insert/delete hooks fire 0×/1× while idle). Turning
+word-wrap off cut resize cost ~5× (606→132 jiffies), proving wrap-revalidation is
+the cost.
+
+**Why it shows up now:** on the old floating-WM setup the window was rarely
+resized; Omarchy/Hyprland resizes the window constantly (tiling, splits, going to
+half), and each resize triggers a full re-shape. Bigger/older note files make it
+worse. As-Built's "don't wrap the view in a box" fix only deferred *height*
+allocation; it does nothing for *width*-change re-validation.
+
+**Tried and rejected:** capping the text column via the text-view side **margins**
+(extending the read-mode `side` mechanism) — *worse* (605 vs 302 jiffies),
+because changing the text-view margins re-validates the layout just like a
+wrap-width change.
+
+> **✅ RESIZE FREEZE FIXED 2026-06-23 — centred fixed-width column.**
+> `apply_editor_border` (`gui_layout.c`) now caps the **card content** width at
+> `QIRTAS_TEXT_COLUMN_MAX + 2·PAD` (≈896px) and grows the **card** margins to
+> centre it (card margins don't re-validate text; only text-view margin / wrap
+> width changes do — that's the trap the rejected attempt fell into). Once the
+> desk is wider than the cap, resizing only enlarges the gutter, so the wrap
+> width is constant and GtkTextView does **not** re-shape. Verified: card caps at
+> 897px centred (margins 207/207, text column 789), and wide-resize CPU dropped
+> **606 → ~158 jiffies** (matching wrap-off). Applies in bordered *and*
+> borderless modes. Opt out to edge-to-edge with **Card Gap = 0** (or the
+> `text_width_full_page` pref). Also verified the window still shrinks to a
+> half-tile (coexists with finding B) and idle settles to 0%.
+>
+> **Still open (smaller now):** (1) the *initial open* of a very large doc still
+> O(document)-validates once (≈seconds; ~115s only for a pathological 4838-line
+> Arabic file) — inherent to the full-buffer model. (2) Going to a tile *narrower
+> than the column* (e.g. half of a small laptop, < ~960px after the sidebar)
+> still re-shapes once on that transition, then stays stable. The complete fix
+> for both is **windowed/virtual rendering** (prototyped as `viewport-prototype`,
+> removed) — large, deferred. WM workaround for the open case: disable Hyprland
+> resize animations so only the final size shapes once.
+
+### D. ℹ️ Confirmed NOT broken on Omarchy (refuted this pass)
+
+- Opening files with links + emoji + Arabic + tables + code on one line — no
+  SIGABRT (the prior invisible-tag fixes hold).
+- Resource/theme/`.lang`/style-scheme loading from the build tree — clean.
+- Clean shutdown on window close (~200ms, no hang).
+- `zig build test-regression` — green.
 
 ---
 

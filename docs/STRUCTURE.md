@@ -125,6 +125,12 @@ name (sepia, typewriter-*, old `dark`) to `qirtas`.
 2. `src/root.zig` as the `qirtas` Zig module.
 3. `src/gui.c`, and all modular C GUI source files under `src/gui/` as compiled C UI sources.
 
+All compiled artifacts force `use_llvm = true` + `use_lld = true`. Zig 0.16's
+self-hosted ELF linker can't relocate the `.sframe` section GCC 16+ emits in
+`crt1.o` (`R_X86_64_PC64`), and the self-hosted x86_64 backend + LLD crashes —
+LLVM codegen + LLD is the working path on modern Arch/Omarchy toolchains. (See
+`docs/ISSUES.md` 2026-06-23.)
+
 ## Tests
 
 `zig build test` — Zig test suite (token crypto round-trip + tamper rejection,
@@ -244,20 +250,23 @@ while keeping the floating-paper identity. All of this is built in `activate()` 
   navy on the navy theme) → a 46px **header band** (`gui->editor_header`:
   breadcrumb + reparented 🔍 search, ≡ outline toggle, ⋮ menu) → the scrolling
   `GtkSourceView`. The inner `.editor-scroll` is borderless.
-- **Centred text column**, recomputed each tick by `paper_column_tick` from the
-  card's width: `text_w = clamp(card_width - QIRTAS_CARD_CHROME,
-  QIRTAS_TEXT_COLUMN_MIN=420, QIRTAS_TEXT_COLUMN_MAX=840)`, result cached in
-  `gui->text_column_width`. `GtkSourceView` has no max-width, so this drives
-  symmetric left/right text margins directly. GTK4 dropped `size-allocate`, so
-  steady state polls via a ~120ms `g_timeout_add` (no-op unless width/gutter
-  actually changed); a 60fps `gtk_widget_add_tick_callback` runs only while
-  dragging a column edge (`on_column_resize_begin`/`_end`). In focus mode the
-  card itself is centred with a capped width (`text_column_width + 160`) so the
-  paper floats in the middle of the desk.
-- **Text Width setting** (Editor section): "Centered (Fixed Width)" (default) vs
-  "Full Page Width" — `gui->text_width_full_page` / pref `text_width_full_page`,
-  toggled via `on_text_width_mode_changed`. "Full Page Width" skips the
-  `QIRTAS_TEXT_COLUMN_MAX` clamp above so the column always fills the card.
+- **Centred fixed-width text column.** `apply_editor_border` (`gui_layout.c`) caps
+  the editor card's *content* width at `QIRTAS_TEXT_COLUMN_MAX + 2·QIRTAS_CARD_INNER_PAD`
+  and centres it on the desk by growing the **card** margins. Once the window is
+  wider than the cap, a resize only enlarges the desk gutter, **not** the wrap
+  width — which is essential, because GtkTextView re-shapes the *whole* document
+  on any wrap-width change (the tiling-WM resize freeze; full analysis in
+  `docs/ISSUES.md` 2026-06-23). Card margins are used on purpose: changing
+  text-view margins or the wrap width re-validates the layout, plain card margins
+  do not. `paper_column_tick` then sets the text-view padding and caches
+  `gui->text_column_width`. GTK4 dropped `size-allocate`, so steady state polls
+  via a ~120ms `g_timeout_add` (no-op unless width/gutter changed); a 60fps
+  `gtk_widget_add_tick_callback` runs only while dragging a column edge. Applies
+  in bordered, borderless and focus modes alike.
+- **Card Gap slider** (Editor section, `desk_gap` / `on_card_gap_slider_changed`)
+  is the width control: `0` = full-page edge-to-edge (opts out of the cap); any
+  value > 0 = centred capped column. The legacy `text_width_full_page` pref also
+  forces full-page.
 - **Desk outline panel.** The heading TOC left the sidebar and now sits on the desk
   (left of the paper under RTL) as a `GtkRevealer` (`gui->outline_panel`). Toggled by
   the header ≡ button and a `×` close button; visibility persists in the

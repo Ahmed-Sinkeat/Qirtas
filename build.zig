@@ -24,6 +24,9 @@ fn addQirtasTestExe(
         }),
         .filters = filters,
     });
+    // ponytail: LLVM codegen + LLD; see the note on the main exe below.
+    t.use_llvm = true;
+    t.use_lld = true;
     t.root_module.linkSystemLibrary("gtk4", .{});
     t.root_module.linkSystemLibrary("gtksourceview-5", .{});
     t.root_module.linkSystemLibrary("libadwaita-1", .{});
@@ -96,6 +99,13 @@ pub fn build(b: *std.Build) void {
             },
         }),
     });
+
+    // ponytail: force LLVM codegen + LLD. Zig 0.16's self-hosted ELF linker
+    // can't relocate the .sframe section GCC 16+ emits in crt1.o
+    // (R_X86_64_PC64); and the self-hosted x86_64 backend + LLD crashes here.
+    // LLVM+LLD is the battle-tested path and handles both.
+    exe.use_llvm = true;
+    exe.use_lld = true;
 
     // Strip debugging definitions/symbols in release mode to keep binary size low
     if (optimize != .Debug) {
@@ -206,6 +216,8 @@ pub fn build(b: *std.Build) void {
         .name = "test-c-behavior",
         .root_module = c_test_mod,
     });
+    c_test_exe.use_llvm = true; // same LLVM+LLD workaround as the main exe
+    c_test_exe.use_lld = true;
     const c_test_run = b.addRunArtifact(c_test_exe);
     const c_test_step = b.step("test-c", "Run standalone C behavioral tests (no display required)");
     c_test_step.dependOn(&c_test_run.step);

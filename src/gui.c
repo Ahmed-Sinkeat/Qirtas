@@ -1066,13 +1066,13 @@ static void on_sidebar_side_changed(GObject *gobject, GParamSpec *pspec, gpointe
 
             gtk_paned_set_end_child(GTK_PANED(gui->sidebar_editor_box), gui->stack);
             gtk_paned_set_resize_end_child(GTK_PANED(gui->sidebar_editor_box), TRUE);
-            gtk_paned_set_shrink_end_child(GTK_PANED(gui->sidebar_editor_box), FALSE);
+            gtk_paned_set_shrink_end_child(GTK_PANED(gui->sidebar_editor_box), TRUE); /* shrinkable: fit half-tile */
 
             gtk_paned_set_position(GTK_PANED(gui->sidebar_editor_box), 220);
         } else { // Right
             gtk_paned_set_start_child(GTK_PANED(gui->sidebar_editor_box), gui->stack);
             gtk_paned_set_resize_start_child(GTK_PANED(gui->sidebar_editor_box), TRUE);
-            gtk_paned_set_shrink_start_child(GTK_PANED(gui->sidebar_editor_box), FALSE);
+            gtk_paned_set_shrink_start_child(GTK_PANED(gui->sidebar_editor_box), TRUE); /* shrinkable: fit half-tile */
 
             gtk_paned_set_end_child(GTK_PANED(gui->sidebar_editor_box), gui->sidebar);
             gtk_paned_set_resize_end_child(GTK_PANED(gui->sidebar_editor_box), FALSE);
@@ -1816,7 +1816,11 @@ static void activate(GtkApplication *app, gpointer user_data) {
     gtk_widget_add_css_class(stack, "workspace");
     gtk_paned_set_end_child(GTK_PANED(sidebar_editor_box), stack);
     gtk_paned_set_resize_end_child(GTK_PANED(sidebar_editor_box), TRUE);
-    gtk_paned_set_shrink_end_child(GTK_PANED(sidebar_editor_box), FALSE);
+    /* Editor side must be shrinkable, or the window's minimum width becomes
+     * sidebar(271) + editor(543) = 820px and it can't fit a half-screen tile
+     * on a tiling WM (half of 1366 = 683). Shrinking only kicks in when space
+     * is constrained; normal sizes are unaffected. */
+    gtk_paned_set_shrink_end_child(GTK_PANED(sidebar_editor_box), TRUE);
     gui->stack = stack;
 
     GtkGesture *workspace_click = gtk_gesture_click_new();
@@ -2061,7 +2065,10 @@ static void activate(GtkApplication *app, gpointer user_data) {
 
     gtk_paned_set_end_child(GTK_PANED(desk_paned), outline_panel);
     gtk_paned_set_resize_end_child(GTK_PANED(desk_paned), FALSE);
-    gtk_paned_set_shrink_end_child(GTK_PANED(desk_paned), FALSE);
+    /* Outline must yield when the editor area is squeezed (narrow window /
+     * half-tile), otherwise the desk paned's min = card(283)+outline(254)
+     * re-imposes a wide floor on the editor side. */
+    gtk_paned_set_shrink_end_child(GTK_PANED(desk_paned), TRUE);
 
     /* Restore the saved visibility (default: shown). */
     gui->outline_panel_visible = qirtas_pref_get_int("outline_panel_visible", 1) != 0;
@@ -2450,9 +2457,13 @@ static void activate(GtkApplication *app, gpointer user_data) {
         qirtas_tr("Auto-save"), NULL,
         gui->autosave_enabled, G_CALLBACK(on_autosave_toggled), gui, NULL));
 
-    /* Card Gap slider — the one width control: 0 = full page width, larger =
-     * narrower centred card. Auto-clamps so the card never overflows a narrow
-     * window. (Replaces the old Text Width dropdown + Column Width slider.) */
+    /* Card Gap slider — the width control: 0 = full page width (edge to edge),
+     * any value > 0 = centred fixed-width column. The text column is capped at
+     * QIRTAS_TEXT_COLUMN_MAX and centred by growing the *card* margins
+     * (apply_editor_border), so widening the window past the cap only grows the
+     * desk gutter, not the wrap width — that's what keeps GtkTextView from
+     * re-shaping the whole document on every resize. Auto-clamps on narrow
+     * windows. (Replaces the old Text Width dropdown + Column Width slider.) */
     GtkWidget *gap_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
     GtkWidget *gap_lbl = gtk_label_new(qirtas_tr("Card Gap"));
     gtk_widget_set_halign(gap_lbl, GTK_ALIGN_START);
