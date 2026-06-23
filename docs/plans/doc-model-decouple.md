@@ -1,7 +1,8 @@
 # Refactor: decouple the doc model from the view (Option C)
 
 **Branch:** `refactor/doc-model-decouple`
-**Status:** Stages 1–3 done & committed (Stage 3 live-verified); Stage 4 next.
+**Status:** Stages 1–4 done & committed (decorator corruption fixed); only the
+optional code-block closing-fence fold (§5b) + Stage 5 remain.
 **Read this first** if you're resuming cold — it's the whole picture in one file.
 
 ---
@@ -95,8 +96,14 @@ one anchor line, source lines gone from the view, kept only in `doc_buf`). A
 | 1 | Pure fold-map translation core (test-first) | none | ✅ `baa53ef` |
 | 2 | Live registry + wire the mirror seam (inert/identity) | high | ✅ `eff8d0a` |
 | 3 | Convert **tables** to a true fold (proof case) | high | ✅ `fbfc24d`+`3cfbbd4`, live-verified |
-| 4 | Convert code blocks, todos (+ HR if useful) | medium | ⏳ next |
+| 4 | Decorator corruption fix (todo/codeblock/hr) | medium | ✅ `e43e33f`, todos live-verified |
+| 4b | Code-block closing-fence fold (cosmetic) | medium | ⬜ optional — see §5b |
 | 5 | Custom gutter + delete `scale:0.01` hacks & dead guards | medium | ⬜ |
+
+Stage 4 finding: **todos and HR are single-line decorations** (marker text →
+anchor on the *same* line, no hidden lines) — they need NO fold, only the
+delete-mirror fix. The only decorator left with a hidden line is the **code-block
+closing fence** (one `scale:0.01` line per block); see §5b.
 
 ---
 
@@ -187,6 +194,30 @@ guard flags that only existed to keep line count stable.
 
 ---
 
+## 5b. Code-block closing-fence fold (optional, undecided)
+
+The only `scale:0.01`-hidden line left is the code-block **closing fence** (one
+per block; `gui_codeblock.c` `fence_hide_tag`). Folding it (delete from view +
+`foldmap_register`) would remove the last compressed gutter number / selectable
+1px sliver.
+
+**Why it's NOT a clean copy of the table fold:** a table is *atomic* — the whole
+thing reveals to raw on cursor-enter and re-folds on leave, so its fold lifetime
+is simple. A code block's **body is edited in place** (it stays a visible,
+editable region; only the fences are decoration). So a closing-fence fold has no
+natural reveal cycle, and the fold mark would desync the moment the user
+adds/removes a body line (the hidden closing fence's doc position drifts). Making
+it correct means re-locating + re-folding the closing fence on every body edit
+(a `code_pill_dirty`-driven re-render). Doable, but real complexity for one
+hidden line per block.
+
+Options: (a) implement the re-fold-on-body-edit; (b) leave the closing fence
+`scale:0.01` and let **Stage 5's custom gutter** stop numbering hidden lines
+(kills the compressed number but not the clickable sliver); (c) leave as-is.
+Decide before building.
+
+---
+
 ## 6. Out of scope (deferred Tier 2–4 — do NOT start without asking)
 Delta undo; tab-content single-source-of-truth; single-window enforcement;
 `sync.zig` de-duplication/split; busy-wait mutex; rope/gap-buffer; renames.
@@ -211,4 +242,5 @@ Delta undo; tab-content single-source-of-truth; single-window enforcement;
 - `baa53ef` — Stage 1 (fold-map pure core + tests)
 - `eff8d0a` — Stage 2 (live registry + wire seam, inert)
 - `fbfc24d` — Stage 3 (table → true fold; loop-index fix; drop dead hide tag)
-- `3cfbbd4` — Stage 3 fix: block `on_delete_range_before` (reveal/re-fold corruption)
+- `3cfbbd4` — Stage 3 fix: block `on_delete_range_before` (table reveal/re-fold)
+- `e43e33f` — Stage 4: block `on_delete_range_before` in todo/codeblock/hr
