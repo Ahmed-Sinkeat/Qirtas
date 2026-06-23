@@ -3098,6 +3098,10 @@ static void activate(GtkApplication *app, gpointer user_data) {
     }
     apply_theme(gui, current_theme);
     apply_focus_mode(gui);
+    /* Always start with the sidebar collapsed — it's opened on demand with F9
+     * (or the logo) and never persisted open. apply_focus_mode forces it
+     * visible in its non-focus branch, so hide it here, after. */
+    gtk_widget_set_visible(gui->sidebar, FALSE);
     gtk_window_present(GTK_WINDOW(window));
     if (qirtas_pref_get_int("window_maximized", 0)) {
         gtk_window_maximize(GTK_WINDOW(window));

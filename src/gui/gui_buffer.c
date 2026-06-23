@@ -218,6 +218,13 @@ Position gui_buffer_replace(GtkTextBuffer *buf, int start_off, int end_off,
     gtk_text_buffer_get_iter_at_offset(buf, &s, start_off);
     gtk_text_buffer_get_iter_at_offset(buf, &e, end_off);
     Position sp = iter_to_position(&s);
+
+    /* Read mode is view-only. Every programmatic edit (formatting, links,
+     * lists, tables, smart pairs) funnels through here, so one guard blocks
+     * them all regardless of UI entry point — set_editable(FALSE) only stops
+     * typed input, not these. File loads use set_text and never reach here. */
+    if (global_gui && global_gui->read_mode) return sp;
+
     Position ep = iter_to_position(&e);
 
     gui_push_undo_snapshot();

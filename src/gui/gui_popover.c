@@ -5,6 +5,9 @@
 #include "gui_internal.h"
 
 void apply_paragraph_alignment(GtkTextBuffer *buf, GtkJustification justification) {
+    /* Alignment rides presentation tags (not gui_buffer_replace), so guard it
+     * separately — read mode must stay fully view-only. */
+    if (global_gui && global_gui->read_mode) return;
     GtkTextTagTable *table = gtk_text_buffer_get_tag_table(buf);
     GtkTextTag *tag_left = gtk_text_tag_table_lookup(table, "align-left");
     if (!tag_left) {

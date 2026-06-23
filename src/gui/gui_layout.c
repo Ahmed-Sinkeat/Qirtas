@@ -143,6 +143,14 @@ static gboolean restore_read_mode_scroll_cb(gpointer user_data) {
         GtkTextBuffer *buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(d->gui->source_view));
         gtk_text_view_scroll_to_mark(GTK_TEXT_VIEW(d->gui->source_view), d->mark, 0.0, TRUE, 0.0, 0.0);
         gtk_text_buffer_delete_mark(buf, d->mark);
+        /* scroll_to_mark sets the adjustments directly (bypassing the NEVER
+         * h-scroll gate), so a wide table's horizontal extent lets it drift
+         * right and clip the line starts. Force the left edge back. */
+        if (d->gui->scrolled) {
+            GtkAdjustment *hadj = gtk_scrolled_window_get_hadjustment(
+                GTK_SCROLLED_WINDOW(d->gui->scrolled));
+            if (hadj) gtk_adjustment_set_value(hadj, 0.0);
+        }
     }
     g_free(d);
     return G_SOURCE_REMOVE;
@@ -358,6 +366,15 @@ void apply_editor_prefs(AppGui *gui) {
     GtkSourceView *sv   = GTK_SOURCE_VIEW(gui->source_view);
 
     gtk_text_view_set_wrap_mode(view, gui->wrap_lines ? GTK_WRAP_WORD_CHAR : GTK_WRAP_NONE);
+
+    /* When wrapping, lines never exceed the view, so any horizontal extent is
+     * spurious (a wide rendered table/code-block child anchor) and lets the
+     * touchpad pan into empty space. Forbid the h-scrollbar so the view can't
+     * over-scroll; only keep it when wrap is off and long lines truly need it. */
+    if (gui->scrolled)
+        gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(gui->scrolled),
+                                       gui->wrap_lines ? GTK_POLICY_NEVER : GTK_POLICY_AUTOMATIC,
+                                       GTK_POLICY_AUTOMATIC);
 
     /* Flip the RTL-paragraph left-justify override (see update_paragraph_direction)
      * to match the new wrap state — avoids the right-side blank gap on Arabic

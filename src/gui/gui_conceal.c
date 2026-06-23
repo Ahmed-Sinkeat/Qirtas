@@ -368,7 +368,12 @@ static void update_conceal_markdown_all_impl(GtkTextBuffer *buf) {
         if (u_clear) gtk_text_buffer_remove_tag(buf, u_clear, &start, &end);
     }
 
-    gchar *text = gtk_text_buffer_get_text(buf, &start, &end, TRUE);
+    /* get_slice, NOT get_text: child anchors (rendered tables, code blocks,
+     * todo checkboxes) are 1 char in the buffer but get_text OMITS them, so the
+     * regex offsets would drift left by one per preceding widget and conceal
+     * would shrink real text instead of the markers. get_slice keeps each
+     * anchor as U+FFFC, so string offsets stay aligned with buffer offsets. */
+    gchar *text = gtk_text_buffer_get_slice(buf, &start, &end, TRUE);
     if (!text || strlen(text) == 0) {
         g_free(text);
         if (global_gui) global_gui->in_conceal_update = FALSE;
@@ -511,7 +516,9 @@ static void update_conceal_markdown_range_impl(GtkTextBuffer *buf, int first_lin
     gtk_text_buffer_get_iter_at_line(buf, &end, end_line);
     gtk_text_iter_forward_to_line_end(&end);
 
-    gchar *text = gtk_text_buffer_get_text(buf, &start, &end, TRUE);
+    /* get_slice keeps child anchors as U+FFFC so range-local offsets stay
+     * aligned with buffer offsets — see the full-pass note above. */
+    gchar *text = gtk_text_buffer_get_slice(buf, &start, &end, TRUE);
     if (!text || strlen(text) == 0) {
         g_free(text);
         if (global_gui) global_gui->in_conceal_update = FALSE;
