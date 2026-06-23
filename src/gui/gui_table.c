@@ -19,6 +19,14 @@
 
 extern void on_insert_text_before(GtkTextBuffer *buf, GtkTextIter *location, gchar *text, gint len, gpointer user_data);
 extern void on_insert_text_after(GtkTextBuffer *buf, GtkTextIter *location, gchar *text, gint len, gpointer user_data);
+/* on_delete_range_BEFORE is the doc_buf delete mirror (it reads the pre-delete
+ * iters, foldmap-translates them, and calls zig_delete_range). It MUST be
+ * blocked around our fold/reveal edits — otherwise deleting the body rows from
+ * the view (with the re-insert blocked) deletes them from doc_buf too and the
+ * table is lost from the saved file. on_delete_range_after only does view-side
+ * bookkeeping (conceal/word-count) but is blocked too, to keep it off the
+ * half-edited buffer. */
+extern void on_delete_range_before(GtkTextBuffer *buf, GtkTextIter *start, GtkTextIter *end, gpointer user_data);
 extern void on_delete_range_after(GtkTextBuffer *buf, GtkTextIter *start, GtkTextIter *end, gpointer user_data);
 extern void on_buffer_changed(GtkTextBuffer *buf, gpointer user_data);
 /* mark-set MUST be blocked too: our delete/insert moves the cursor mark, which
@@ -227,6 +235,7 @@ static void render_one_table(GtkTextBuffer *buf, AppGui *gui, int header, int la
 static void block_handlers(GtkTextBuffer *buf, AppGui *gui) {
     g_signal_handlers_block_by_func(buf, on_insert_text_before, gui);
     g_signal_handlers_block_by_func(buf, on_insert_text_after, gui);
+    g_signal_handlers_block_by_func(buf, on_delete_range_before, gui);
     g_signal_handlers_block_by_func(buf, on_delete_range_after, gui);
     g_signal_handlers_block_by_func(buf, on_buffer_changed, gui);
     g_signal_handlers_block_by_func(buf, on_mark_set, gui);
@@ -234,6 +243,7 @@ static void block_handlers(GtkTextBuffer *buf, AppGui *gui) {
 static void unblock_handlers(GtkTextBuffer *buf, AppGui *gui) {
     g_signal_handlers_unblock_by_func(buf, on_insert_text_before, gui);
     g_signal_handlers_unblock_by_func(buf, on_insert_text_after, gui);
+    g_signal_handlers_unblock_by_func(buf, on_delete_range_before, gui);
     g_signal_handlers_unblock_by_func(buf, on_delete_range_after, gui);
     g_signal_handlers_unblock_by_func(buf, on_buffer_changed, gui);
     g_signal_handlers_unblock_by_func(buf, on_mark_set, gui);
