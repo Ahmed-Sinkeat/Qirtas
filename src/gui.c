@@ -3098,6 +3098,10 @@ static void activate(GtkApplication *app, gpointer user_data) {
     }
     apply_theme(gui, current_theme);
     apply_focus_mode(gui);
+    /* Always start with the sidebar collapsed — it's opened on demand with F9
+     * (or the logo) and never persisted open. apply_focus_mode forces it
+     * visible in its non-focus branch, so hide it here, after. */
+    gtk_widget_set_visible(gui->sidebar, FALSE);
     gtk_window_present(GTK_WINDOW(window));
     if (qirtas_pref_get_int("window_maximized", 0)) {
         gtk_window_maximize(GTK_WINDOW(window));
@@ -3420,6 +3424,11 @@ void gui_set_text(const char *text, int len) {
      * content swap, so its mark can't re-grid a stale range. */
     gui_table_reset_reveal(buf);
 
+    /* Forget folds from the outgoing document while their marks are still valid
+     * (set_text below invalidates them). The new document's decorators will
+     * re-register as they render. */
+    foldmap_clear(buf);
+
     /* Wholesale content swap: invalidate any deferred conceal/wiki/HR passes
      * queued against the OUTGOING document. Their generation guard cancels them
      * instead of letting them run apply_tag/insert with now-stale iterators
@@ -3468,7 +3477,7 @@ void gui_get_cursor_position(int *line, int *col) {
     gtk_text_buffer_get_iter_at_mark(buf, &iter, mark);
     
     int rel_line = gtk_text_iter_get_line(&iter);
-    *line = rel_line + 1;
+    *line = foldmap_live_view_to_doc(buf, rel_line) + 1; /* report DOC line */
     *col = gtk_text_iter_get_line_offset(&iter);
 }
 
@@ -3482,7 +3491,8 @@ void gui_set_cursor_position(int line, int col) {
      * absolute line is the buffer line directly (no active-page offset). */
     GtkTextBuffer *buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(global_source_view));
     GtkTextIter iter;
-    int rel_line = target_abs_line;
+    /* Incoming line is a DOC line; map it back to the (possibly folded) view. */
+    int rel_line = foldmap_live_doc_to_view(buf, target_abs_line);
     if (rel_line < 0) rel_line = 0;
 
     int total_lines = gtk_text_buffer_get_line_count(buf);

@@ -1,20 +1,32 @@
 #include "gui_internal.h"
 #include <string.h>
 
-/* Markdown tables rendered as a grid, reveal-on-cursor. Same view-only model as
- * gui_codeblock.c / gui_hr.c: the GtkTextBuffer view is decorated while the Zig
- * doc_buf keeps the real "| a | b |" markdown, so files save unchanged.
+/* Markdown tables rendered as a grid, reveal-on-cursor. View-only model: the
+ * GtkTextBuffer view is decorated while the Zig doc_buf keeps the real
+ * "| a | b |" markdown, so files save unchanged.
  *
- * A rendered table = the header line's text replaced by a GtkGrid child anchor,
- * the remaining table lines (delimiter + body) hidden with a transparent tag,
- * and the whole line range tagged "md-table-region" for cursor detection and
- * idempotency. The original markdown is stashed on the anchor so the table can
- * be restored verbatim when the cursor enters it (reveal), then re-rendered when
- * the cursor leaves. Line count stays stable (no lines added/removed) so the
- * doc_buf<->view mirroring in the buffer signal handlers never desyncs. */
+ * A rendered table is a TRUE FOLD (see src/gui/gui_foldmap.c): the header line's
+ * text is replaced by a GtkGrid child anchor and the delimiter + body lines are
+ * DELETED from the view, so an N-line table occupies ONE view line. The signal
+ * handlers are blocked during this edit, so doc_buf still holds all N lines; the
+ * fold-map translates view<->doc line numbers to keep the mirror correct. The
+ * anchor line is tagged "md-table-region" for cursor detection and idempotency,
+ * and the verbatim markdown is stashed on the anchor so the table is restored
+ * (reveal) when the cursor enters it, then re-folded when the cursor leaves.
+ *
+ * Folding (not scale:0.01-hiding the rows, as before) is what keeps the gutter
+ * line numbers contiguous and removes the selectable "1px" sliver lines. */
 
 extern void on_insert_text_before(GtkTextBuffer *buf, GtkTextIter *location, gchar *text, gint len, gpointer user_data);
 extern void on_insert_text_after(GtkTextBuffer *buf, GtkTextIter *location, gchar *text, gint len, gpointer user_data);
+/* on_delete_range_BEFORE is the doc_buf delete mirror (it reads the pre-delete
+ * iters, foldmap-translates them, and calls zig_delete_range). It MUST be
+ * blocked around our fold/reveal edits — otherwise deleting the body rows from
+ * the view (with the re-insert blocked) deletes them from doc_buf too and the
+ * table is lost from the saved file. on_delete_range_after only does view-side
+ * bookkeeping (conceal/word-count) but is blocked too, to keep it off the
+ * half-edited buffer. */
+extern void on_delete_range_before(GtkTextBuffer *buf, GtkTextIter *start, GtkTextIter *end, gpointer user_data);
 extern void on_delete_range_after(GtkTextBuffer *buf, GtkTextIter *start, GtkTextIter *end, gpointer user_data);
 extern void on_buffer_changed(GtkTextBuffer *buf, gpointer user_data);
 /* mark-set MUST be blocked too: our delete/insert moves the cursor mark, which
@@ -85,15 +97,6 @@ static char *line_text(GtkTextBuffer *buf, int line) {
     e = s;
     if (!gtk_text_iter_ends_line(&e)) gtk_text_iter_forward_to_line_end(&e);
     return gtk_text_buffer_get_text(buf, &s, &e, TRUE);
-}
-
-static GtkTextTag *table_hide_tag(GtkTextBuffer *buf) {
-    GtkTextTagTable *tab = gtk_text_buffer_get_tag_table(buf);
-    GtkTextTag *t = gtk_text_tag_table_lookup(tab, "md-table-hidden");
-    if (t) return t;
-    GdkRGBA clear = { 0, 0, 0, 0 };
-    return gtk_text_buffer_create_tag(buf, "md-table-hidden",
-                                      "scale", 0.01, "foreground-rgba", &clear, NULL);
 }
 
 /* Marks the whole rendered line range; used for cursor-in-table detection and
@@ -194,19 +197,37 @@ static void render_one_table(GtkTextBuffer *buf, AppGui *gui, int header, int la
     g_object_set_data_full(G_OBJECT(anchor), "table-md", g_string_free(raw, FALSE), g_free);
     gtk_text_view_add_child_at_anchor(GTK_TEXT_VIEW(gui->source_view), grid, anchor);
 
-    /* Hide the delimiter + body lines. */
-    GtkTextTag *hide = table_hide_tag(buf);
-    GtkTextIter bs, be;
-    gtk_text_buffer_get_iter_at_line(buf, &bs, header + 1);
-    gtk_text_buffer_get_iter_at_line(buf, &be, last);
-    if (!gtk_text_iter_ends_line(&be)) gtk_text_iter_forward_to_line_end(&be);
-    gtk_text_buffer_apply_tag(buf, hide, &bs, &be);
+    /* Collapse the delimiter + body rows OUT of the view (a true fold): the
+     * handlers are blocked so doc_buf keeps all N lines, but the view shows only
+     * the grid anchor line. foldmap translates view<->doc line numbers so the
+     * mirror stays correct. Replaces the old scale:0.01 hide, which left those
+     * rows as ~0px lines that still drew gutter numbers (compressed) and stayed
+     * click-selectable (the "1px dot"). */
+    int n_lines = last - header + 1;
+    int total = gtk_text_buffer_get_line_count(buf);
+    GtkTextIter ds, de;
+    if (last + 1 < total) {
+        /* Drop rows [header+1 .. last] whole, leaving header's anchor + the \n
+         * that joins to the following content. */
+        gtk_text_buffer_get_iter_at_line(buf, &ds, header + 1);
+        gtk_text_buffer_get_iter_at_line(buf, &de, last + 1);
+    } else {
+        /* Table ends the document: also drop header's trailing \n so the anchor
+         * is the last line — otherwise the leftover empty line would map to a
+         * doc line past the table and desync the mirror. */
+        gtk_text_buffer_get_iter_at_line(buf, &ds, header);
+        if (!gtk_text_iter_ends_line(&ds)) gtk_text_iter_forward_to_line_end(&ds);
+        gtk_text_buffer_get_end_iter(buf, &de);
+    }
+    gtk_text_buffer_delete(buf, &ds, &de);
 
-    /* Tag the whole region (header anchor line .. last) for cursor detection. */
+    foldmap_register(buf, header, n_lines);
+
+    /* Tag the single anchor line as the table region (cursor detection). */
     GtkTextTag *region = table_region_tag(buf);
     GtkTextIter rs, re;
     gtk_text_buffer_get_iter_at_line(buf, &rs, header);
-    gtk_text_buffer_get_iter_at_line(buf, &re, last);
+    re = rs;
     if (!gtk_text_iter_ends_line(&re)) gtk_text_iter_forward_to_line_end(&re);
     gtk_text_buffer_apply_tag(buf, region, &rs, &re);
 }
@@ -214,6 +235,7 @@ static void render_one_table(GtkTextBuffer *buf, AppGui *gui, int header, int la
 static void block_handlers(GtkTextBuffer *buf, AppGui *gui) {
     g_signal_handlers_block_by_func(buf, on_insert_text_before, gui);
     g_signal_handlers_block_by_func(buf, on_insert_text_after, gui);
+    g_signal_handlers_block_by_func(buf, on_delete_range_before, gui);
     g_signal_handlers_block_by_func(buf, on_delete_range_after, gui);
     g_signal_handlers_block_by_func(buf, on_buffer_changed, gui);
     g_signal_handlers_block_by_func(buf, on_mark_set, gui);
@@ -221,6 +243,7 @@ static void block_handlers(GtkTextBuffer *buf, AppGui *gui) {
 static void unblock_handlers(GtkTextBuffer *buf, AppGui *gui) {
     g_signal_handlers_unblock_by_func(buf, on_insert_text_before, gui);
     g_signal_handlers_unblock_by_func(buf, on_insert_text_after, gui);
+    g_signal_handlers_unblock_by_func(buf, on_delete_range_before, gui);
     g_signal_handlers_unblock_by_func(buf, on_delete_range_after, gui);
     g_signal_handlers_unblock_by_func(buf, on_buffer_changed, gui);
     g_signal_handlers_unblock_by_func(buf, on_mark_set, gui);
@@ -270,7 +293,12 @@ void parse_and_render_tables(GtkTextBuffer *buf, AppGui *gui) {
                 continue;
             }
             render_one_table(buf, gui, line, last);
-            line = last + 1;
+            /* render_one_table FOLDED [line..last] into a single anchor at
+             * `line` (delimiter + body view lines are now deleted), so the
+             * buffer shrank by (last-line). The next unscanned content is at
+             * line+1, NOT last+1 — last+1 would skip (last-line) lines and miss
+             * a table immediately following this one. */
+            line = line + 1;
             continue;
         }
         line++;
@@ -321,6 +349,11 @@ gboolean gui_table_reveal_at_cursor(GtkTextBuffer *buf, AppGui *gui) {
     if (!md_dup) return FALSE;
 
     block_handlers(buf, gui);
+
+    /* Un-fold: drop the fold entry (and its anchor mark) before we restore the
+     * raw rows, so the N lines we re-insert become real view lines again and
+     * the foldmap returns to identity across this region. */
+    foldmap_unregister_at(buf, top);
 
     /* Remove the grid widget FIRST, while the buffer is consistent. If we let
      * gtk_text_buffer_delete() tear the child widget down implicitly, the

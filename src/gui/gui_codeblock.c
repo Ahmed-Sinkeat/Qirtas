@@ -17,6 +17,12 @@
 
 extern void on_insert_text_before(GtkTextBuffer *buf, GtkTextIter *location, gchar *text, gint len, gpointer user_data);
 extern void on_insert_text_after(GtkTextBuffer *buf, GtkTextIter *location, gchar *text, gint len, gpointer user_data);
+/* on_delete_range_BEFORE is the doc_buf delete mirror (zig_delete_range). It MUST
+ * be blocked: rendering deletes the opening-fence line text, and a code block can
+ * render LIVE (code_pill_dirty after a typed/pasted fence, outside loading_viewport),
+ * so an unblocked delete erases the ```lang line from doc_buf. on_delete_range_after
+ * is view-only bookkeeping but is blocked too, to keep it off the half-edited buffer. */
+extern void on_delete_range_before(GtkTextBuffer *buf, GtkTextIter *start, GtkTextIter *end, gpointer user_data);
 extern void on_delete_range_after(GtkTextBuffer *buf, GtkTextIter *start, GtkTextIter *end, gpointer user_data);
 extern void on_buffer_changed(GtkTextBuffer *buf, gpointer user_data);
 /* Blocked alongside the others: our delete/insert moves the cursor mark and
@@ -146,6 +152,7 @@ void parse_and_render_code_pills(GtkTextBuffer *buf, AppGui *gui) {
 
     g_signal_handlers_block_by_func(buf, on_insert_text_before, gui);
     g_signal_handlers_block_by_func(buf, on_insert_text_after, gui);
+    g_signal_handlers_block_by_func(buf, on_delete_range_before, gui);
     g_signal_handlers_block_by_func(buf, on_delete_range_after, gui);
     g_signal_handlers_block_by_func(buf, on_buffer_changed, gui);
     g_signal_handlers_block_by_func(buf, on_mark_set, gui);
@@ -265,6 +272,7 @@ void parse_and_render_code_pills(GtkTextBuffer *buf, AppGui *gui) {
 
     g_signal_handlers_unblock_by_func(buf, on_insert_text_before, gui);
     g_signal_handlers_unblock_by_func(buf, on_insert_text_after, gui);
+    g_signal_handlers_unblock_by_func(buf, on_delete_range_before, gui);
     g_signal_handlers_unblock_by_func(buf, on_delete_range_after, gui);
     g_signal_handlers_unblock_by_func(buf, on_buffer_changed, gui);
     g_signal_handlers_unblock_by_func(buf, on_mark_set, gui);

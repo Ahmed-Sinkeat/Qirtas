@@ -218,6 +218,13 @@ Position gui_buffer_replace(GtkTextBuffer *buf, int start_off, int end_off,
     gtk_text_buffer_get_iter_at_offset(buf, &s, start_off);
     gtk_text_buffer_get_iter_at_offset(buf, &e, end_off);
     Position sp = iter_to_position(&s);
+
+    /* Read mode is view-only. Every programmatic edit (formatting, links,
+     * lists, tables, smart pairs) funnels through here, so one guard blocks
+     * them all regardless of UI entry point — set_editable(FALSE) only stops
+     * typed input, not these. File loads use set_text and never reach here. */
+    if (global_gui && global_gui->read_mode) return sp;
+
     Position ep = iter_to_position(&e);
 
     gui_push_undo_snapshot();
@@ -322,7 +329,11 @@ void arabic_lines_phrase(long n, char *out, size_t out_size) {
 Position iter_to_position(GtkTextIter *iter) {
     Position pos = { 0, 0 };
     if (!global_gui || !iter) return pos;
-    pos.line = gtk_text_iter_get_line(iter);
+    /* All C-side Positions are DOC-buffer coordinates; the view may have fewer
+     * lines (folded regions). Translate the view line to its doc line here, at
+     * the GTK→Position boundary. Identity while no fold is registered. */
+    GtkTextBuffer *buf = gtk_text_iter_get_buffer(iter);
+    pos.line = foldmap_live_view_to_doc(buf, gtk_text_iter_get_line(iter));
     pos.col = gtk_text_iter_get_line_offset(iter);
     return pos;
 }
@@ -348,8 +359,9 @@ void select_position_range(AppGui *gui, Position start, Position end) {
     GtkTextBuffer *buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(gui->source_view));
     GtkTextIter start_iter, end_iter;
 
-    int rel_start_line = start.line;
-    int rel_end_line = end.line;
+    /* start/end are DOC positions; map to the (possibly folded) view. */
+    int rel_start_line = foldmap_live_doc_to_view(buf, start.line);
+    int rel_end_line = foldmap_live_doc_to_view(buf, end.line);
     if (rel_start_line < 0) rel_start_line = 0;
     if (rel_end_line < 0) rel_end_line = 0;
 
@@ -806,7 +818,9 @@ void on_insert_text_after(GtkTextBuffer *buf, GtkTextIter *location, gchar *text
     int start_line = gtk_text_iter_get_line(&start_iter);
     int start_col = gtk_text_iter_get_line_offset(&start_iter);
 
-    Position pos = { start_line, start_col };
+    /* Mirror to doc_buf in DOC coordinates; start_line stays VIEW below for the
+     * conceal/outline/word-count passes (those tag the view buffer). */
+    Position pos = { foldmap_live_view_to_doc(buf, start_line), start_col };
     gchar *text_dup = g_strndup(text, len);
     zig_insert_text(pos, text_dup);
 
@@ -870,8 +884,10 @@ void on_delete_range_before(GtkTextBuffer *buf, GtkTextIter *start, GtkTextIter 
     int end_line = gtk_text_iter_get_line(end);
     int end_col = gtk_text_iter_get_line_offset(end);
 
-    Position p_start = { start_line, start_col };
-    Position p_end = { end_line, end_col };
+    /* DOC coordinates for the doc_buf mirror; the view line numbers above are
+     * still used for the view-side outline/word-count passes below. */
+    Position p_start = { foldmap_live_view_to_doc(buf, start_line), start_col };
+    Position p_end = { foldmap_live_view_to_doc(buf, end_line), end_col };
 
     if (qirtas_perf_enabled && (end_line - start_line) > 1) {
         g_printerr("[perf] delete(cut?) lines %d..%d at buffer %d chars\n",

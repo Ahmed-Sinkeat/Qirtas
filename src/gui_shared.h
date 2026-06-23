@@ -11,6 +11,25 @@ typedef struct {
     int col;
 } Position;
 
+/* A fold collapses a contiguous run of `doc_count` document lines onto a single
+ * view line (a child-anchor widget: table grid, code pill, HR rule). The view
+ * buffer therefore has fewer lines than the doc_buf, and view<->doc line numbers
+ * must be translated through the live set of folds. See src/gui/gui_foldmap.c.
+ *   doc_line  = first doc-buf line the fold stands in for
+ *   view_line = the line in the GtkTextBuffer that holds the anchor
+ *   doc_count = lines collapsed (>=1); a fold hides (doc_count-1) view lines
+ * The array passed to the pure translators MUST be sorted ascending by view_line
+ * and be self-consistent: doc_line[i] = view_line[i] + sum(doc_count[j]-1, j<i). */
+typedef struct {
+    int view_line;
+    int doc_line;
+    int doc_count;
+} Fold;
+
+/* Pure line-number translation across a sorted, consistent Fold[] (no GTK). */
+int foldmap_view_to_doc(const Fold *folds, int n, int view_line);
+int foldmap_doc_to_view(const Fold *folds, int n, int doc_line);
+
 extern void zig_insert_text(Position pos, const char *text);
 extern void zig_delete_range(Position start, Position end);
 extern void zig_replace_range(Position start, Position end, const char *text);

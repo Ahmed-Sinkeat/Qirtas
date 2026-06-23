@@ -57,6 +57,9 @@ void           update_conceal_markdown_all(GtkTextBuffer *b)                    
 void           update_conceal_markdown_range(GtkTextBuffer *b, int f, int l)               { (void)b;(void)f;(void)l; }
 void           parse_and_render_code_pills(GtkTextBuffer *b, AppGui *g)                    { (void)b;(void)g; }
 void           parse_and_render_tables(GtkTextBuffer *b, AppGui *g)                        { (void)b;(void)g; }
+void           parse_and_render_todos(GtkTextBuffer *b, AppGui *g)                         { (void)b;(void)g; }
+void           parse_and_apply_link_tags(GtkTextBuffer *b, AppGui *g)                      { (void)b;(void)g; }
+void           gui_links_on_cursor_moved(GtkTextBuffer *b, AppGui *g)                      { (void)b;(void)g; }
 void           check_and_insert_hr(GtkTextBuffer *b, AppGui *g)                            { (void)b;(void)g; }
 void           apply_wiki_link_tags_local(GtkTextBuffer *b)                                { (void)b; }
 void           update_paragraph_direction_lines(GtkTextBuffer *b, gint f, gint l)         { (void)b;(void)f;(void)l; }
@@ -184,12 +187,56 @@ static void test_advance_position(void) {
     EXPECT_INT("col",  p.col,  5);
 }
 
+/* ── foldmap (gui_foldmap.c) ──────────────────────────────────────────────*/
+static void test_foldmap(void) {
+    /* No folds → identity both ways. */
+    for (int i = 0; i < 6; i++) {
+        EXPECT_INT("empty v2d", foldmap_view_to_doc(NULL, 0, i), i);
+        EXPECT_INT("empty d2v", foldmap_doc_to_view(NULL, 0, i), i);
+    }
+
+    /* One fold: doc lines [3,4,5] collapsed onto view line 3. */
+    Fold one[] = { { .view_line = 3, .doc_line = 3, .doc_count = 3 } };
+    EXPECT_INT("1 v2d 2", foldmap_view_to_doc(one, 1, 2), 2);
+    EXPECT_INT("1 v2d 3", foldmap_view_to_doc(one, 1, 3), 3); /* anchor → doc start */
+    EXPECT_INT("1 v2d 4", foldmap_view_to_doc(one, 1, 4), 6); /* skipped 2 hidden */
+    EXPECT_INT("1 v2d 5", foldmap_view_to_doc(one, 1, 5), 7);
+    EXPECT_INT("1 d2v 2", foldmap_doc_to_view(one, 1, 2), 2);
+    EXPECT_INT("1 d2v 3", foldmap_doc_to_view(one, 1, 3), 3); /* inside → anchor */
+    EXPECT_INT("1 d2v 4", foldmap_doc_to_view(one, 1, 4), 3); /* inside → anchor */
+    EXPECT_INT("1 d2v 5", foldmap_doc_to_view(one, 1, 5), 3); /* inside → anchor */
+    EXPECT_INT("1 d2v 6", foldmap_doc_to_view(one, 1, 6), 4);
+    EXPECT_INT("1 d2v 7", foldmap_doc_to_view(one, 1, 7), 5);
+
+    /* Two folds: A=doc[2,3]→view2, B=doc[7,8,9]→view6 (after A hides 1). */
+    Fold two[] = {
+        { .view_line = 2, .doc_line = 2, .doc_count = 2 },
+        { .view_line = 6, .doc_line = 7, .doc_count = 3 },
+    };
+    EXPECT_INT("2 v2d 2", foldmap_view_to_doc(two, 2, 2), 2);
+    EXPECT_INT("2 v2d 3", foldmap_view_to_doc(two, 2, 3), 4);
+    EXPECT_INT("2 v2d 6", foldmap_view_to_doc(two, 2, 6), 7);
+    EXPECT_INT("2 v2d 7", foldmap_view_to_doc(two, 2, 7), 10);
+    EXPECT_INT("2 v2d 8", foldmap_view_to_doc(two, 2, 8), 11);
+    EXPECT_INT("2 d2v 3", foldmap_doc_to_view(two, 2, 3), 2); /* inside A */
+    EXPECT_INT("2 d2v 4", foldmap_doc_to_view(two, 2, 4), 3);
+    EXPECT_INT("2 d2v 7", foldmap_doc_to_view(two, 2, 7), 6); /* anchor B */
+    EXPECT_INT("2 d2v 9", foldmap_doc_to_view(two, 2, 9), 6); /* inside B */
+    EXPECT_INT("2 d2v 10", foldmap_doc_to_view(two, 2, 10), 7);
+    EXPECT_INT("2 d2v 11", foldmap_doc_to_view(two, 2, 11), 8);
+
+    /* Round-trip: every view line survives v→d→v (anchors map to themselves). */
+    for (int v = 0; v < 12; v++)
+        EXPECT_INT("roundtrip", foldmap_doc_to_view(two, 2, foldmap_view_to_doc(two, 2, v)), v);
+}
+
 /* ── main ─────────────────────────────────────────────────────────────────*/
 int main(void) {
     test_arabize_digits();
     test_arabic_count_phrase();
     test_arabic_lines_phrase();
     test_advance_position();
+    test_foldmap();
 
     printf("%d passed, %d failed\n", g_passed, g_failed);
     return g_failed == 0 ? 0 : 1;

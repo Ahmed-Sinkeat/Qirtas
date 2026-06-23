@@ -4,6 +4,11 @@
 // External prototype declarations of buffer signal handlers to enable blocking/unblocking
 extern void on_insert_text_before(GtkTextBuffer *buf, GtkTextIter *location, gchar *text, gint len, gpointer user_data);
 extern void on_insert_text_after(GtkTextBuffer *buf, GtkTextIter *location, gchar *text, gint len, gpointer user_data);
+/* on_delete_range_BEFORE is the doc_buf delete mirror (zig_delete_range); it MUST
+ * be blocked around the "---" -> rule-anchor swap, or the live paths (typing ---,
+ * or the reload idle re-render) delete the "---" from doc_buf and lose it on save.
+ * on_delete_range_after is view-only bookkeeping, blocked for safety. */
+extern void on_delete_range_before(GtkTextBuffer *buf, GtkTextIter *start, GtkTextIter *end, gpointer user_data);
 extern void on_delete_range_after(GtkTextBuffer *buf, GtkTextIter *start, GtkTextIter *end, gpointer user_data);
 extern void on_buffer_changed(GtkTextBuffer *buf, gpointer user_data);
 
@@ -17,6 +22,19 @@ void parse_and_render_hrs(GtkTextBuffer *buf, AppGui *gui) {
      * assertions. get_iter_at_line(line) re-resolves a valid position each
      * pass. Replacing "---" with an anchor keeps the line, so the line index
      * and line count stay stable. */
+
+    /* Self-block the doc_buf mirror handlers around the "---" -> anchor swaps.
+     * The load path (gui_set_text) already blocks these, but the reload idle
+     * (reload_finalize_idle) calls us with NO outer block — and the delete+insert
+     * here would otherwise mirror into doc_buf (delete the "---", insert a U+FFFC
+     * anchor char), corrupting the saved file. block-by-func is refcounted, so
+     * nesting under the load-path block is safe. */
+    g_signal_handlers_block_by_func(buf, on_insert_text_before, gui);
+    g_signal_handlers_block_by_func(buf, on_insert_text_after, gui);
+    g_signal_handlers_block_by_func(buf, on_delete_range_before, gui);
+    g_signal_handlers_block_by_func(buf, on_delete_range_after, gui);
+    g_signal_handlers_block_by_func(buf, on_buffer_changed, gui);
+
     int line = 0;
     while (line < gtk_text_buffer_get_line_count(buf)) {
         GtkTextIter iter, line_end;
@@ -51,6 +69,12 @@ void parse_and_render_hrs(GtkTextBuffer *buf, AppGui *gui) {
         }
         line++;
     }
+
+    g_signal_handlers_unblock_by_func(buf, on_insert_text_before, gui);
+    g_signal_handlers_unblock_by_func(buf, on_insert_text_after, gui);
+    g_signal_handlers_unblock_by_func(buf, on_delete_range_before, gui);
+    g_signal_handlers_unblock_by_func(buf, on_delete_range_after, gui);
+    g_signal_handlers_unblock_by_func(buf, on_buffer_changed, gui);
 }
 
 void check_and_insert_hr(GtkTextBuffer *buf, AppGui *gui) {
@@ -100,6 +124,7 @@ void check_and_insert_hr(GtkTextBuffer *buf, AppGui *gui) {
     if (is_hr) {
         g_signal_handlers_block_by_func(buf, on_insert_text_before, gui);
         g_signal_handlers_block_by_func(buf, on_insert_text_after, gui);
+        g_signal_handlers_block_by_func(buf, on_delete_range_before, gui);
         g_signal_handlers_block_by_func(buf, on_delete_range_after, gui);
         g_signal_handlers_block_by_func(buf, on_buffer_changed, gui);
 
@@ -126,6 +151,7 @@ void check_and_insert_hr(GtkTextBuffer *buf, AppGui *gui) {
 
         g_signal_handlers_unblock_by_func(buf, on_insert_text_before, gui);
         g_signal_handlers_unblock_by_func(buf, on_insert_text_after, gui);
+        g_signal_handlers_unblock_by_func(buf, on_delete_range_before, gui);
         g_signal_handlers_unblock_by_func(buf, on_delete_range_after, gui);
         g_signal_handlers_unblock_by_func(buf, on_buffer_changed, gui);
     }

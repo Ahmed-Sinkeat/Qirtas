@@ -45,6 +45,7 @@ pub fn build(b: *std.Build) void {
     const modular_gui_files = [_][]const u8{
         "src/gui/gui_theme.c",
         "src/gui/gui_cursor.c",
+        "src/gui/gui_foldmap.c",
         "src/gui/gui_hr.c",
         "src/gui/gui_codeblock.c",
         "src/gui/gui_table.c",
@@ -206,6 +207,7 @@ pub fn build(b: *std.Build) void {
     });
     c_test_mod.addCSourceFile(.{ .file = b.path("tests/test_c_behavior.c"), .flags = &.{} });
     c_test_mod.addCSourceFile(.{ .file = b.path("src/gui/gui_buffer.c"), .flags = &.{} });
+    c_test_mod.addCSourceFile(.{ .file = b.path("src/gui/gui_foldmap.c"), .flags = &.{} });
     c_test_mod.addIncludePath(b.path("src"));
     c_test_mod.linkSystemLibrary("gtk4", .{});
     c_test_mod.linkSystemLibrary("gtksourceview-5", .{});

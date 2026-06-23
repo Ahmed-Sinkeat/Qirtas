@@ -1,7 +1,7 @@
 # Qirtas — Known Issues
 
-**Last audited:** 2026-06-23 (Omarchy / Hyprland — GTK 4.22, GtkSourceView 5.20).
-**Last fix pass:** 2026-06-23 (build broken on GCC 16 `.sframe` → LLVM+LLD; window min-width 820px couldn't fit a half-tile → shrinkable panes; large-doc **resize** freeze → centred fixed-width column cap; large-doc *open* validation still architectural — see the dated section just below). Earlier: 2026-06-19 (Save As + PDF export read view buffer; two residual invisible-tag crash sites); 2026-06-18 (GTK abort on theme-change/navigate — scroll-anchor `get_iter_at_location`); 2026-06-18 (read-mode read-only + undo viewport jump + AppImage packaging); 2026-06-17 (commits `345e502`, `cc9b4db`).
+**Last audited:** 2026-06-24 (Omarchy / Hyprland — GTK 4.22, GtkSourceView 5.20).
+**Last fix pass:** 2026-06-24 (model/view decouple — tables → true folds; fixed a `doc_buf` delete-mirror corruption that silently erased todos / table rows / code fences on save; see the 2026-06-24 section just below). Earlier: 2026-06-23 (build broken on GCC 16 `.sframe` → LLVM+LLD; window min-width 820px couldn't fit a half-tile → shrinkable panes; large-doc **resize** freeze → centred fixed-width column cap; large-doc *open* validation still architectural). Earlier: 2026-06-19 (Save As + PDF export read view buffer; two residual invisible-tag crash sites); 2026-06-18 (GTK abort on theme-change/navigate — scroll-anchor `get_iter_at_location`); 2026-06-18 (read-mode read-only + undo viewport jump + AppImage packaging); 2026-06-17 (commits `345e502`, `cc9b4db`).
 
 This file tracks correctness/robustness issues found by code audit. It also
 records where the prose docs had drifted from the actual source so the drift
@@ -12,6 +12,52 @@ to *refute* it against the current tree. Items under "Confirmed" survived that
 refutation pass. Items under "Unverified candidates" were located but the
 refutation pass did not complete (session limit) — treat as leads, not facts,
 until checked.
+
+---
+
+## 2026-06-24 — Model/view decouple (Option C) + decorator corruption
+
+Full design + stage-by-stage record: `docs/plans/doc-model-decouple.md`. Summary
+of the correctness findings (all reproduced live, then fixed on branch
+`refactor/doc-model-decouple`):
+
+### A. 🔴 `doc_buf` delete-mirror corruption — decorators erased content on save
+
+> **✅ FIXED.** Block `on_delete_range_before` wherever a decorator brackets its
+> buffer mutations (`gui_table.c`, `gui_todo.c`, `gui_codeblock.c`, `gui_hr.c`).
+
+**Symptom (proven):** opening a doc with `- [ ] task` checkboxes and entering
+**read mode** emptied every todo line in the *saved file*. The same latent leak
+existed for table rows (on table reveal/re-fold) and for code-block opening
+fences / HR `---` on their live render paths.
+
+**Cause:** the C↔Zig mirror writes deletions to `doc_buf` via `zig_delete_range`,
+called from **`on_delete_range_before`** (it needs the pre-delete iters to
+foldmap-translate view→doc; moved there during the decouple's stage 2). But the
+decorators' `block_handlers` still blocked only `on_delete_range_after`. So when a
+decorator deleted text in the view (marker → child-anchor swap) during normal
+editing, the delete echoed into `doc_buf` while the matching re-insert (correctly
+blocked) did not — net silent content loss. File **load** escaped it because
+`on_delete_range_before` early-returns under `loading_viewport`; only the live /
+read-mode / reload-idle paths triggered it.
+
+### B. 🟠 Tables: compressed gutter numbers + selectable 1px sliver (Image #6/#7)
+
+> **✅ FIXED** by converting tables to a *true fold*: the delimiter+body rows are
+> deleted from the view (kept in `doc_buf`) and a fold-map (`gui_foldmap.c`)
+> translates view↔doc line numbers, instead of `scale:0.01`-hiding the rows.
+
+A `scale:0.01` line is ~0px but still a real, numbered, click-selectable line —
+the cause of the squished gutter numbers and the "1px dot". Tables (the worst
+case, multi-line) now collapse to one view line. **Not done / accepted:** code
+blocks still `scale:0.01`-hide their *one* closing-fence line (one squished
+gutter number per block); a per-block fold and a custom gutter were both judged
+disproportionate — see §5b / "Stage 5 dropped" in the plan doc.
+
+### Verification note
+Live-verified by `grim` screenshots (render/gutter) and `diff` against a saved
+`.orig` of a scratch file (doc_buf integrity). `wtype`'s bare keysym keys misfire
+under `dbus-run-session`; modifier+letter chords and literal text are reliable.
 
 ---
 
