@@ -3,6 +3,12 @@
 
 extern void on_insert_text_before(GtkTextBuffer *, GtkTextIter *, gchar *, gint, gpointer);
 extern void on_insert_text_after(GtkTextBuffer *, GtkTextIter *, gchar *, gint, gpointer);
+/* on_delete_range_BEFORE is the doc_buf delete mirror (zig_delete_range). It MUST
+ * be blocked: render_todo_line deletes the "- [ ] text" line text in the view,
+ * and todos render LIVE on read-mode entry (not under loading_viewport), so an
+ * unblocked delete here erases the todo text from doc_buf — the saved file loses
+ * the item. (on_delete_range_after is view-only bookkeeping, blocked for safety.) */
+extern void on_delete_range_before(GtkTextBuffer *, GtkTextIter *, GtkTextIter *, gpointer);
 extern void on_delete_range_after(GtkTextBuffer *, GtkTextIter *, GtkTextIter *, gpointer);
 extern void on_buffer_changed(GtkTextBuffer *, gpointer);
 extern void on_mark_set(GtkTextBuffer *, GtkTextIter *, GtkTextMark *, gpointer);
@@ -33,6 +39,7 @@ static int parse_todo_line(const char *line, gboolean *checked, const char **tex
 static void block_handlers(GtkTextBuffer *buf, AppGui *gui) {
     g_signal_handlers_block_by_func(buf, on_insert_text_before, gui);
     g_signal_handlers_block_by_func(buf, on_insert_text_after,  gui);
+    g_signal_handlers_block_by_func(buf, on_delete_range_before, gui);
     g_signal_handlers_block_by_func(buf, on_delete_range_after, gui);
     g_signal_handlers_block_by_func(buf, on_buffer_changed,     gui);
     g_signal_handlers_block_by_func(buf, on_mark_set,           gui);
@@ -40,6 +47,7 @@ static void block_handlers(GtkTextBuffer *buf, AppGui *gui) {
 static void unblock_handlers(GtkTextBuffer *buf, AppGui *gui) {
     g_signal_handlers_unblock_by_func(buf, on_insert_text_before, gui);
     g_signal_handlers_unblock_by_func(buf, on_insert_text_after,  gui);
+    g_signal_handlers_unblock_by_func(buf, on_delete_range_before, gui);
     g_signal_handlers_unblock_by_func(buf, on_delete_range_after, gui);
     g_signal_handlers_unblock_by_func(buf, on_buffer_changed,     gui);
     g_signal_handlers_unblock_by_func(buf, on_mark_set,           gui);
