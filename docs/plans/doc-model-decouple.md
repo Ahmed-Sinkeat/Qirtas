@@ -1,8 +1,9 @@
 # Refactor: decouple the doc model from the view (Option C)
 
 **Branch:** `refactor/doc-model-decouple`
-**Status:** Stages 1–4 done & committed (decorator corruption fixed); only the
-optional code-block closing-fence fold (§5b) + Stage 5 remain.
+**Status:** COMPLETE. Stages 1–4 done & committed (the view/doc decouple + table
+fold + the decorator corruption fixes that were the whole point). Stage 4b and
+Stage 5 were deliberately dropped as disproportionate cosmetics (see below).
 **Read this first** if you're resuming cold — it's the whole picture in one file.
 
 ---
@@ -97,8 +98,17 @@ one anchor line, source lines gone from the view, kept only in `doc_buf`). A
 | 2 | Live registry + wire the mirror seam (inert/identity) | high | ✅ `eff8d0a` |
 | 3 | Convert **tables** to a true fold (proof case) | high | ✅ `fbfc24d`+`3cfbbd4`, live-verified |
 | 4 | Decorator corruption fix (todo/codeblock/hr) | medium | ✅ `e43e33f`, todos live-verified |
-| 4b | Code-block closing-fence fold (cosmetic) | medium | ❌ declined — fold it via Stage 5 gutter, not a per-block re-fold (§5b) |
-| 5 | Custom gutter + delete `scale:0.01` hacks & dead guards | medium | ⬜ |
+| 4b | Code-block closing-fence fold (cosmetic) | medium | ❌ declined — per-block re-fold too much machinery (§5b) |
+| 5 | Custom gutter to skip hidden lines | medium | ❌ DROPPED (2026-06-24) — see below |
+
+**Stage 5 dropped.** With tables folded, the only artifact left is one squished
+gutter-number pair per code block (the `scale:0.01` closing fence). Fixing it
+means replacing GtkSourceView's built-in line-number renderer with a custom
+`GtkSourceGutterRendererText` subclass and re-implementing renumber + current-line
+highlight + stable width across 8 themes — ~100+ lines of fragile GObject for one
+cosmetic squish. Not worth it. Accepted as-is; revisit only if it annoys in real
+use. (Any future code-block "delete the scale:0.01 hide" cleanup would also need
+the per-block re-fold from §5b, which was likewise declined.)
 
 Stage 4 finding: **todos and HR are single-line decorations** (marker text →
 anchor on the *same* line, no hidden lines) — they need NO fold, only the
