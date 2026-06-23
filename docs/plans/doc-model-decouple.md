@@ -1,7 +1,7 @@
 # Refactor: decouple the doc model from the view (Option C)
 
 **Branch:** `refactor/doc-model-decouple`
-**Status:** Stages 1–2 done & committed; Stage 3 next.
+**Status:** Stages 1–3 done & committed (Stage 3 live-verified); Stage 4 next.
 **Read this first** if you're resuming cold — it's the whole picture in one file.
 
 ---
@@ -94,8 +94,8 @@ one anchor line, source lines gone from the view, kept only in `doc_buf`). A
 |---|-------|------|-------|
 | 1 | Pure fold-map translation core (test-first) | none | ✅ `baa53ef` |
 | 2 | Live registry + wire the mirror seam (inert/identity) | high | ✅ `eff8d0a` |
-| 3 | Convert **tables** to a true fold (proof case) | high | ⏳ next |
-| 4 | Convert code blocks, todos (+ HR if useful) | medium | ⬜ |
+| 3 | Convert **tables** to a true fold (proof case) | high | ✅ `fbfc24d`+`3cfbbd4`, live-verified |
+| 4 | Convert code blocks, todos (+ HR if useful) | medium | ⏳ next |
 | 5 | Custom gutter + delete `scale:0.01` hacks & dead guards | medium | ⬜ |
 
 ---
@@ -158,14 +158,29 @@ compressed line numbers and the clickable "1px" lines. Convert to a true fold:
 4. Cursor-in-table detection now just checks the single anchor line (the
    `md-table-region` tag spans one line, or drop it for an anchor check).
 
-**Verify hard (first non-identity fold):**
-- Table renders; **gutter numbers are contiguous, not compressed**; no 1px dot.
-- Type on the line *before and after* the table → mirrors to the **right doc
-  line**; **save round-trips byte-identical** (all `| ... |` rows restored).
-- Cursor into the table → raw markdown returns; cursor out → re-folds.
-- No crash on click / arrow / vertical motion across the fold.
+**Verify hard (first non-identity fold) — DONE, live-verified on a 2-table doc:**
+- ✅ Both tables render; **gutter numbers contiguous, not compressed**; no 1px dot.
+- ✅ Type after the folds → mirrors to the **right doc line**; **save round-trips
+  byte-identical** (all `| ... |` rows restored).
+- ✅ Cursor into a table → raw markdown returns; cursor out → re-folds; the other
+  table stays folded. No crash on arrow / vertical motion across the fold.
 
-Then Stage 4 applies the same pattern to the code-block closing fence
+**Bug found by this verify pass (`3cfbbd4`) — READ BEFORE STAGE 4.** Stage 2 moved
+the doc_buf delete mirror (`zig_delete_range`) to **`on_delete_range_before`** (it
+needs pre-delete iters to foldmap-translate). But every decorator's
+`block_handlers` still blocked only `on_delete_range_after`. The moment a fold
+*deletes* lines during normal editing, the delete leaks to doc_buf while the
+re-insert (correctly blocked) does not → **rows silently dropped from the saved
+file**. File-load folds escaped it (`on_delete_range_before` early-returns under
+`loading_viewport`); only cursor-driven reveal/re-fold triggered it. Fixed for
+tables by also blocking `on_delete_range_before`.
+
+→ **Stage 4 MUST do the same** in `gui_codeblock.c` / `gui_todo.c` (and `gui_hr.c`
+if it ever deletes): their `block_handlers` block `on_delete_range_after`, not
+`_before`. They don't corrupt *yet* (they don't delete multi-line while editing),
+but converting them to delete-based folds without this fix will repeat the bug.
+
+Stage 4 applies the fold pattern to the code-block closing fence
 (`gui_codeblock.c`) and todos (`gui_todo.c`); Stage 5 adds a custom gutter
 renderer (if still needed) + deletes the dead `scale:0.01` hide tags and the
 guard flags that only existed to keep line count stable.
@@ -195,3 +210,5 @@ Delta undo; tab-content single-source-of-truth; single-window enforcement;
 - `936e20e` — the 4 bug fixes (§1)
 - `baa53ef` — Stage 1 (fold-map pure core + tests)
 - `eff8d0a` — Stage 2 (live registry + wire seam, inert)
+- `fbfc24d` — Stage 3 (table → true fold; loop-index fix; drop dead hide tag)
+- `3cfbbd4` — Stage 3 fix: block `on_delete_range_before` (reveal/re-fold corruption)
