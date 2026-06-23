@@ -94,8 +94,8 @@ one anchor line, source lines gone from the view, kept only in `doc_buf`). A
 |---|-------|------|-------|
 | 1 | Pure fold-map translation core (test-first) | none | ✅ `baa53ef` |
 | 2 | Live registry + wire the mirror seam (inert/identity) | high | ✅ `eff8d0a` |
-| 3 | Convert **HR** to a true fold (proof case) | high | ⏳ next |
-| 4 | Convert tables, code blocks, todos | medium | ⬜ |
+| 3 | Convert **tables** to a true fold (proof case) | high | ⏳ next |
+| 4 | Convert code blocks, todos (+ HR if useful) | medium | ⬜ |
 | 5 | Custom gutter + delete `scale:0.01` hacks & dead guards | medium | ⬜ |
 
 ---
@@ -136,32 +136,39 @@ happen only at the GTK boundary — these 6 sites are already wired (Stage 2):
 
 ---
 
-## 5. Stage 3 — the next concrete task (HR fold)
+## 5. Stage 3 — the next concrete task (TABLE fold)
 
-HR is the simplest decorator (`src/gui/gui_hr.c`): today it replaces a `---`
-line's text with a rule child-anchor and (for multi-line cases) hides the rest
-with `scale:0.01`. Convert it to a **true fold**:
+NOTE: HR (`gui_hr.c`) is NOT a fold — it already swaps `---` for an anchor on the
+**same** line (line count preserved, no hidden lines, no artifact). Leave it.
 
-1. On render: `gtk_text_buffer_delete` the source line(s), insert ONE anchor line
-   with the rule widget, then `foldmap_register(buf, anchor_view_line, doc_count)`.
-   Keep the existing signal-handler blocking so `doc_buf` is NOT touched (the
-   source `---` stays in `doc_buf`).
-2. On reveal-at-cursor: re-insert the raw source line(s) and
-   `foldmap_unregister_at(buf, view_line)`.
-3. Drop the `scale:0.01` hide tag for HR.
+The real multi-line fold — and the source of the compressed gutter numbers
+(Image #6) — is the **table** (`src/gui/gui_table.c`). Today `render_one_table`
+replaces the header line's text with a `GtkGrid` child anchor (same line) and
+**scale:0.01-hides** the delimiter + body rows. Those hidden rows are the
+compressed line numbers and the clickable "1px" lines. Convert to a true fold:
 
-**Verify hard (this is the first non-identity fold):**
-- HR shows as a rule; **gutter line number is correct, not compressed**.
-- Type text on the line *before* and *after* the HR → it mirrors to the **right
-  doc line** (check by saving and diffing).
-- **Save round-trips byte-identical** (the `---` is restored in the file).
-- Cursor into the HR → raw `---` returns; cursor out → re-folds.
+1. `render_one_table`: keep header→grid anchor, but **`gtk_text_buffer_delete` the
+   delimiter+body lines** (don't hide them) so the table is ONE view line. Then
+   `foldmap_register(buf, header_view_line, N)` where N = total table lines. The
+   raw markdown is already stashed on the anchor (`"table-md"`). Handlers stay
+   blocked so `doc_buf` keeps all N lines.
+2. `gui_table_reveal_at_cursor`: cursor on the anchor line → delete the 1 anchor
+   line, re-insert the raw N lines, `foldmap_unregister_at(buf, view_line)`.
+3. `rerender_revealed_if_left`: re-fold when the cursor leaves.
+4. Cursor-in-table detection now just checks the single anchor line (the
+   `md-table-region` tag spans one line, or drop it for an anchor check).
+
+**Verify hard (first non-identity fold):**
+- Table renders; **gutter numbers are contiguous, not compressed**; no 1px dot.
+- Type on the line *before and after* the table → mirrors to the **right doc
+  line**; **save round-trips byte-identical** (all `| ... |` rows restored).
+- Cursor into the table → raw markdown returns; cursor out → re-folds.
 - No crash on click / arrow / vertical motion across the fold.
 
-Then Stage 4 repeats the pattern for `gui_table.c`, `gui_codeblock.c`,
-`gui_todo.c`, and Stage 5 adds a custom gutter renderer + deletes the now-dead
-`scale:0.01` hide tags and the guard flags that only existed to keep line count
-stable.
+Then Stage 4 applies the same pattern to the code-block closing fence
+(`gui_codeblock.c`) and todos (`gui_todo.c`); Stage 5 adds a custom gutter
+renderer (if still needed) + deletes the dead `scale:0.01` hide tags and the
+guard flags that only existed to keep line count stable.
 
 ---
 
