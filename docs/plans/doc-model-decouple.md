@@ -97,7 +97,7 @@ one anchor line, source lines gone from the view, kept only in `doc_buf`). A
 | 2 | Live registry + wire the mirror seam (inert/identity) | high | ✅ `eff8d0a` |
 | 3 | Convert **tables** to a true fold (proof case) | high | ✅ `fbfc24d`+`3cfbbd4`, live-verified |
 | 4 | Decorator corruption fix (todo/codeblock/hr) | medium | ✅ `e43e33f`, todos live-verified |
-| 4b | Code-block closing-fence fold (cosmetic) | medium | ⬜ optional — see §5b |
+| 4b | Code-block closing-fence fold (cosmetic) | medium | ❌ declined — fold it via Stage 5 gutter, not a per-block re-fold (§5b) |
 | 5 | Custom gutter + delete `scale:0.01` hacks & dead guards | medium | ⬜ |
 
 Stage 4 finding: **todos and HR are single-line decorations** (marker text →
@@ -214,7 +214,10 @@ hidden line per block.
 Options: (a) implement the re-fold-on-body-edit; (b) leave the closing fence
 `scale:0.01` and let **Stage 5's custom gutter** stop numbering hidden lines
 (kills the compressed number but not the clickable sliver); (c) leave as-is.
-Decide before building.
+
+**DECISION (2026-06-24): option (b).** No per-block re-fold — too much machinery
+for one hidden line. Stage 5's gutter handles the compressed number uniformly;
+the faint clickable sliver is accepted for now.
 
 ---
 
