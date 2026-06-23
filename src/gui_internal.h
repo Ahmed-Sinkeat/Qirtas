@@ -530,6 +530,15 @@ void on_buffer_modified_changed(GtkTextBuffer *buf, gpointer user_data);
 void select_position_range(AppGui *gui, Position start, Position end);
 Position iter_to_position(GtkTextIter *iter);
 Position advance_position(Position pos, const char *text);
+
+/* Fold-map (gui_foldmap.c): translate between view-buffer line numbers (where
+ * rendered regions collapse to one anchor line) and doc_buf line numbers (full
+ * source). Inert (identity) until a decorator registers a fold. */
+int foldmap_live_view_to_doc(GtkTextBuffer *buf, int view_line);
+int foldmap_live_doc_to_view(GtkTextBuffer *buf, int doc_line);
+void foldmap_register(GtkTextBuffer *buf, int view_line, int doc_count);
+void foldmap_unregister_at(GtkTextBuffer *buf, int view_line);
+void foldmap_clear(GtkTextBuffer *buf);
 void update_paragraph_direction_lines(GtkTextBuffer *buf, gint first_line, gint last_line);
 void update_all_paragraphs_direction(GtkTextBuffer *buf);
 void gui_refresh_buffer_stats(void);

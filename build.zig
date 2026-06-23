@@ -45,6 +45,7 @@ pub fn build(b: *std.Build) void {
     const modular_gui_files = [_][]const u8{
         "src/gui/gui_theme.c",
         "src/gui/gui_cursor.c",
+        "src/gui/gui_foldmap.c",
         "src/gui/gui_hr.c",
         "src/gui/gui_codeblock.c",
         "src/gui/gui_table.c",
